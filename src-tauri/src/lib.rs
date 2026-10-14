@@ -813,7 +813,7 @@ fn capture(app: &AppHandle) {
         if (hide && main_window::step_aside(&app)) || noticed {
             std::thread::sleep(SETTLE);
         }
-        if let Err(detail) = selection::start(&app) {
+        if let Err(detail) = selection::start(&app, hide) {
             notify(
                 &app,
                 Lasting::Long,

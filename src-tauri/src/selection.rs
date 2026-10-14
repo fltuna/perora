@@ -224,6 +224,26 @@ fn ensure_window(app: &AppHandle, monitor: usize) -> tauri::Result<WebviewWindow
     Ok(window)
 }
 
+/// Perora's windows that are on screen, besides the selection screens and the notice: the main
+/// window and the previews.
+fn own_windows(app: &AppHandle) -> Vec<WindowId> {
+    #[cfg(windows)]
+    {
+        app.webview_windows()
+            .into_iter()
+            .filter(|(name, _)| !name.starts_with(LABEL_PREFIX) && name != crate::notice::LABEL)
+            .filter(|(_, window)| window.is_visible().unwrap_or(false))
+            .filter_map(|(_, window)| window.hwnd().ok())
+            .map(|handle| WindowId(handle.0 as isize))
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Vec::new()
+    }
+}
+
 fn hide_windows(app: &AppHandle) {
     for (name, window) in app.webview_windows() {
         if name.starts_with(LABEL_PREFIX) {
@@ -233,12 +253,13 @@ fn hide_windows(app: &AppHandle) {
 }
 
 /// Captures every monitor and puts the selection screen over them. Called off the main thread; a
-/// screen that is already up is replaced (the shortcut pressed again: capture anew).
-pub fn start(app: &AppHandle) -> Result<(), String> {
+/// screen that is already up is replaced (the shortcut pressed again: capture anew). `hide`: Perora's
+/// own windows are out of the picture (the main window put aside already); otherwise they are in it.
+pub fn start(app: &AppHandle, hide: bool) -> Result<(), String> {
     let perora = app.state::<Perora>();
     // A selection screen or a preview still on screen would be in the picture. (The previews are
-    // left in it when the user wants Perora's windows captured too.)
-    let hide = perora.setting(|settings| settings.hide_own_windows);
+    // left in it when the user wants Perora's windows captured too. Pressed again while a selection
+    // screen is up, they were put out of the way for that one, and are not in this capture.)
     let start_mode = perora.setting(|settings| settings.start_mode);
     let was_up = perora.selection.lock().take().is_some();
     hide_windows(app);
@@ -254,21 +275,27 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
     let (still, layout) = match captured {
         Ok((still, layout)) => (Arc::new(still), layout),
         Err(error) => {
-            // Nothing came of it: what was being previewed before is still there to be dealt with.
-            preview::restore(app);
+            // Nothing came of it: what was being previewed before is still there to be dealt with
+            // (when it was put out of the way: left in the picture, it never was).
+            if hide || was_up {
+                preview::restore(app);
+            }
             main_window::come_back(app);
             return Err(error.to_string());
         }
     };
-    // Captured with Perora's windows in it, as the user wanted: out of the way now, under the
-    // selection screen (which shows them as they were), and back as that is done with, as when they
-    // are hidden first. (Not for every monitor at once: there is no selection screen to go under.)
+    let desktop = desktop();
+    // In the picture, Perora's own windows are there to be picked like any other, where they are in
+    // the stacking order: asked for while they are still on screen.
+    let own = if hide { Vec::new() } else { own_windows(app) };
+    let windows = desktop.windows_with(&own).unwrap_or_default();
+    // Then out of the way, under the selection screen (which shows them as they were), and back as
+    // that is done with, as when they are hidden first. (Not for every monitor at once: there is no
+    // selection screen to go under.)
     if !hide && start_mode != Mode::AllMonitors {
         preview::hide_for_capture(app);
         main_window::step_aside(app);
     }
-    let desktop = desktop();
-    let windows = desktop.windows().unwrap_or_default();
     let pointer = desktop
         .pointer()
         .unwrap_or_else(|_| perora_core::geometry::Point::new(layout.bounds.x, layout.bounds.y));
@@ -334,7 +361,7 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
         touring: false,
     });
     // Only now: the thread ends as soon as it finds its selection gone.
-    take_window_pictures(app, id, still, windows, pictures, thumbnails);
+    take_window_pictures(app, id, still, windows, own, pictures, thumbnails);
 
     // Each window over its monitor, still hidden; it is shown when its page says the capture is drawn.
     for (index, monitor) in layout.monitors.iter().enumerate() {
@@ -365,12 +392,14 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
 
 /// Takes the picture of each window, front to back, while the selection screen is up, until the
 /// budget is used. Beside it, the small picture of every window is made for the list of them. Both
-/// stop when the screen is gone.
+/// stop when the screen is gone. Perora's own (`own`) are hidden by then: of those, what the capture
+/// has of them is all there is.
 fn take_window_pictures(
     app: &AppHandle,
     id: u64,
     still: Arc<Frame>,
     windows: Vec<(WindowId, Rect)>,
+    own: Vec<WindowId>,
     pictures: Arc<Mutex<HashMap<WindowId, Arc<Frame>>>>,
     thumbnails: Arc<Mutex<HashMap<usize, Arc<Vec<u8>>>>>,
 ) {
@@ -419,7 +448,7 @@ fn take_window_pictures(
                 return;
             }
             // Out of room: the rest are cut out of the capture of the screen.
-            let picture = if used > WINDOW_PICTURES_BUDGET {
+            let picture = if used > WINDOW_PICTURES_BUDGET || own.contains(&window) {
                 None
             } else {
                 match desktop.capture_window(window) {

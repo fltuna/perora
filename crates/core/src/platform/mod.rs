@@ -103,7 +103,13 @@ pub struct Window {
 pub trait Desktop {
     /// The windows a user would call windows, front to back: shown, not minimized, not this
     /// application's own, not the desktop itself.
-    fn windows(&self) -> Result<Vec<Window>>;
+    fn windows(&self) -> Result<Vec<Window>> {
+        self.windows_with(&[])
+    }
+
+    /// The same, with those of this application's own windows that are named (`own`) among them,
+    /// in their places: for when the application's windows are in the picture too.
+    fn windows_with(&self, own: &[WindowId]) -> Result<Vec<Window>>;
 
     /// One window's own picture, whatever lies in front of it. Fails for a window that does not let
     /// itself be drawn that way; cutting it out of a capture of the screen is the fallback then.

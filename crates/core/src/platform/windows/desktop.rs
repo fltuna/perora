@@ -49,7 +49,7 @@ impl Default for Win32Desktop {
 }
 
 impl Desktop for Win32Desktop {
-    fn windows(&self) -> Result<Vec<Window>> {
+    fn windows_with(&self, own: &[WindowId]) -> Result<Vec<Window>> {
         unsafe extern "system" fn collect(window: HWND, data: LPARAM) -> BOOL {
             let handles = unsafe { &mut *(data.0 as *mut Vec<HWND>) };
             handles.push(window);
@@ -68,7 +68,7 @@ impl Desktop for Win32Desktop {
         let own_process = unsafe { GetCurrentProcessId() };
         Ok(handles
             .into_iter()
-            .filter_map(|handle| describe(handle, own_process))
+            .filter_map(|handle| describe(handle, own_process, own))
             .collect())
     }
 
@@ -267,15 +267,16 @@ pub fn set_cloaked(window: WindowId, cloaked: bool) {
 }
 
 /// A window as something to pick, or `None` when it is not: hidden, minimized, not really there, one of
-/// this process's own, the desktop, or something that lies over the screen without being seen.
-fn describe(handle: HWND, own_process: u32) -> Option<Window> {
+/// this process's own (unless named in `own`), the desktop, or something that lies over the screen
+/// without being seen.
+fn describe(handle: HWND, own_process: u32, own: &[WindowId]) -> Option<Window> {
     if !unsafe { IsWindowVisible(handle) }.as_bool() || unsafe { IsIconic(handle) }.as_bool() {
         return None;
     }
 
     let mut process = 0u32;
     unsafe { GetWindowThreadProcessId(handle, Some(&mut process)) };
-    if process == own_process {
+    if process == own_process && !own.contains(&WindowId(handle.0 as isize)) {
         return None;
     }
 

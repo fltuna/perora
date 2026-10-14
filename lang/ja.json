@@ -20,7 +20,7 @@
   "main.capture.startMode": "デフォルト撮影モード",
   "main.capture.startModeHint": "デフォルトで使用する撮影モードを指定します。全モニターの場合は選択画面を無視し直接撮影を行います。",
   "main.capture.hideOwnWindows": "Perora のウィンドウを隠す",
-  "main.capture.hideOwnWindowsHint": "撮影するときに、設定画面・プレビュー・編集画面を隠して写らないようにします。オフにすると、これらも写ります。",
+  "main.capture.hideOwnWindowsHint": "撮影するときに、設定画面・プレビュー・編集画面を隠して写らないようにします。オフにすると、これらも写ります（Perora 自体を撮るとき用）。",
   "main.capture.copy": "画像の自動コピー",
   "main.capture.copyHint": "プレビューが表示された時点で自動的にクリップボードに画像をコピーします。",
   "main.capture.clear": "破棄ボタンでクリップボードをクリア",

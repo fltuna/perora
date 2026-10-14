@@ -809,6 +809,7 @@ mod tests {
         assert_eq!(written["uploadImmediately"], true);
         assert_eq!(written["enableUpload"], false);
         assert_eq!(written["startMode"], "monitor");
+        assert_eq!(written["hideOwnWindows"], true);
         assert_eq!(written["noticeSeconds"], 7);
         assert_eq!(written["uploadFormat"], "png");
         assert_eq!(written["uploadFit"], 0);
