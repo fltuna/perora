@@ -464,18 +464,6 @@ export function Preview() {
             <span className="icon good now">{"\uE73E"}</span>
           </span>
         </button>
-        {!large && (
-          <button
-            className="narrow"
-            title={t("preview.edit")}
-            aria-label={t("preview.edit")}
-            onClick={() => void enlarge(capture)}
-          >
-            <span className="icon" aria-hidden="true">
-              {"\uE70F"}
-            </span>
-          </button>
-        )}
         {/* (A bin in both windows.) */}
         <button
           className="narrow away"
