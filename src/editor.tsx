@@ -57,6 +57,10 @@ export interface EditorShow {
   /** All of the picture in sight, as it is when nothing is looked at more closely: where the tour
       names places on it. */
   whole: () => void;
+  /** A place on the picture as the tour names it, in pixels of the page: where it is with all of
+      the picture in sight (as `whole` has it, at once: before the window is drawn so). [0, 0] while
+      there is no picture shown. */
+  pageOf: (part: Part) => [number, number];
   /** The wheel turned a notch with the other button held, the pointer at (x, y) of the page: the
       next tool (`by` 1) or the one before (-1) in hand, and shown by the pointer. */
   turn: (x: number, y: number, by: 1 | -1) => void;
@@ -1612,7 +1616,9 @@ export function Editor({
     const [width, height] = [room.width / by, room.height / by];
     // (The corner of the picture on a whole pixel of the screen: its pixels are not smudged across
     // two, and what is shown at a pixel to a pixel is the image.)
-    const pixel = by * (window.devicePixelRatio || 1);
+    // (As the canvas draws it: so many pixels of it as fill the place, which need not be the place
+    // times the pixels of the screen to one of the page.)
+    const pixel = room.width > 0 ? (by * Math.max(1, Math.round(room.width * (window.devicePixelRatio || 1)))) / room.width : by;
     const [x0, y0] = [middle[0] - width / 2, middle[1] - height / 2];
     return {
       shown,
@@ -1621,6 +1627,17 @@ export function Editor({
     };
   };
   const { shown: shownSize, part: look, middle } = lookAt(times, looking.x, looking.y);
+  /** Whether some of a part of the image is in sight: in what is shown, and of the picture (not
+      past where the image was cut down to, which the place may show around it now). */
+  const inSight = (box: Box) =>
+    box.x < Math.min(look.x + look.width, view.x + view.width) &&
+    box.x + box.width > Math.max(look.x, view.x) &&
+    box.y < Math.min(look.y + look.height, view.y + view.height) &&
+    box.y + box.height > Math.max(look.y, view.y);
+  /** Whether a press at a place is on a thing drawn, as `isAt`: where the picture is, that is.
+      Beside it, what is drawn is cut off, out of sight, and no press there is on it. */
+  const seenAt = (edit: Edit, at: Place, near: number) =>
+    at[0] >= view.x - near && at[0] <= view.x + view.width + near && at[1] >= view.y - near && at[1] <= view.y + view.height + near && isAt(edit, at, near);
   // Space held down: the pointer takes hold of the picture, not of a tool.
   const [grabbing, setGrabbing] = useState(false);
 
@@ -1664,8 +1681,13 @@ export function Editor({
     const ctx = element?.getContext("2d");
     if (!element || !ctx || scale === 0) return;
     const dense = window.devicePixelRatio || 1;
-    element.width = Math.max(1, Math.round(shownSize.width * dense));
-    element.height = Math.max(1, Math.round(shownSize.height * dense));
+    // (Made anew only when its size changes: the canvas is the whole place, and is drawn again with
+    // each move of the pointer. Otherwise cleared, and its settings as they were made.)
+    const [width, height] = [Math.max(1, Math.round(shownSize.width * dense)), Math.max(1, Math.round(shownSize.height * dense))];
+    if (element.width !== width || element.height !== height) {
+      element.width = width;
+      element.height = height;
+    } else ctx.reset();
     const zoom = element.width / look.width;
     ctx.setTransform(zoom, 0, 0, zoom, -look.x * zoom, -look.y * zoom);
     // Looked at closely, the pixels of the picture are shown as the squares they are.
@@ -1785,7 +1807,8 @@ export function Editor({
     const [across, down] = [(x - box.left) / box.width, (y - box.top) / box.height];
     const under: Place = [look.x + across * look.width, look.y + down * look.height];
     let next = Math.min(closest, Math.max(FARTHEST, times * Math.exp(-deltaY * 0.0015)));
-    // (Passing fitted, it stops there once: all of it, as large as its place, is easy to come back to.)
+    // (Passing fitted, it stops there once: the size all of it fits in is easy to come back to.
+    // Where it was moved to stays; looking at all of it again puts it in the middle.)
     if ((times > 1 && next < 1) || (times < 1 && next > 1)) next = 1;
     if (next === times) return;
     // That place stays under the pointer: as far across what is shown then as it is now.
@@ -1920,7 +1943,7 @@ export function Editor({
       if (event.ctrlKey) {
         const those = selected !== null ? [selected] : several;
         let index = edits.length - 1;
-        while (index >= 0 && !isAt(edits[index], at, NEAR / scale)) index -= 1;
+        while (index >= 0 && !seenAt(edits[index], at, NEAR / scale)) index -= 1;
         if (index === -1) return setGesture({ kind: "marquee", from: at, to: at, with: those });
         return setSelection(those.includes(index) ? those.filter((one) => one !== index) : [...those, index].sort((a, b) => a - b));
       }
@@ -1934,7 +1957,7 @@ export function Editor({
           return at[0] >= box.x - around && at[0] <= box.x + box.width + around && at[1] >= box.y - around && at[1] <= box.y + box.height + around;
         });
         // (As with one: what else is seen in their frames is still there to be pressed on.)
-        const on = framed && (several.some((index) => edits[index] && isAt(edits[index], at, NEAR / scale)) || !edits.some((edit) => isAt(edit, at, NEAR / scale)));
+        const on = framed && (several.some((index) => edits[index] && seenAt(edits[index], at, NEAR / scale)) || !edits.some((edit) => seenAt(edit, at, NEAR / scale)));
         if (on) return setGesture({ kind: "move", indices: several, from: at, by: [0, 0] });
       }
       // On a hold of the one selected: that is pulled, to change its size.
@@ -1949,7 +1972,7 @@ export function Editor({
         // frame is still there to be pressed on.)
         const around = frameAround(held, scale);
         const framed = at[0] >= box.x - around && at[0] <= box.x + box.width + around && at[1] >= box.y - around && at[1] <= box.y + box.height + around;
-        if (framed && (isAt(held, at, NEAR / scale) || !edits.some((edit) => isAt(edit, at, NEAR / scale)))) {
+        if (framed && (seenAt(held, at, NEAR / scale) || !edits.some((edit) => seenAt(edit, at, NEAR / scale)))) {
           return setGesture({ kind: "move", indices: [selected], from: at, by: [0, 0] });
         }
       }
@@ -1957,7 +1980,7 @@ export function Editor({
       // Where there is none: nothing is selected any more, and what the pointer goes on to mark
       // out will be.
       let index = edits.length - 1;
-      while (index >= 0 && !isAt(edits[index], at, NEAR / scale)) index -= 1;
+      while (index >= 0 && !seenAt(edits[index], at, NEAR / scale)) index -= 1;
       setSelected(index === -1 ? null : index);
       setGesture(index !== -1 ? { kind: "move", indices: [index], from: at, by: [0, 0] } : { kind: "marquee", from: at, to: at });
       return;
@@ -2044,7 +2067,7 @@ export function Editor({
       last !== undefined &&
       last.kind === tool &&
       (last.kind === "rectangle" || last.kind === "ellipse" || last.kind === "line" || last.kind === "arrow") &&
-      isAt(last, at, NEAR / scale) &&
+      seenAt(last, at, NEAR / scale) &&
       // (Not at an end of a line: the next line is begun there, as often as not.)
       !((last.kind === "line" || last.kind === "arrow") && [last.from, last.to].some((end) => Math.hypot(at[0] - end[0], at[1] - end[1]) <= (NEAR * 2) / scale))
     );
@@ -2071,12 +2094,12 @@ export function Editor({
     }
     if (!gesture) return;
     if (gesture.kind === "pan") {
-      // The picture goes along under the pointer, as far as its middle can go.
-      return setLooking({
-        times,
-        x: gesture.was[0] - (event.clientX - gesture.from[0]) / scale,
-        y: gesture.was[1] - (event.clientY - gesture.from[1]) / scale,
-      });
+      // The picture goes along under the pointer, as far as its middle can go. (Held there: back
+      // from past that, it comes along at once, not once the pointer is back where it stopped.)
+      const [x, y] = [gesture.was[0] - (event.clientX - gesture.from[0]) / scale, gesture.was[1] - (event.clientY - gesture.from[1]) / scale];
+      const [left, top] = [Math.min(view.x + view.width, Math.max(view.x, x)), Math.min(view.y + view.height, Math.max(view.y, y))];
+      if (left !== x || top !== y) setGesture({ ...gesture, was: [left, top], from: [event.clientX, event.clientY] });
+      return setLooking({ times, x: left, y: top });
     }
     const at = placeOf(event);
     if (gesture.kind === "move") {
@@ -2122,11 +2145,10 @@ export function Editor({
       if (Math.hypot(right - left, bottom - top) * scale < 4) return;
       // (Of what is seen: not what the image was cut down past, nor what is out of sight where
       // the picture is looked at closely. The pointer goes on past the edge of the picture.)
-      const seen = (box: Box) => box.x < look.x + look.width && box.x + box.width > look.x && box.y < look.y + look.height && box.y + box.height > look.y;
       const within = edits.flatMap((edit, index) => {
         if (edit.kind === "crop") return [];
         const box = boxOf(edit);
-        return seen(box) && box.x >= left && box.y >= top && box.x + box.width <= right && box.y + box.height <= bottom ? [index] : [];
+        return inSight(box) && box.x >= left && box.y >= top && box.x + box.width <= right && box.y + box.height <= bottom ? [index] : [];
       });
       // (Along with what was selected, where it was marked out with Ctrl held.)
       const those = [...new Set([...(gesture.with ?? []), ...within])].sort((a, b) => a - b);
@@ -2497,6 +2519,12 @@ export function Editor({
     },
     // (Taken right after the window was put back: against what it is about to be, not what it was drawn as.)
     whole: () => setLooking({ times: 1 }),
+    pageOf: (part) => {
+      const box = canvas.current?.getBoundingClientRect();
+      if (!box || box.width === 0 || fit === 0) return [0, 0];
+      const [[x, y], all, by] = [partOf(part), lookAt(1).part, (fit * box.width) / room.width];
+      return [Math.round(box.left + (x - all.x) * by), Math.round(box.top + (y - all.y) * by)];
+    },
     frame: (from, to) => {
       const [one, other] = [partOf(from, whole), partOf(to, whole)];
       setFrame({ x: Math.round(one[0]), y: Math.round(one[1]), width: Math.round(other[0] - one[0]), height: Math.round(other[1] - one[1]) });
@@ -2561,6 +2589,7 @@ export function Editor({
       select: (index) => void (gone || now().select(index)),
       frame: (from, to) => void (gone || now().frame(from, to)),
       whole: () => void (gone || now().whole()),
+      pageOf: (part) => (gone ? [0, 0] : now().pageOf(part)),
       turn: (x, y, by) => void (gone || now().turn(x, y, by)),
       take: (one) => void (gone || now().take(one)),
       settingsAt: (x, y) => void (gone || now().settingsAt(x, y)),
@@ -2667,15 +2696,9 @@ export function Editor({
         : chosenWritten
           ? boxOf(chosenWritten)
           : null;
-  // (Nor by what is out of sight, where the picture is looked at so closely that it is.)
-  const lettered =
-    letteredOf &&
-    letteredOf.x < look.x + look.width &&
-    letteredOf.x + letteredOf.width > look.x &&
-    letteredOf.y < look.y + look.height &&
-    letteredOf.y + letteredOf.height > look.y
-      ? letteredOf
-      : null;
+  // (Nor by what is out of sight, where the picture is looked at so closely that it is, or past
+  // where it was cut down to.)
+  const lettered = letteredOf && inSight(letteredOf) ? letteredOf : null;
   // (By the letters and the room they have without a line around them: the settings stay where
   // they are while such a line is given to the letters, taken from them, or made wider.)
   const reached = reachOf(lettersNow);
@@ -3207,7 +3230,7 @@ function Lettering({
   back,
   t,
 }: {
-  /** The picture: what `at` is measured from. */
+  /** The canvas (the whole place the picture is in): what `at` is measured from. */
   sheet: React.RefObject<HTMLCanvasElement | null>;
   at: { x: number; y: number; width: number; height: number };
   now: Writing;

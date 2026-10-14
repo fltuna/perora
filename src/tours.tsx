@@ -40,15 +40,14 @@ export const previewSteps = (offersUpload: boolean, choose: Choose, t: Translate
   { at: "guide", text: t("tour.again") },
 ];
 
-/** A place on the picture, in pixels of the page: so far across it and down it, as it is shown
-    (again when the window changes size). */
-function usePlace(across: number, down: number) {
+/** A place on the picture, in pixels of the page: so far across it and down it, as it is shown with
+    all of it in sight (again when the window changes size). */
+function usePlace(show: Shown, across: number, down: number) {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   useLayoutEffect(() => {
     const measure = () => {
-      const sheet = document.querySelector(".picture.stage .sheet")?.getBoundingClientRect();
-      if (!sheet || sheet.width === 0) return;
-      const [x, y] = [Math.round(sheet.left + sheet.width * across), Math.round(sheet.top + sheet.height * down)];
+      const [x, y] = show.current?.pageOf([across, down]) ?? [0, 0];
+      if (!x && !y) return;
       setAt((was) => (was && was.x === x && was.y === y ? was : { x, y }));
     };
     measure();
@@ -86,7 +85,7 @@ function useShowing(
 
 /** The other button held, the wheel turned: three tools on, three back, and again. */
 function Turning({ show }: { show: Shown }) {
-  const at = usePlace(0.35, 0.4);
+  const at = usePlace(show, 0.35, 0.4);
   const [wheel, setWheel] = useState<"up" | "down">("down");
   useShowing(show, at, (at, editor, acting) => {
     const ways: (1 | -1)[] = [1, 1, 1, -1, -1, -1];
@@ -111,7 +110,7 @@ function Turning({ show }: { show: Shown }) {
     again. */
 function Asking({ show }: { show: Shown }) {
   // (High on the picture: the settings open down from there, clear of what is said under it.)
-  const at = usePlace(0.22, 0.1);
+  const at = usePlace(show, 0.22, 0.1);
   // (Each time the presses are shown anew.)
   const [round, setRound] = useState(0);
   useShowing(show, at, (at, editor, acting) => {
@@ -137,7 +136,7 @@ function Asking({ show }: { show: Shown }) {
 
 /** The wheel turned away from the hand, the picture looked at closer; then back. */
 function Looking({ show }: { show: Shown }) {
-  const at = usePlace(0.45, 0.45);
+  const at = usePlace(show, 0.45, 0.45);
   const [wheel, setWheel] = useState<"up" | "down" | undefined>(undefined);
   useShowing(show, at, (at, editor, acting) => {
     if (!acting) return () => {};
@@ -286,19 +285,13 @@ const PLAYS: Record<"pen" | "marker" | "shapes" | "text" | "stamp" | "hide" | "c
       { after: 1800, hand: { at: [0.62, 0.52] } },
       // The other button pressed twice on it: its settings, there.
       { after: 2300, hand: { at: [0.62, 0.52], held: "twice" } },
-      { after: 3200, hand: { at: [0.62, 0.52] }, act: (editor) => editor.settingsAt(...pageOf([0.62, 0.52])) },
+      { after: 3200, hand: { at: [0.62, 0.52] }, act: (editor) => editor.settingsAt(...editor.pageOf([0.62, 0.52])) },
       // (Then out of the way of the settings.)
       { after: 3400, hand: { at: [0.55, 0.85] } },
     ],
     length: 6200,
   },
 };
-
-/** A place on the picture as the tour names it, in pixels of the page. */
-function pageOf([across, down]: Part): [number, number] {
-  const sheet = document.querySelector(".picture.stage .sheet")?.getBoundingClientRect();
-  return sheet ? [Math.round(sheet.left + sheet.width * across), Math.round(sheet.top + sheet.height * down)] : [0, 0];
-}
 
 /** A tool used on the picture, as `play` has it: the tool in hand, the hand drawn where it is, and
     what it draws drawn; and again, from what the picture was. Gone, with what it drew, once the
@@ -307,7 +300,7 @@ function Sketching({ show, play }: { show: Shown; play: Play }) {
   const [hand, setHand] = useState<{ at: { x: number; y: number }; held?: Held; round: number } | null>(null);
   const [ready, setReady] = useState<{ x: number; y: number } | null>(null);
   useLayoutEffect(() => {
-    const [x, y] = pageOf([0.5, 0.5]);
+    const [x, y] = show.current?.pageOf([0.5, 0.5]) ?? [0, 0];
     if (x || y) setReady({ x, y });
   }, []);
   useShowing(show, ready, (_, editor, acting) => {
@@ -328,7 +321,7 @@ function Sketching({ show, play }: { show: Shown; play: Play }) {
       timers = play.beats.map(({ after, hand, act }, index) =>
         window.setTimeout(() => {
           if (hand) {
-            const [x, y] = pageOf(hand.at);
+            const [x, y] = editor.pageOf(hand.at);
             setHand({ at: { x, y }, held: hand.held, round });
           }
           if (acting) act?.(editor, drawn);
