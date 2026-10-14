@@ -36,7 +36,7 @@ export interface EditorShow {
       done here. */
   now: () => {
     tool: Tool;
-    looking: { times: number; x: number; y: number };
+    looking: { times: number; x?: number; y?: number };
     drawing: Drawing;
     selected: number | null;
     several: number[];
@@ -656,18 +656,22 @@ function squared(edit: Stamped): Stamped {
   return { ...edit, from, to: [from[0] + side, from[1] + side] };
 }
 
-/** A canvas to work on beside the one that is shown. */
+/** A canvas to work on beside the one that is shown, and one to copy a part of it to as it is. */
 let spare: HTMLCanvasElement | null = null;
+let copied: HTMLCanvasElement | null = null;
 
 /** Makes a part of the canvas unreadable, as it is drawn so far: blurred, or broken into blocks.
-    `zoom` is how many pixels of the canvas one of the image is, and `view` the part of the image
-    the canvas shows. Only what is in the area goes into it, as the application does it. */
-function hide(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, edit: Hidden, zoom: number, view: Box) {
+    `zoom` is how many pixels of the canvas one of the image is, `view` the part of the image the
+    canvas shows (it may reach beyond the picture), and `picture` where the picture is, in the
+    image. Only what is in the area, and of the picture, goes into it, as the application does it. */
+function hide(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, edit: Hidden, zoom: number, view: Box, picture: Box) {
   const box = boxOf(edit);
-  const left = Math.max(0, Math.floor((box.x - view.x) * zoom));
-  const top = Math.max(0, Math.floor((box.y - view.y) * zoom));
-  const right = Math.min(canvas.width, Math.ceil((box.x + box.width - view.x) * zoom));
-  const bottom = Math.min(canvas.height, Math.ceil((box.y + box.height - view.y) * zoom));
+  const [from, to] = [Math.max(box.x, picture.x), Math.min(box.x + box.width, picture.x + picture.width)];
+  const [above, below] = [Math.max(box.y, picture.y), Math.min(box.y + box.height, picture.y + picture.height)];
+  const left = Math.max(0, Math.floor((from - view.x) * zoom));
+  const top = Math.max(0, Math.floor((above - view.y) * zoom));
+  const right = Math.min(canvas.width, Math.ceil((to - view.x) * zoom));
+  const bottom = Math.min(canvas.height, Math.ceil((below - view.y) * zoom));
   const [width, height] = [right - left, bottom - top];
   if (width <= 0 || height <= 0) return;
   spare ??= document.createElement("canvas");
@@ -684,13 +688,21 @@ function hide(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, edit: Hi
     // its pixels left square.
     const cell = Math.max(1, edit.cell * zoom);
     const [columns, rows] = [Math.max(1, Math.ceil(width / cell)), Math.max(1, Math.ceil(height / cell))];
+    // The area copied out as it is first, and made smaller from there: how the browser makes a part
+    // of a canvas smaller depends on the canvas around it, and the window's canvas is not the one the
+    // image that leaves is made on (it is larger, the picture elsewhere in it). From a canvas of its
+    // own, the blocks are the same in both.
+    copied ??= document.createElement("canvas");
+    copied.width = width;
+    copied.height = height;
+    copied.getContext("2d")?.drawImage(canvas, left, top, width, height, 0, 0, width, height);
     spare.width = columns;
     spare.height = rows;
     beside.imageSmoothingQuality = "high";
     // First stretched over all of it, so that the blocks at the right and bottom edges, which are
     // only partly in the area, are not partly see-through; then in its true proportions.
-    beside.drawImage(canvas, left, top, width, height, 0, 0, columns, rows);
-    beside.drawImage(canvas, left, top, width, height, 0, 0, width / cell, height / cell);
+    beside.drawImage(copied, 0, 0, width, height, 0, 0, columns, rows);
+    beside.drawImage(copied, 0, 0, width, height, 0, 0, width / cell, height / cell);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(spare, 0, 0, columns, rows, left, top, columns * cell, rows * cell);
   } else {
@@ -910,10 +922,12 @@ function resized(edit: Edit, hold: Hold, by: Place, shift: boolean, unit: number
   return { ...edit, from: [tenth(left), tenth(top)], to: [tenth(right), tenth(bottom)] } as Edit;
 }
 
-/** Draws the capture and what is drawn on it, each edit in its turn. `zoom` is how many pixels of the
-    canvas one of the image is, and `view` the part of the image the canvas shows; the canvas is set
-    to that before. Shown in the window and made into the image that leaves by this one function:
-    what leaves is what is shown. Without `skip`, the edit at that place in the list. */
+/** Draws the capture and what is drawn on it, each edit in its turn, within the picture (`picture`,
+    the part of the image there is: all of it, or what it is cut down to). `zoom` is how many pixels
+    of the canvas one of the image is, and `view` the part of the image the canvas shows (in the
+    window it reaches beyond the picture); the canvas is set to that before. Shown in the window and
+    made into the image that leaves by this one function: what leaves is what is shown. Without
+    `skip`, the edit at that place in the list. */
 function drawAll(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
@@ -921,15 +935,21 @@ function drawAll(
   list: Edit[],
   zoom: number,
   view: Box,
+  picture: Box,
   skip: number | null = null,
 ) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(picture.x, picture.y, picture.width, picture.height);
+  ctx.clip();
   if (capture) ctx.drawImage(capture, 0, 0);
   list.forEach((edit, index) => {
     if (index === skip) return;
-    if (isHidden(edit)) hide(ctx, canvas, edit, zoom, view);
+    if (isHidden(edit)) hide(ctx, canvas, edit, zoom, view, picture);
     else if (isLettered(edit)) letter(ctx, edit);
     else if (isDrawn(edit)) paint(ctx, edit);
   });
+  ctx.restore();
 }
 
 /** The image that leaves: the capture with the list drawn into it, cut down to what the last crop
@@ -944,7 +964,7 @@ function flattened(capture: ImageBitmap, list: Edit[]): Promise<Blob | null> {
   // (Not as large as asked: the canvas could not be made, and what it would give is not the image.)
   if (!ctx || canvas.width !== kept.width || canvas.height !== kept.height) return Promise.resolve(null);
   ctx.setTransform(1, 0, 0, 1, -kept.x, -kept.y);
-  drawAll(ctx, canvas, capture, list, 1, kept);
+  drawAll(ctx, canvas, capture, list, 1, kept, kept);
   return new Promise((made) => {
     try {
       canvas.toBlob(made, "image/png");
@@ -995,7 +1015,7 @@ type Gesture =
   | { kind: "crop"; grip: Grip; from: Place; was: Box }
   // The part of the picture that is shown being dragged along: from where on the screen, and where
   // it was.
-  | { kind: "pan"; from: Place; was: Place; shifted: Place };
+  | { kind: "pan"; from: Place; was: Place };
 
 export function Editor({
   capture,
@@ -1559,10 +1579,9 @@ export function Editor({
     return () => watching.disconnect();
   }, []);
   // How closely it is looked at: once is all of it (of what it is cut down to), fitted to its place;
-  // more is a part of it, as much larger, filling as much of the place as it needs; less is all of it,
-  // smaller, with room around it. And which part.
-  // (And, shown smaller than its place, how far from the middle of it the picture was moved.)
-  const [looking, setLooking] = useState<{ times: number; x: number; y: number; dx?: number; dy?: number }>({ times: 1, x: 0, y: 0 });
+  // more is a part of it, as much larger; less is all of it, smaller. And which place of the picture
+  // is in the middle of the place it is shown in (none: the middle of the picture).
+  const [looking, setLooking] = useState<{ times: number; x?: number; y?: number }>({ times: 1 });
   // (Not when the tour puts the window back from cutting down, which shows all of the picture: the
   // tour gives the look back as it was.)
   const lookKept = useRef(false);
@@ -1571,39 +1590,37 @@ export function Editor({
       lookKept.current = false;
       return;
     }
-    setLooking({ times: 1, x: 0, y: 0 });
+    setLooking({ times: 1 });
   }, [capture.id, view.x, view.y, view.width, view.height]);
   const fit = Math.min(1, room.width / view.width, room.height / view.height) || 0;
   const closest = fit > 0 ? Math.max(1, CLOSEST / fit) : 1;
   const times = Math.min(closest, Math.max(FARTHEST, looking.times));
   /** How many pixels of the screen one of the image is. */
   const scale = fit * times;
-  /** The size of what is shown, and the part of the picture that is, looked at so closely from
-      there. */
-  const lookAt = (times: number, x: number, y: number) => {
+  /** What is shown, the whole place, and the part of the image that is (reaching beyond the picture
+      where it does not fill the place), looked at so closely with that place of the picture in the
+      middle; and that place. The middle is always somewhere on the picture: it is never out of
+      sight, however far it is moved (owner, 2026-10-14). */
+  const lookAt = (times: number, x?: number, y?: number) => {
     const by = fit * times;
-    const shown = {
-      width: Math.min(room.width, Math.round(view.width * by)),
-      height: Math.min(room.height, Math.round(view.height * by)),
-    };
-    if (times <= 1 || by === 0) return { shown, part: view };
-    const [width, height] = [Math.min(view.width, shown.width / by), Math.min(view.height, shown.height / by)];
+    const shown = { width: room.width, height: room.height };
+    const middle: Place = [
+      Math.min(view.x + view.width, Math.max(view.x, x ?? view.x + view.width / 2)),
+      Math.min(view.y + view.height, Math.max(view.y, y ?? view.y + view.height / 2)),
+    ];
+    if (by === 0) return { shown, part: view, middle };
+    const [width, height] = [room.width / by, room.height / by];
+    // (The corner of the picture on a whole pixel of the screen: its pixels are not smudged across
+    // two, and what is shown at a pixel to a pixel is the image.)
+    const pixel = by * (window.devicePixelRatio || 1);
+    const [x0, y0] = [middle[0] - width / 2, middle[1] - height / 2];
     return {
       shown,
-      part: {
-        x: Math.min(view.x + view.width - width, Math.max(view.x, x)),
-        y: Math.min(view.y + view.height - height, Math.max(view.y, y)),
-        width,
-        height,
-      },
+      part: { x: view.x - Math.round((view.x - x0) * pixel) / pixel, y: view.y - Math.round((view.y - y0) * pixel) / pixel, width, height },
+      middle,
     };
   };
-  const { shown: shownSize, part: look } = lookAt(times, looking.x, looking.y);
-  // Shown smaller than its place (looked at from further away, or so one way): where in the place it
-  // is, as far from the middle as it was moved, never past the place's edges.
-  const leeway: Place = [Math.max(0, (room.width - shownSize.width) / 2), Math.max(0, (room.height - shownSize.height) / 2)];
-  const inPlace = (by: number, most: number) => Math.min(most, Math.max(-most, by));
-  const shift: Place = [inPlace(looking.dx ?? 0, leeway[0]), inPlace(looking.dy ?? 0, leeway[1])];
+  const { shown: shownSize, part: look, middle } = lookAt(times, looking.x, looking.y);
   // Space held down: the pointer takes hold of the picture, not of a tool.
   const [grabbing, setGrabbing] = useState(false);
 
@@ -1655,7 +1672,7 @@ export function Editor({
     ctx.imageSmoothingEnabled = zoom < 3;
     // The picture itself is drawn here too: what makes a part unreadable works on what is drawn.
     // (What is being written anew is in the field over the picture, not also under it.)
-    drawAll(ctx, element, bitmap, gesture?.kind === "draw" ? [...visible, gesture.edit] : visible, zoom, look, typing?.index ?? null);
+    drawAll(ctx, element, bitmap, gesture?.kind === "draw" ? [...visible, gesture.edit] : visible, zoom, look, view, typing?.index ?? null);
 
     // Those selected together: a frame around each, and nothing to take hold of them by but that.
     for (const index of several) {
@@ -1772,9 +1789,8 @@ export function Editor({
     if ((times > 1 && next < 1) || (times < 1 && next > 1)) next = 1;
     if (next === times) return;
     // That place stays under the pointer: as far across what is shown then as it is now.
-    const then = lookAt(next, 0, 0).part;
-    // (Where the picture was moved to in its place, it stays.)
-    setLooking({ times: next, x: under[0] - across * then.width, y: under[1] - down * then.height, dx: looking.dx, dy: looking.dy });
+    const then = lookAt(next).part;
+    setLooking({ times: next, x: under[0] - (across - 0.5) * then.width, y: under[1] - (down - 0.5) * then.height });
   };
 
   /** The frame the image is cut down to, after the pointer went from where it took hold to `at`. */
@@ -1872,7 +1888,7 @@ export function Editor({
     // pointer, whatever tool is in hand.
     if (event.button === 1 || (event.button === 0 && grabbing)) {
       (canvas.current ?? event.currentTarget).setPointerCapture(event.pointerId);
-      return setGesture({ kind: "pan", from: [event.clientX, event.clientY], was: [look.x, look.y], shifted: shift });
+      return setGesture({ kind: "pan", from: [event.clientX, event.clientY], was: middle });
     }
     if (event.button !== 0) return;
     // (The picture is pressed on: the bar of the tool, there since its button was pressed, goes.)
@@ -1880,7 +1896,7 @@ export function Editor({
     const at = placeOf(event);
     // Pressed beside the picture: drawn from there, as much of it as falls on the picture. Not
     // what would be put there whole, and so not be seen: something written, a number.
-    const offPicture = at[0] < look.x || at[1] < look.y || at[0] > look.x + look.width || at[1] > look.y + look.height;
+    const offPicture = at[0] < view.x || at[1] < view.y || at[0] > view.x + view.width || at[1] > view.y + view.height;
     if (tool === "text") {
       // A press while something is being written: that is done. Otherwise writing starts there,
       // or, on something written before, that is written anew.
@@ -2055,14 +2071,11 @@ export function Editor({
     }
     if (!gesture) return;
     if (gesture.kind === "pan") {
-      // Larger than its place, the part of it shown goes along; smaller, the picture itself.
-      const [across, down] = [event.clientX - gesture.from[0], event.clientY - gesture.from[1]];
+      // The picture goes along under the pointer, as far as its middle can go.
       return setLooking({
         times,
-        x: gesture.was[0] - across / scale,
-        y: gesture.was[1] - down / scale,
-        dx: inPlace(gesture.shifted[0] + across, leeway[0]),
-        dy: inPlace(gesture.shifted[1] + down, leeway[1]),
+        x: gesture.was[0] - (event.clientX - gesture.from[0]) / scale,
+        y: gesture.was[1] - (event.clientY - gesture.from[1]) / scale,
       });
     }
     const at = placeOf(event);
@@ -2292,7 +2305,7 @@ export function Editor({
       }
       if (key === "0" && !onText) {
         taken();
-        return setLooking({ times: 1, x: 0, y: 0 });
+        return setLooking({ times: 1 });
       }
       // While the image is being cut down, Enter cuts it; it is not yet time for the capture to leave.
       // (On a button that has the keyboard, Enter is that button's.)
@@ -2483,7 +2496,7 @@ export function Editor({
       setSelected(index);
     },
     // (Taken right after the window was put back: against what it is about to be, not what it was drawn as.)
-    whole: () => setLooking({ times: 1, x: 0, y: 0 }),
+    whole: () => setLooking({ times: 1 }),
     frame: (from, to) => {
       const [one, other] = [partOf(from, whole), partOf(to, whole)];
       setFrame({ x: Math.round(one[0]), y: Math.round(one[1]), width: Math.round(other[0] - one[0]), height: Math.round(other[1] - one[1]) });
@@ -3021,14 +3034,20 @@ export function Editor({
       >
         <div
           className={`sheet tool-${tool}${frozen ? " frozen" : ""}${grabbing || gesture?.kind === "pan" ? " grab" : ""}`}
-          style={{ ...shownSize, left: shift[0], top: shift[1] }}
+          style={shownSize}
         >
           {/* The picture is drawn on the canvas. Until it is there to draw, this shows it; and should
               it never come, this is what is seen (not once the image is looked at more closely or
               cut down: it would no longer be in its place; and never with a part of it made
               unreadable, which this would show as it was). */}
-          {!(bitmap || look !== whole || edits.some(isHidden)) && (
+          {!bitmap && view === whole && !edits.some(isHidden) && (
             <img
+              style={{
+                left: (view.x - look.x) * scale,
+                top: (view.y - look.y) * scale,
+                width: view.width * scale,
+                height: view.height * scale,
+              }}
               src={imageUrl(capture, "image")}
               alt={t("preview.image", { width: capture.width, height: capture.height })}
               draggable={false}
@@ -3036,6 +3055,9 @@ export function Editor({
           )}
           <canvas
             ref={canvas}
+            // Where the picture is on it, in pixels of the page: the canvas is the whole place, and the
+            // picture somewhere in it (for whoever has to find it, as the checks do).
+            data-picture={[(view.x - look.x) * scale, (view.y - look.y) * scale, view.width * scale, view.height * scale].map((n) => Math.round(n * 100) / 100).join(",")}
             style={pointer}
           />
           {typing && writing && (
@@ -3065,8 +3087,8 @@ export function Editor({
                 const room = 16 / perPixel;
                 const within = (value: number, least: number, most: number) => Math.round(Math.min(Math.max(least, most), Math.max(least, value)));
                 const at: Place = [
-                  within(carried.was[0] + (event.clientX - carried.from[0]) / perPixel, look.x, look.x + look.width - room),
-                  within(carried.was[1] + (event.clientY - carried.from[1]) / perPixel, look.y, look.y + look.height - room),
+                  within(carried.was[0] + (event.clientX - carried.from[0]) / perPixel, Math.max(look.x, view.x), Math.min(look.x + look.width, view.x + view.width) - room),
+                  within(carried.was[1] + (event.clientY - carried.from[1]) / perPixel, Math.max(look.y, view.y), Math.min(look.y + look.height, view.y + view.height) - room),
                 ];
                 // (What was typed meanwhile stays typed.)
                 setTyping((now) => now && { ...now, at });
@@ -3159,8 +3181,8 @@ export function Editor({
             <button
               title={`${t("editor.zoom.whole")} (0)`}
               aria-label={t("editor.zoom.whole")}
-              disabled={times === 1}
-              onClick={() => setLooking({ times: 1, x: 0, y: 0 })}
+              disabled={times === 1 && looking.x === undefined && looking.y === undefined}
+              onClick={() => setLooking({ times: 1 })}
             >
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10" />
