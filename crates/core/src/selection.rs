@@ -214,6 +214,34 @@ impl Session {
     }
 }
 
+/// How many pixels of a window's edge are left out when the window is captured. Its outermost pixels
+/// are not quite its own: the border is drawn over what lies behind it, and the desktop showed along
+/// every side of a captured window (owner, 2026-10-14: "1px か 2px ぐらい見えちゃってる").
+pub const WINDOW_EDGE: u32 = 1;
+
+/// The part of a window that is captured: without its edge (`WINDOW_EDGE` on every side), unless the
+/// window fills a monitor, or the part of one windows are meant to use (full screen, maximized): its
+/// edge is the monitor's then, and nothing behind it shows.
+pub fn without_edge(bounds: Rect, layout: &ScreenLayout) -> Rect {
+    let fills = |area: &Rect| bounds.intersection(area) == Some(*area);
+    let edge = WINDOW_EDGE;
+    if layout
+        .monitors
+        .iter()
+        .any(|monitor| fills(&monitor.bounds) || fills(&monitor.work_area))
+        || bounds.width <= edge * 2
+        || bounds.height <= edge * 2
+    {
+        return bounds;
+    }
+    Rect::new(
+        bounds.x + edge as i32,
+        bounds.y + edge as i32,
+        bounds.width - edge * 2,
+        bounds.height - edge * 2,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +264,35 @@ mod tests {
             title: format!("window {id}"),
             bounds,
         }
+    }
+
+    #[test]
+    fn a_window_is_captured_without_its_edge_unless_it_fills_a_monitor() {
+        let mut first = monitor(0, true);
+        first.work_area = Rect::new(0, 0, 1000, 760);
+        let layout = ScreenLayout {
+            bounds: Rect::new(0, 0, 2000, 800),
+            monitors: vec![first, monitor(1000, false)],
+        };
+        // A window among others: a pixel in from every side.
+        assert_eq!(
+            without_edge(Rect::new(100, 50, 400, 300), &layout),
+            Rect::new(101, 51, 398, 298)
+        );
+        // Full screen, maximized (the work area), and larger than the monitor: as it is.
+        for filling in [
+            Rect::new(0, 0, 1000, 800),
+            Rect::new(0, 0, 1000, 760),
+            Rect::new(1000, 0, 1000, 800),
+            Rect::new(-8, -8, 1016, 776),
+        ] {
+            assert_eq!(without_edge(filling, &layout), filling);
+        }
+        // Too thin to have an edge to leave out.
+        assert_eq!(
+            without_edge(Rect::new(10, 10, 2, 50), &layout),
+            Rect::new(10, 10, 2, 50)
+        );
     }
 
     /// Two monitors side by side; a small window in front of a large one on the left monitor, and one

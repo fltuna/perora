@@ -561,12 +561,17 @@ fn finish(app: &AppHandle, active: Active, choice: Choice) {
                     "cut out of the screen"
                 }
             ));
+            // (Without its edge, where what is behind it showed through; see `without_edge`.)
+            let bounds =
+                perora_core::selection::without_edge(window.bounds, active.session.layout());
             match picture {
                 // The window alone, as it was; of it, what was on the screen, as highlighted (its own
                 // picture also has the part that hung off the edge).
-                Some(picture) => picture.crop(active.still.area),
+                Some(picture) => bounds
+                    .intersection(&active.still.area)
+                    .and_then(|seen| picture.crop(seen)),
                 // No picture of its own (yet, or ever): what was seen of it on the screen.
-                None => active.still.crop(window.bounds),
+                None => active.still.crop(bounds),
             }
         }),
     };
