@@ -135,7 +135,7 @@
   "main.update.downloading": "Downloading… {percent}%",
   "main.update.downloadingSome": "Downloading…",
   "main.update.installing": "Installing. Perora will start again in a moment.",
-  "main.update.captureInHand": "Finish with the capture in the preview first: updating restarts Perora.",
+  "main.update.captureInHand": "Save or discard the image in the preview before updating. Perora restarts automatically when it updates.",
   "main.general.section.update": "Updates",
   "main.general.version": "Perora {version}",
   "main.general.versionHint": "Perora looks for a new version when it starts and every six hours.",

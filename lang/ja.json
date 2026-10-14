@@ -135,7 +135,7 @@
   "main.update.downloading": "ダウンロード中… {percent}%",
   "main.update.downloadingSome": "ダウンロード中…",
   "main.update.installing": "インストールしています。このあと Perora が起動し直します。",
-  "main.update.captureInHand": "プレビュー中の画像を片付けてから更新してください。更新すると Perora が起動し直します。",
+  "main.update.captureInHand": "プレビュー中の画像を保存もしくは廃棄してから更新してください。更新時にPeroraが自動的に再起動します。",
   "main.general.section.update": "更新",
   "main.general.version": "Perora {version}",
   "main.general.versionHint": "起動したときと、6 時間ごとに新しいバージョンを確かめます。",
