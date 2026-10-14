@@ -158,6 +158,9 @@ pub struct Settings {
     pub upload_immediately: bool,
     /// The mode the selection screen starts in.
     pub start_mode: Mode,
+    /// Whether Perora's own windows (the main window, the previews) are out of the picture: hidden
+    /// before the screen is captured. Otherwise they are captured too, and hidden only once they are.
+    pub hide_own_windows: bool,
     /// Whether what was selected is put on the clipboard as the preview appears.
     pub copy_to_clipboard: bool,
     /// Whether discarding a capture also takes it off the clipboard.
@@ -269,6 +272,7 @@ impl Settings {
         // (Once a switch, for a preview or none: off, it was what is now "to the clipboard only".)
         let preview_enabled = flag("previewEnabled", true);
         let take_snipping = flag("takeSnipping", false);
+        let hide_own_windows = flag("hideOwnWindows", true);
 
         let mut text = |key: &str| match file.remove(key) {
             Some(Value::String(value)) if !value.is_empty() => Some(value),
@@ -369,6 +373,7 @@ impl Settings {
             upload_immediately,
             upload_enabled,
             start_mode,
+            hide_own_windows,
             copy_to_clipboard,
             clear_clipboard_on_discard,
             save_directory,
@@ -403,6 +408,7 @@ impl Settings {
         file.insert("uploadImmediately".into(), self.upload_immediately.into());
         file.insert("enableUpload".into(), self.upload_enabled.into());
         file.insert("startMode".into(), self.start_mode.name().into());
+        file.insert("hideOwnWindows".into(), self.hide_own_windows.into());
         file.insert("copyToClipboard".into(), self.copy_to_clipboard.into());
         file.insert(
             "clearClipboardOnDiscard".into(),
@@ -593,6 +599,13 @@ mod tests {
         assert_eq!(Output::default().fit, None);
         assert!(!settings.take_snipping);
         assert!(parse(br#"{"takeSnipping": true}"#).unwrap().take_snipping);
+        // Perora's own windows are out of the picture unless the user wants them in it.
+        assert!(parse(b"{}").unwrap().hide_own_windows);
+        assert!(
+            !parse(br#"{"hideOwnWindows": false}"#)
+                .unwrap()
+                .hide_own_windows
+        );
         assert_eq!(settings.notice_seconds, 7);
         assert_eq!(settings.notice_corner, Corner::BottomRight);
         assert_eq!(

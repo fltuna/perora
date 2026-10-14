@@ -114,6 +114,8 @@ struct SettingsView {
     upload_immediately: bool,
     enable_upload: bool,
     start_mode: &'static str,
+    /// Whether Perora's own windows are hidden before the screen is captured.
+    hide_own_windows: bool,
     copy_to_clipboard: bool,
     clear_clipboard_on_discard: bool,
     /// Where "save" writes, whether chosen or not.
@@ -349,6 +351,7 @@ pub fn main_state(app: AppHandle) -> View {
             upload_immediately: settings.upload_immediately,
             enable_upload: settings.upload_enabled,
             start_mode: settings.start_mode.name(),
+            hide_own_windows: settings.hide_own_windows,
             copy_to_clipboard: settings.copy_to_clipboard,
             clear_clipboard_on_discard: settings.clear_clipboard_on_discard,
             save_directory: preview::save_directory(&app, settings)
@@ -552,6 +555,7 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
             ("uploadImmediately", Some(on), ..) => settings.upload_immediately = on,
             ("enableUpload", Some(on), ..) => settings.upload_enabled = on,
             ("copyToClipboard", Some(on), ..) => settings.copy_to_clipboard = on,
+            ("hideOwnWindows", Some(on), ..) => settings.hide_own_windows = on,
             ("clearClipboardOnDiscard", Some(on), ..) => settings.clear_clipboard_on_discard = on,
             ("askWhereToSave", Some(on), ..) => settings.ask_where_to_save = on,
             ("startMode", _, Some(mode), _) => settings.start_mode = mode,
@@ -771,6 +775,7 @@ mod tests {
             upload_immediately: true,
             enable_upload: true,
             start_mode: "smart",
+            hide_own_windows: true,
             copy_to_clipboard: true,
             clear_clipboard_on_discard: true,
             save_directory: String::new(),
@@ -804,6 +809,7 @@ mod tests {
             "uploadImmediately",
             "enableUpload",
             "copyToClipboard",
+            "hideOwnWindows",
             "clearClipboardOnDiscard",
             "askWhereToSave",
             "startAtSignIn",

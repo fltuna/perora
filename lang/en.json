@@ -19,6 +19,8 @@
   "main.capture.section.other": "Other",
   "main.capture.startMode": "Default capture mode",
   "main.capture.startModeHint": "The capture mode used by default. With All monitors, the selection screen is skipped and the capture is taken directly.",
+  "main.capture.hideOwnWindows": "Hide Perora's windows",
+  "main.capture.hideOwnWindowsHint": "Keeps the settings, the preview and the editor out of captures. Off, they are captured too: for pictures of Perora itself.",
   "main.capture.copy": "Copy images automatically",
   "main.capture.copyHint": "The image is copied to the clipboard automatically as soon as the preview appears.",
   "main.capture.clear": "Clear the clipboard with the Discard button",

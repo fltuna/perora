@@ -805,10 +805,12 @@ fn capture(app: &AppHandle) {
     std::thread::spawn(move || {
         let perora = app.state::<Perora>();
         let _done = Done(&perora.capturing);
-        // The main window is not what is to be captured, nor is a notice: gone at once (the window
-        // is back when this is over). A window that was just hidden is on screen for one more frame.
+        // The main window is not what is to be captured (unless the user wants Perora's windows in
+        // the picture), nor is a notice: gone at once (the window is back when this is over). A
+        // window that was just hidden is on screen for one more frame.
         let noticed = notice::put_away(&app);
-        if main_window::step_aside(&app) || noticed {
+        let hide = perora.setting(|settings| settings.hide_own_windows);
+        if (hide && main_window::step_aside(&app)) || noticed {
             std::thread::sleep(SETTLE);
         }
         if let Err(detail) = selection::start(&app) {

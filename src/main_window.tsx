@@ -19,6 +19,8 @@ interface View {
     uploadImmediately: boolean;
     enableUpload: boolean;
     startMode: string;
+    /** Whether Perora's own windows are hidden before the screen is captured. */
+    hideOwnWindows: boolean;
     copyToClipboard: boolean;
     clearClipboardOnDiscard: boolean;
     saveDirectory: string;
@@ -401,6 +403,13 @@ function Capture({ view, t }: { view: View; t: Translate }) {
             </option>
           ))}
         </select>
+      </Setting>
+      <Setting title={t("main.capture.hideOwnWindows")} hint={t("main.capture.hideOwnWindowsHint")}>
+        <Switch
+          label={t("main.capture.hideOwnWindows")}
+          on={settings.hideOwnWindows}
+          onChange={(on) => set("hideOwnWindows", on)}
+        />
       </Setting>
       <Setting title={t("main.capture.copy")} hint={t("main.capture.copyHint")}>
         <Switch

@@ -236,10 +236,13 @@ fn hide_windows(app: &AppHandle) {
 /// screen that is already up is replaced (the shortcut pressed again: capture anew).
 pub fn start(app: &AppHandle) -> Result<(), String> {
     let perora = app.state::<Perora>();
-    // A selection screen or a preview still on screen would be in the picture.
+    // A selection screen or a preview still on screen would be in the picture. (The previews are
+    // left in it when the user wants Perora's windows captured too.)
+    let hide = perora.setting(|settings| settings.hide_own_windows);
+    let start_mode = perora.setting(|settings| settings.start_mode);
     let was_up = perora.selection.lock().take().is_some();
     hide_windows(app);
-    if preview::hide_for_capture(app) || was_up {
+    if (hide && preview::hide_for_capture(app)) || was_up {
         std::thread::sleep(SETTLE);
     }
 
@@ -257,6 +260,13 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
             return Err(error.to_string());
         }
     };
+    // Captured with Perora's windows in it, as the user wanted: out of the way now, under the
+    // selection screen (which shows them as they were), and back as that is done with, as when they
+    // are hidden first. (Not for every monitor at once: there is no selection screen to go under.)
+    if !hide && start_mode != Mode::AllMonitors {
+        preview::hide_for_capture(app);
+        main_window::step_aside(app);
+    }
     let desktop = desktop();
     let windows = desktop.windows().unwrap_or_default();
     let pointer = desktop
@@ -292,7 +302,6 @@ pub fn start(app: &AppHandle) -> Result<(), String> {
             .collect()
     });
 
-    let start_mode = perora.setting(|settings| settings.start_mode);
     // Every monitor is the one mode with nothing to choose: no screen for it, the capture goes on.
     if start_mode == Mode::AllMonitors {
         main_window::come_back(app);
