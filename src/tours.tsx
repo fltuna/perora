@@ -141,6 +141,9 @@ function Looking({ show }: { show: Shown }) {
   const [wheel, setWheel] = useState<"up" | "down" | undefined>(undefined);
   useShowing(show, at, (at, editor, acting) => {
     if (!acting) return () => {};
+    // From all of it, fitted: closer from there, and back to there. (From further away, ten notches
+    // would come back further each time.)
+    editor.whole();
     if (still()) {
       // (Closer once, as ten notches would have it, and left so.)
       editor.zoom(at.x, at.y, -800);

@@ -775,8 +775,14 @@ button.picture img {
 }
 
 .picture.stage.tool-text,
-.picture.stage.tool-stamp {
+.picture.stage.tool-stamp,
+.picture.stage.tool-select {
   cursor: default;
+}
+
+/* On its way out, nothing is begun beside the picture either. */
+.picture.stage.frozen {
+  pointer-events: none;
 }
 
 .picture.stage.grab {

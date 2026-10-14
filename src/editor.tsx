@@ -1750,7 +1750,12 @@ export function Editor({
   };
 
   /** The wheel looks closer or from further away, at the place under the pointer. */
-  const onWheel = (event: React.WheelEvent) => zoomAt(event.clientX, event.clientY, event.deltaY);
+  const onWheel = (event: React.WheelEvent) => {
+    // (Not over the field something is written in, nor while it is carried by its band: it would
+    // jump, carried at another size.)
+    if (carrying.current || (event.target instanceof Element && event.target.closest(".holding"))) return;
+    zoomAt(event.clientX, event.clientY, event.deltaY);
+  };
   const zoomAt = (x: number, y: number, deltaY: number) => {
     const box = canvas.current?.getBoundingClientRect();
     if (scale === 0 || hand.current || !box) return;
@@ -1859,7 +1864,7 @@ export function Editor({
     // The middle button, or the main one with Space held: the picture is dragged along under the
     // pointer, whatever tool is in hand.
     if (event.button === 1 || (event.button === 0 && grabbing)) {
-      event.currentTarget.setPointerCapture(event.pointerId);
+      (canvas.current ?? event.currentTarget).setPointerCapture(event.pointerId);
       return setGesture({ kind: "pan", from: [event.clientX, event.clientY], was: [look.x, look.y] });
     }
     if (event.button !== 0) return;
@@ -1882,7 +1887,9 @@ export function Editor({
       setSelected(null);
       return setTyping({ index: null, at: [Math.round(at[0] - around), Math.round(at[1] - around - line / 2)], text: "" });
     }
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // (Held by the canvas, wherever the press was: what it says of the pointer, the pointer says
+    // while the drag goes on.)
+    (canvas.current ?? event.currentTarget).setPointerCapture(event.pointerId);
     if (tool === "select") {
       // With Ctrl held: the one on top of those under the pointer is selected along with what is
       // selected already, or no longer if it was. Where there is none, what is selected stays, and
@@ -2129,6 +2136,9 @@ export function Editor({
     const { edit } = gesture;
     // A press without a drag is a dot of the pen; of anything else it is nothing.
     if (!("points" in edit) && edit.from[0] === edit.to[0] && edit.from[1] === edit.to[1]) return;
+    // Drawn wholly beside the picture, it would never be seen: it is not kept.
+    const [box, around] = [boxOf(edit), reach(edit) / 2];
+    if (box.x + box.width + around < view.x || box.y + box.height + around < view.y || box.x - around > view.x + view.width || box.y - around > view.y + view.height) return;
     // (Just drawn only when it is: not what a drawing that is full did not take.)
     if (!fits([...edits, edit])) return onFull();
     change([...edits, edit]);
@@ -2693,6 +2703,20 @@ export function Editor({
     </Panel>
   );
 
+  // What the pointer looks like over the picture and the room around it (and, held by the canvas,
+  // while a drag goes on): while cutting down, the pointer of what is in hand, for as long as it is,
+  // wherever the pointer has gone meanwhile; otherwise of what is under it.
+  const pointer: React.CSSProperties | undefined =
+    tool === "crop" && !grabbing
+      ? { cursor: gesture?.kind === "crop" ? pointerOf(gesture.grip) : gesture ? undefined : (pointing ?? undefined) }
+      : // (Selecting: over a hold of the one selected, and while it is pulled by one.)
+        tool === "select" && !grabbing && (gesture ? gesture.kind === "resize" : pointing !== null)
+        ? { cursor: gesture?.kind === "resize" ? (typeof gesture.hold === "string" ? "move" : pointerOf(gesture.hold)) : (pointing ?? undefined) }
+        : // (And over the shape that was just drawn, where a press moves it; and while it is moved.)
+        !grabbing && tool !== "select" && (gesture ? gesture.kind === "move" : taking)
+        ? { cursor: "move" }
+        : undefined;
+
   return (
     <>
       <div
@@ -2959,7 +2983,8 @@ export function Editor({
       </div>
       <div
         ref={stage}
-        className={`picture stage tool-${tool}${grabbing || gesture?.kind === "pan" ? " grab" : ""}`}
+        className={`picture stage tool-${tool}${grabbing || gesture?.kind === "pan" ? " grab" : ""}${frozen ? " frozen" : ""}`}
+        style={pointer}
         data-tour="stage"
         // The picture and the room around it alike: a drag may begin beside the picture.
         onPointerDown={onDown}
@@ -3000,19 +3025,7 @@ export function Editor({
           )}
           <canvas
             ref={canvas}
-            // (While cutting down: the pointer of what is in hand, for as long as it is, wherever
-            // the pointer has gone meanwhile; otherwise of what is under it.)
-            style={
-              tool === "crop" && !grabbing
-                ? { cursor: gesture?.kind === "crop" ? pointerOf(gesture.grip) : gesture ? undefined : (pointing ?? undefined) }
-                : // (Selecting: over a hold of the one selected, and while it is pulled by one.)
-                  tool === "select" && !grabbing && (gesture ? gesture.kind === "resize" : pointing !== null)
-                  ? { cursor: gesture?.kind === "resize" ? (typeof gesture.hold === "string" ? "move" : pointerOf(gesture.hold)) : (pointing ?? undefined) }
-                  : // (And over the shape that was just drawn, where a press moves it; and while it is moved.)
-                  !grabbing && tool !== "select" && (gesture ? gesture.kind === "move" : taking)
-                  ? { cursor: "move" }
-                  : undefined
-            }
+            style={pointer}
           />
           {typing && writing && (
             // Around the field, a band to take hold of it by: dragged, what is being written goes
