@@ -1,0 +1,67 @@
+# Builds Perora for Windows when a version tag (v0.1.0, ...) is pushed, and publishes it as a GitHub
+# release: the installer, its signature, and latest.json, which the installed Perora reads to learn
+# that there is a newer version (tauri.conf.json, plugins.updater).
+#
+# Secrets: TAURI_SIGNING_PRIVATE_KEY (the contents of the key made with `tauri signer generate`) and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD. The public half is in tauri.conf.json.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Only the public repository releases: the installed Perora looks for its updates there.
+    if: github.repository == 'fltuna/perora'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag is the version in every manifest
+        shell: pwsh
+        # (The tag reaches the script as a variable, not as part of its text.)
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $tag = $env:TAG.TrimStart("v")
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $npm = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $cargo = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($conf -ne $tag -or $npm -ne $tag -or $cargo -ne $tag) {
+            Write-Error "tag $tag, tauri.conf.json $conf, package.json $npm, Cargo.toml $cargo"
+            exit 1
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Perora ${{ github.ref_name }}
+          releaseBody: Download and run Perora_*_x64-setup.exe. Perora already installed updates itself.
+          # Published at once: releases/latest only ever points at a published release, and that is
+          # where Perora looks for updates. A tag with a hyphen (v0.2.0-rc.1) is a prerelease, which
+          # releases/latest passes over: nobody is offered it.
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          includeUpdaterJson: true
+          # The signed update and its signature: only here, where the key is (a build from the
+          # source without it stays as it is).
+          args: --config src-tauri/tauri.release.conf.json

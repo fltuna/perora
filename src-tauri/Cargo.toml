@@ -1,0 +1,43 @@
+[package]
+name = "perora"
+version = "0.1.0"
+description = "A screenshot tool: capture any part of every monitor, draw on it, copy or save it"
+license = "MIT"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "perora_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+perora-core = { path = "../crates/core" }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+# Where the user's settings are, as the system names it (as Tauri finds it), without the application.
+dirs = "7"
+
+[target.'cfg(windows)'.dependencies]
+# The versions Tauri itself uses: for a WebView2 setting it does not offer.
+webview2-com = "0.39"
+windows-core = "0.62"
+
+[features]
+# Serves the built user interface from inside the executable instead of the development server.
+# `tauri build` turns it on; a plain `cargo build` needs it named to run without `npm run dev`.
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,38 @@
+[package]
+name = "perora-core"
+version = "0.1.0"
+description = "What Perora does, without its window: capturing the screen, and the geometry around it"
+license = "MIT"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.3"
+jpeg-encoder = "0.7"
+png = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+ureq = { version = "3", features = ["json"] }
+url = "2"
+webp = { version = "0.3", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_Multimedia",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_Xps",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }

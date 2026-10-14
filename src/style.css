@@ -1,0 +1,3001 @@
+/* The look of Windows 11 (Fluent): its greys for the two themes, its font, its corner radii, and the
+   colour the user chose for their system as the accent (set from the application; the blue below is
+   the default of Windows). Dark is the base, light follows the system. */
+:root {
+  --system-accent: #0078d4;
+  --background: #202020;
+  --surface: #2b2b2b;
+  --surface-hover: #323232;
+  --border: #3a3a3a;
+  --text: #ffffff;
+  --muted: #c5c5c5;
+  /* On dark, Windows uses a lighter shade of the accent, with dark text on it. */
+  --accent: color-mix(in srgb, var(--system-accent) 55%, white);
+  --accent-text: #000000;
+  --good: #6ccb5f;
+  --bad: #ff99a4;
+  --warning: #fce100;
+  --radius: 4px;
+  --radius-large: 8px;
+
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.43;
+  color: var(--text);
+  background: var(--background);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --background: #f3f3f3;
+    --surface: #fbfbfb;
+    --surface-hover: #f6f6f6;
+    --border: #e5e5e5;
+    --text: #1b1b1b;
+    --muted: #5f5f5f;
+    --accent: var(--system-accent);
+    --accent-text: #ffffff;
+    --good: #0f7b0f;
+    --bad: #c42b1c;
+    --warning: #9d5d00;
+  }
+}
+
+.icon {
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  font-size: 16px;
+  line-height: 1;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+.preview {
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 8px;
+  padding: 10px;
+}
+
+.preview.small {
+  border: 1px solid var(--border);
+}
+
+/* (On screen only to show where it appears: as it looks with a capture, with what it is there
+   for said where the picture would be. Nothing in it does anything.) */
+.preview.small.sample {
+  pointer-events: none;
+}
+
+.preview.small.sample .picture {
+  background: var(--surface);
+  color: var(--muted);
+  text-align: center;
+}
+
+.preview.small.sample .picture p {
+  margin: 0;
+  padding: 0 12px;
+}
+
+/* The large window: the tools in the middle of the top, what to do with the capture at its right,
+   the picture under them and what there is to say under that. (The tools stay in the middle for
+   as long as there is room on both sides; narrower, they move left.) */
+.preview.large {
+  display: grid;
+  /* (The room at the right is at least what four of the buttons there take: named in pixels, not
+     left to the buttons, or the picture under them would have a say in it too.) */
+  grid-template-columns: minmax(0, 1fr) auto minmax(156px, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 16px;
+}
+
+.preview.large > .tools {
+  grid-area: 1 / 2;
+}
+
+.preview.large > .actions {
+  grid-area: 1 / 3;
+  justify-self: end;
+  align-self: start;
+}
+
+.preview.large > .stage {
+  grid-area: 2 / 1 / 3 / -1;
+  min-height: 0;
+}
+
+.preview.large > .below {
+  grid-area: 3 / 1 / 4 / -1;
+}
+
+/* A notice: what Perora says in the corner, beside its icon, with the accent down its left side. A click sends it
+   away. Three lines at most; the whole of a longer one is in its tooltip. */
+.said {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 100%;
+  padding: 10px 14px 10px 13px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  cursor: default;
+}
+
+/* (One a click on which shows something: said by the pointer.) */
+.said.opens {
+  cursor: pointer;
+}
+
+.said img {
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+
+.said p {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* The picture takes what the rest leaves, whatever the shape of the capture: two monitors side by
+   side are very wide, one turned on its side is very tall. */
+.picture {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background:
+    repeating-conic-gradient(var(--surface) 0% 25%, var(--background) 0% 50%) 50% / 16px 16px;
+  overflow: hidden;
+}
+
+button.picture {
+  position: relative;
+  cursor: pointer;
+}
+
+/* Over the picture in the small window, while the pointer is on it: the picture a little darker,
+   and on it a pen and what a click does. */
+button.picture .over {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #fff;
+  background: rgb(0 0 0 / 45%);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+button.picture .over .icon {
+  font-size: 18px;
+}
+
+button.picture .over.shown {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.picture .over {
+    transition: none;
+  }
+}
+
+.picture img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* In the small window the picture has the shape of the capture, and the capture fills it. Where a
+   capture is too much of a strip or a tower for the window to follow, its middle does. */
+button.picture img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The large window: a bar of tools above the picture, and the picture with a canvas over it for what
+   is drawn on it. The bars and what opens under them are laid out like those of the Snipping Tool. */
+.tools {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  /* The picture comes right under the bar (8px, with the room the window leaves between its parts). */
+  margin-bottom: -4px;
+}
+
+.tools .bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tools .group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* What sets one group of a bar apart from the next. */
+.tools .rule {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  background: var(--border);
+}
+
+.tools button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.tools button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.tools button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The tool in hand: framed in the accent, as a key that is held down. */
+.tools button.current {
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+/* What an icon shows in the colour its tool draws with: with a faint edge, so that black on a dark
+   bar and white on a light one are still there to see. */
+.tools .tint {
+  filter: drop-shadow(0 0 0.6px color-mix(in srgb, var(--text) 70%, transparent));
+}
+
+/* In hand, a tool with a panel of its own says so: pressed again, it opens. */
+.tools button.current .caret {
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  margin-left: -4px;
+}
+
+/* The second bar: under the first, in the room kept for it. */
+.tools .bar.second {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  z-index: 1;
+  padding: 5px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
+  transform: translateX(-50%);
+}
+
+/* The second bar and the panels do not just appear: they come down into their place, shown from
+   their top edge on as they come (the room beyond their edges, for their shadow, is shown too). Not
+   for someone who asked their system for less movement. */
+@keyframes come-down {
+  from {
+    opacity: 0;
+    translate: 0 -14px;
+    clip-path: inset(-32px -32px 100% -32px);
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+    clip-path: inset(-32px);
+  }
+}
+
+.tools .bar.second,
+.tools .panel {
+  animation: come-down 0.22s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+/* And put away, they go back up the way they came, a little faster. What holds them for that
+   moment is no box of its own. */
+@keyframes go-up {
+  from {
+    opacity: 1;
+    translate: 0 0;
+    clip-path: inset(-32px);
+  }
+
+  to {
+    opacity: 0;
+    translate: 0 -14px;
+    clip-path: inset(-32px -32px 100% -32px);
+  }
+}
+
+.tools .lingering {
+  display: contents;
+}
+
+.tools .lingering.leaving > .bar.second,
+.tools .lingering.leaving > .panel,
+.tools .lingering.leaving > .anchor.afloat > .panel {
+  animation: go-up 0.16s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tools .bar.second,
+  .tools .panel {
+    animation: none;
+  }
+
+  .tools .lingering.leaving > .bar.second,
+  .tools .lingering.leaving > .panel,
+  .tools .lingering.leaving > .anchor.afloat > .panel {
+    animation: none;
+    visibility: hidden;
+  }
+}
+
+/* A button with a word beside its icon, or only a word. */
+.tools button.worded {
+  display: flex;
+  gap: 6px;
+  width: auto;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+/* The one to press to go through with it. */
+.tools button.accent {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+
+.tools button.accent:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--text));
+}
+
+/* A slider in a bar itself, with what it sets before it. */
+.tools .slider.strength {
+  gap: 10px;
+  padding: 0 6px;
+  color: var(--muted);
+}
+
+.tools .slider.strength input {
+  flex: none;
+  width: 120px;
+}
+
+.tools .slider.strength output {
+  min-width: 1.6em;
+  color: var(--text);
+}
+
+/* How large the image would be, cut down. */
+.tools .size {
+  padding: 0 6px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* What a panel opens under. */
+.tools .anchor {
+  position: relative;
+  display: flex;
+}
+
+/* The settings of what is in hand, where the pointer was when they were asked for: a little under
+   it, in the middle; not where the bars are. */
+.tools .bar.second.afloat {
+  position: fixed;
+  z-index: 25;
+}
+
+.tools .anchor.afloat {
+  position: fixed;
+  z-index: 25;
+  width: 0;
+  height: 0;
+}
+
+/* A panel of those that opens upwards, where there is no room for it under what it opens from: it
+   comes up into its place, and goes back down. */
+.tools .panel.up {
+  top: auto;
+  bottom: calc(100% + 8px);
+  animation-name: come-up;
+}
+
+.tools .lingering.leaving > .panel.up,
+.tools .lingering.leaving > .anchor.afloat > .panel.up {
+  animation-name: go-down;
+}
+
+.tools .anchor.off {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* A button that opens a panel: the colour that is set, what it is the colour of, and a mark that
+   there is more. */
+.tools button.choice {
+  display: flex;
+  gap: 8px;
+  width: auto;
+  padding: 0 10px 0 8px;
+  white-space: nowrap;
+}
+
+.tools button.choice[aria-expanded="true"] {
+  background: var(--surface-hover);
+}
+
+/* What opens under a button: the colours to choose from, a size, how solid. */
+.tools .panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 322px;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  transform: translateX(-50%);
+  overflow: hidden auto;
+  cursor: default;
+}
+
+/* A short list to choose one of, in a panel no wider than it needs. */
+.tools .panel.narrow {
+  width: 132px;
+  padding: 6px;
+}
+
+.tools .panel .list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tools .panel .list button {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tools .setting {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tools .setting.off {
+  opacity: 0.4;
+}
+
+.tools .heading {
+  font-weight: 600;
+}
+
+/* The colours, six to a row. */
+.tools .grid {
+  display: grid;
+  grid-template-columns: repeat(6, 36px);
+  justify-content: space-between;
+  gap: 12px 0;
+  /* The ring of the colour in use reaches a little past it. */
+  padding: 3px;
+}
+
+/* The colours to choose from and the place to mix one, one above the other with the button that
+   tells them apart between them, behind an opening as tall as one of them and that button. The
+   colours are seen over the button; pressed, it slides up to the top, and the mixing is seen under
+   it. */
+.tools .either {
+  /* The mixing is as tall as the colours are, or as tall as it needs to be to be used, where there
+     are only a few colours (a marker's): then the opening grows downwards for it. */
+  --mixed: max(var(--tall, 0px), 234px);
+  /* (Until the colours are measured, as tall as they are: nothing is cut off wrongly.) */
+  height: calc(var(--tall, auto) + 10px + 34px);
+  overflow: hidden;
+  transition: height 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tools .either.mixing {
+  height: calc(var(--mixed) + 10px + 34px);
+}
+
+.tools .either .slide {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tools .either.mixing .slide {
+  transform: translateY(calc(-1 * (var(--tall, 0px) + 10px)));
+}
+
+.tools .either .mixed {
+  height: var(--mixed);
+}
+
+.tools .either .mixed .mixer {
+  height: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tools .either,
+  .tools .either .slide {
+    transition: none;
+  }
+}
+
+/* A colour: a disc of it, ringed when it is the one in use. */
+.tools .swatch {
+  display: block;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--swatch);
+  border: 1px solid color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.tools .grid button.swatch {
+  width: 36px;
+  height: 36px;
+}
+
+.tools button.swatch:hover:not(:disabled) {
+  background: var(--swatch);
+  border-color: var(--text);
+}
+
+.tools button.swatch.current {
+  background: var(--swatch);
+  border: 2px solid var(--background);
+  outline: 2px solid var(--text);
+}
+
+/* No colour: an empty disc, struck through. */
+.tools .swatch.none,
+.tools button.swatch.none:hover,
+.tools button.swatch.none.current {
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1.5px),
+    var(--text) calc(50% - 1px) calc(50% + 1px),
+    transparent calc(50% + 1.5px)
+  );
+  border-color: var(--text);
+}
+
+/* Any colour: a disc of every hue. */
+.tools .swatch.any {
+  background: conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+/* Opens the place where any other colour is mixed. */
+.tools button.more {
+  display: flex;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 0 8px;
+  color: var(--muted);
+}
+
+.tools button.more .caret {
+  margin-left: auto;
+}
+
+.tools button.more[aria-expanded="true"] .caret {
+  transform: rotate(180deg);
+}
+
+.tools .mixer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Every shade of one hue: paler to the left, darker to the bottom. */
+.tools .shades {
+  position: relative;
+  /* (As tall as the rest of the mixing leaves it.) */
+  flex: 1;
+  min-height: 60px;
+  border-radius: var(--radius);
+  background:
+    linear-gradient(to top, #000, transparent),
+    linear-gradient(to right, #fff, var(--hue));
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.tools .shades .at {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 60%);
+  pointer-events: none;
+}
+
+.tools .hues {
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  border-radius: 6px;
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.tools .hues::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 60%);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* The colour written out: as a page writes it, and its red, green and blue. */
+.tools .values {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tools .values .written {
+  flex: 1;
+  min-width: 0;
+}
+
+.tools .part {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.tools .part input {
+  width: 44px;
+  text-align: right;
+}
+
+.tools .written,
+.tools .part input {
+  height: 28px;
+  padding: 0 8px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.tools .written:focus,
+.tools .part input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* A stroke as wide as it would be drawn. */
+.tools .stroke {
+  display: block;
+  width: 100%;
+  height: 64px;
+}
+
+.tools .slider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tools .slider input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.tools .slider output {
+  min-width: 2.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.picture.stage {
+  position: relative;
+}
+
+/* On its way out, the capture is not drawn on. */
+.tools.frozen,
+.stage .sheet.frozen {
+  pointer-events: none;
+}
+
+.stage .sheet {
+  position: relative;
+  flex: none;
+}
+
+.stage .sheet img,
+.stage .sheet canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+}
+
+.stage .sheet canvas {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.stage .sheet.tool-text canvas {
+  cursor: text;
+}
+
+/* The field something is written in: over the picture, where what is written will be, as large as it
+   is so far. Only a line around it says that it is a field. */
+.stage .sheet .holding {
+  position: absolute;
+  z-index: 1;
+  /* The band around the field, by which it is taken hold of: outside the place of what is written. */
+  margin: -9px;
+  padding: 9px;
+  cursor: move;
+  touch-action: none;
+}
+
+.stage .sheet .writing {
+  display: block;
+  box-sizing: content-box;
+  cursor: text;
+  min-width: 0.6em;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  outline: 1px dashed color-mix(in srgb, var(--text) 80%, transparent);
+  outline-offset: 0;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 50%);
+  caret-color: currentColor;
+  white-space: pre;
+  overflow: hidden;
+  resize: none;
+  field-sizing: content;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Held as a thing, by the band around it: framed as what is selected is, with no caret in it and
+   nothing of it marked, until it is pressed or a key is typed. */
+.stage .sheet .holding.held .writing {
+  outline: 2px solid var(--accent);
+}
+
+.stage .sheet .holding.held .writing::selection {
+  color: inherit;
+  background: transparent;
+}
+
+.stage .sheet.tool-select canvas {
+  cursor: default;
+}
+
+.stage .sheet.tool-crop canvas {
+  cursor: move;
+}
+
+/* The picture itself is taken hold of, to drag along the part of it that is shown. */
+.stage .sheet.grab canvas {
+  cursor: grab;
+}
+
+/* The settings of what is written, in a box by it: over everything, wherever in the window what is
+   written is. As wide as the colours that open from it. */
+.lettering {
+  position: fixed;
+  z-index: 20;
+  width: 372px;
+  padding: 6px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
+}
+
+.lettering .row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lettering .row input,
+.lettering .seek,
+.lettering .font {
+  height: 30px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lettering .row input,
+.lettering .seek {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.lettering .row input:focus,
+.lettering .seek:focus,
+.lettering .font[aria-expanded="true"] {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* The font in use: a button that opens the list of them, with its name written in it. */
+.lettering .font {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.lettering .font span {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lettering .size {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.lettering .size input {
+  width: 68px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lettering .row + .row {
+  margin-top: 6px;
+}
+
+.lettering .row .gap {
+  flex: 1;
+}
+
+/* Bold, slanted, struck through: a letter each, shown as it makes the letters; and held down while
+   it is so. */
+.lettering .shape {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.lettering .shape.bold {
+  font-weight: 700;
+}
+
+.lettering .shape.italic {
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+}
+
+.lettering .shape.strike {
+  text-decoration: line-through;
+}
+
+.lettering .shape:hover {
+  background: var(--surface-hover);
+}
+
+.lettering .shape[aria-pressed="true"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.lettering .colour {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.lettering .colour .name {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.lettering .colour:hover,
+.lettering .colour[aria-expanded="true"] {
+  background: var(--surface-hover);
+}
+
+.lettering .colour .swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px rgb(127 127 127 / 50%);
+}
+
+/* The line around the letters: a ring of its colour. */
+.lettering .colour .swatch.ring {
+  background: transparent;
+  border: 4px solid var(--swatch);
+  box-shadow:
+    0 0 0 1px rgb(127 127 127 / 50%),
+    inset 0 0 0 1px rgb(127 127 127 / 50%);
+}
+
+/* None of it: an empty disc, struck through. */
+.lettering .colour .swatch.none {
+  background: linear-gradient(
+    to top right,
+    transparent calc(50% - 1.5px),
+    var(--text) calc(50% - 1px) calc(50% + 1px),
+    transparent calc(50% + 1.5px)
+  );
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--text);
+}
+
+/* What opens from the box: under it, or over it. The box itself stays as it is. */
+.lettering .drop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -1px;
+  right: -1px;
+  padding: 8px;
+  overflow: hidden auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
+}
+
+.lettering .drop.up {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* It comes into its place as the panels under the bars do, from the box: down from it, or up from
+   it where it opens upwards; and goes back the way it came. */
+@keyframes come-up {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+    clip-path: inset(100% -32px -32px -32px);
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+    clip-path: inset(-32px);
+  }
+}
+
+@keyframes go-down {
+  from {
+    opacity: 1;
+    translate: 0 0;
+    clip-path: inset(-32px);
+  }
+
+  to {
+    opacity: 0;
+    translate: 0 14px;
+    clip-path: inset(100% -32px -32px -32px);
+  }
+}
+
+.lettering .lingering {
+  display: contents;
+}
+
+.lettering .drop {
+  animation: come-down 0.22s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.lettering .drop.up {
+  animation-name: come-up;
+}
+
+.lettering .lingering.leaving > .drop {
+  animation: go-up 0.16s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+  pointer-events: none;
+}
+
+.lettering .lingering.leaving > .drop.up {
+  animation-name: go-down;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lettering .drop {
+    animation: none;
+  }
+
+  .lettering .lingering.leaving > .drop {
+    animation: none;
+    visibility: hidden;
+  }
+}
+
+/* (The colours in it are those of the bars, laid out as there; not a bar themselves.) */
+.lettering .drop.tools {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 10px;
+  margin: 0;
+}
+
+/* The fonts: a field to look through them with, and the list, each in itself. */
+.lettering .drop.fonts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.lettering .list {
+  flex: 1;
+  min-height: 0;
+  max-height: 264px;
+  overflow: hidden auto;
+}
+
+.lettering .list button {
+  display: block;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 14px;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  /* (Hundreds of fonts: one that is out of sight is not laid out until it is scrolled to.) */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 30px;
+}
+
+.lettering .list button:hover,
+.lettering .list button[aria-selected="true"] {
+  background: var(--surface-hover);
+}
+
+.lettering .list button.current {
+  color: var(--accent);
+}
+
+.lettering .list .none {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--muted);
+}
+
+/* Under the picture: what is to be said of the capture, and beside it how closely it is looked at. */
+.below {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.below > .status,
+.below .lines {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The tool in hand, by the pointer, while the tools are gone through with the wheel: up and to the
+   right of it, where it is not under the pointer. Nothing to press. */
+.turned {
+  position: fixed;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin: -38px 0 0 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 30%);
+  pointer-events: none;
+}
+
+/* It comes up into its place from a little below, and goes back down there. */
+@keyframes turned-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+  }
+
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes turned-out {
+  from {
+    opacity: 1;
+    translate: 0 0;
+  }
+
+  to {
+    opacity: 0;
+    translate: 0 10px;
+  }
+}
+
+.turned {
+  animation: turned-in 0.2s cubic-bezier(0.1, 0.9, 0.2, 1);
+}
+
+.turned.going {
+  animation: turned-out 0.16s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turned {
+    animation: none;
+  }
+
+  .turned.going {
+    animation: none;
+    visibility: hidden;
+  }
+}
+
+.turned .tint {
+  filter: drop-shadow(0 0 0.6px color-mix(in srgb, var(--text) 70%, transparent));
+}
+
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* (As tall as the line of the status beside it: the button reaches a little past it.) */
+  height: 1.4em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.zoom button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.zoom button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.zoom button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.status {
+  margin: 0;
+  min-height: 1.4em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview.large .status {
+  white-space: normal;
+}
+
+.status.good,
+.status .good {
+  color: var(--good);
+}
+
+.status .bad {
+  color: var(--bad);
+}
+
+/* (The mark before what is said of the clipboard: a tick, or a cross.) */
+.status .mark {
+  margin-right: 5px;
+  font-size: 12px;
+  vertical-align: -1px;
+}
+
+/* What is said of the clipboard, as it changes: what was said fades out where it is, over what
+   is said now, which fades in from a little to the left. */
+.status .changing {
+  position: relative;
+}
+
+.status .changing .before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: said-out 0.2s ease-out both;
+}
+
+.status .changing .coming {
+  display: inline-block;
+  animation: said-in 0.28s ease-out both;
+}
+
+@keyframes said-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes said-in {
+  from {
+    opacity: 0;
+    transform: translateX(-3px);
+  }
+}
+
+/* A refusal is worth two lines even in the corner: it says what to do next. */
+.status.bad {
+  color: var(--bad);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.preview.large .status.bad {
+  display: block;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.actions button {
+  flex: 1;
+  height: 30px;
+  padding: 0 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* A button that is only its icon. */
+.actions button.narrow {
+  /* (The icon in the very middle: set as text it would sit on a line, a little high.) */
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  padding: 0;
+}
+
+.preview.large .actions {
+  gap: 4px;
+}
+
+.preview.large .actions button {
+  width: 36px;
+  height: 34px;
+}
+
+/* Beside a thing to do, in the large window: the small arrow that opens the choice of what the
+   capture leaves as this once. It leans on the button it is about; what it opens hangs under the
+   row, from its right end (the row is at the right edge of the window). */
+.preview.large .actions {
+  position: relative;
+}
+
+.preview.large .actions .as {
+  display: flex;
+  margin-right: -4px;
+}
+
+.preview.large .actions button.chevron {
+  width: 18px;
+  border-right: 0;
+  border-radius: 6px 0 0 6px;
+  color: var(--muted);
+}
+
+.preview.large .actions button.chevron .icon {
+  font-size: 9px;
+}
+
+.preview.large .actions button.chevron:hover,
+.preview.large .actions button.chevron.open {
+  color: var(--text);
+}
+
+.preview.large .actions .as + button {
+  border-radius: 0 6px 6px 0;
+}
+
+.preview.large .actions .menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  display: grid;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+}
+
+.preview.large .actions .menu p {
+  margin: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.preview.large .actions .menu button {
+  display: block;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 26px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  position: relative;
+}
+
+.preview.large .actions .menu button:hover {
+  background: var(--border);
+}
+
+/* It comes down into its place, so that one opened in place of another is seen to be another. */
+.preview.large .actions .menu {
+  transform-origin: top right;
+  animation: as-in 0.16s ease-out;
+}
+
+@keyframes as-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview.large .actions .menu {
+    animation: none;
+  }
+}
+
+/* (One of several that are ticked: a tick before it.) */
+.preview.large .actions .menu button[role="menuitemcheckbox"][aria-checked="true"]::before {
+  width: 9px;
+  height: 5px;
+  margin-top: -5px;
+  background: none;
+  border: solid var(--accent);
+  border-width: 0 0 2px 2px;
+  border-radius: 0;
+  transform: rotate(-45deg);
+}
+
+/* (The one that is chosen: a dot before it, in the accent.) */
+.preview.large .actions .menu button[aria-checked="true"]::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin-top: -3.5px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+/* In the small window, the same arrows; and the choice in two rows over the row of things to do
+   (there is no room for a list there): the kinds of file, and under them the sizes. */
+.preview.small .actions {
+  position: relative;
+}
+
+/* (The two that are spelled out share what the arrows leave, each by what it says.) */
+.preview.small .actions > button:not(.narrow) {
+  flex: 1 1 auto;
+  padding: 0 8px;
+}
+
+.preview.small .actions .as {
+  display: flex;
+  margin-right: -6px;
+}
+
+.preview.small .actions button.chevron {
+  width: 18px;
+  border-right: 0;
+  border-radius: 6px 0 0 6px;
+  color: var(--muted);
+}
+
+.preview.small .actions button.chevron .icon {
+  font-size: 9px;
+}
+
+.preview.small .actions button.chevron:hover,
+.preview.small .actions button.chevron.open {
+  color: var(--text);
+}
+
+.preview.small .actions .as + button {
+  border-radius: 0 6px 6px 0;
+}
+
+.preview.small .actions .menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 28%);
+}
+
+/* It comes up into its place, from the row it belongs to: seen to open, and one opened in place
+   of another is seen to be another. */
+.preview.small .actions .menu {
+  transform-origin: bottom center;
+  animation: as-up 0.16s ease-out;
+}
+
+@keyframes as-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview.small .actions .menu {
+    animation: none;
+  }
+}
+
+/* (What each row is goes unsaid: the second of them only starts the second row.) */
+.preview.small .actions .menu p {
+  flex-basis: 100%;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.preview.small .actions .menu p:first-child {
+  display: none;
+}
+
+.preview.small .actions .menu button {
+  flex: 1 1 auto;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 12px;
+  background: none;
+  border-radius: 5px;
+}
+
+.preview.small .actions .menu button[aria-checked="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Copying: the two sheets, and over them the tick of "copied" (in the colour the status says it
+   in). One of the two is seen. Copied, the sheets shrink and fade; after a copy made just now the
+   tick comes in larger than it is and settles. */
+.actions .swap {
+  display: grid;
+  place-items: center;
+}
+
+.actions .swap > .icon {
+  grid-area: 1 / 1;
+}
+
+.actions .swap .was {
+  transition:
+    transform 0.16s ease-in,
+    opacity 0.16s ease-in;
+}
+
+.actions .swap .now {
+  color: var(--good);
+  opacity: 0;
+  transform: scale(0);
+}
+
+.actions .swap.done .was {
+  opacity: 0;
+  transform: scale(0.4);
+}
+
+.actions .swap.done .now {
+  opacity: 1;
+  transform: none;
+}
+
+.actions .swap.done.ticked .now {
+  animation: tick 0.42s cubic-bezier(0.2, 0.8, 0.3, 1) 0.1s both;
+}
+
+@keyframes tick {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+
+  55% {
+    opacity: 1;
+    transform: scale(1.45);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .actions .swap .was {
+    transition: none;
+  }
+
+  .actions .swap.done.ticked .now {
+    animation: none;
+  }
+}
+
+.actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.actions button.primary {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Throwing the capture away: a subdued red (the owner's choice: a brighter one stood out too much), the same in both themes. */
+.actions button.away {
+  flex: none;
+  color: #ffffff;
+  background: #a1473f;
+  border-color: #a1473f;
+}
+
+.actions button.away:hover:not(:disabled) {
+  border-color: #a1473f;
+  filter: brightness(0.92);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The selection screen: one monitor's capture, dimmed, with what would be chosen left bright. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.overlay.mode-monitor {
+  cursor: pointer;
+}
+
+/* Only the list of windows is to be clicked there. */
+.overlay.mode-window {
+  cursor: default;
+}
+
+.overlay .still {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
+.overlay .dim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 45%);
+  pointer-events: none;
+}
+
+/* The same dimming, as a shadow around what is chosen: everything but the choice. */
+.overlay .chosen {
+  position: absolute;
+  box-shadow: 0 0 0 100000px rgb(0 0 0 / 45%);
+  outline: 2px solid #4f8cff;
+  outline-offset: -1px;
+  pointer-events: none;
+}
+
+.overlay .chosen.dragging {
+  outline-width: 1px;
+}
+
+.overlay .size {
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #fff;
+  background: rgb(0 0 0 / 75%);
+  border-radius: 4px;
+}
+
+.overlay .bar {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+}
+
+.overlay .modes {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  background: rgb(22 24 29 / 92%);
+  border: 1px solid #353a44;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+
+.overlay .modes button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  color: #eceef2;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.overlay .modes button:hover {
+  background: #23262d;
+}
+
+.overlay .modes button.current {
+  color: #fff;
+  background: #4f8cff;
+}
+
+.overlay .modes button.cancel {
+  margin-left: 6px;
+  color: #9aa1ad;
+}
+
+.overlay .modes kbd {
+  min-width: 18px;
+  padding: 0 4px;
+  font: inherit;
+  font-size: 11px;
+  text-align: center;
+  color: inherit;
+  opacity: 0.7;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.overlay .hint {
+  margin: 0;
+  min-height: 1.4em;
+  padding: 2px 10px;
+  color: #fff;
+  background: rgb(0 0 0 / 60%);
+  border-radius: 999px;
+}
+
+.overlay .hint:empty {
+  display: none;
+}
+
+/* The main window: a newer version across the top when there is one; under it, pages on the left
+   and the chosen page on the right. */
+.frame {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* A newer version: what it is, how far fetching it is, and what can be done about it. */
+.band {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 8px 8px 0;
+  padding: 10px 12px 10px 16px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius);
+}
+
+.band > .icon {
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.band .words {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+}
+
+.band .words strong {
+  font-weight: 600;
+}
+
+.band .words span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.band .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.band button {
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.band button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.band button.accent {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.band button.accent:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.band button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.band button.close {
+  width: 32px;
+  padding: 0;
+  font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+  font-size: 10px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.band button.close:hover {
+  background: var(--surface-hover);
+}
+
+.sidebar {
+  flex: none;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 6px;
+}
+
+.sidebar ul {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.sidebar button:hover,
+.sidebar button.current {
+  background: var(--surface-hover);
+}
+
+/* The mark of the current page: a short bar in the accent colour at its left edge. */
+.sidebar button.current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.sidebar .version {
+  margin: 0;
+  padding: 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.page {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 28px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: color-mix(in srgb, var(--surface) 55%, var(--background));
+  border-top-left-radius: var(--radius-large);
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+}
+
+.page h1 {
+  margin: 0 0 12px;
+  padding-bottom: 12px;
+  /* (A page starts under a line across it.) */
+  border-bottom: 2px solid var(--border);
+  font-family: "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", sans-serif;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* What goes with a setting, under it, as it comes and goes: it opens out from nothing and closes
+   to nothing, fading as it does. (Closed, it takes no room: not even the room between two
+   settings, which it gives back above and keeps inside.) */
+.reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -4px;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.reveal.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.reveal > .within {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    transition: none;
+  }
+}
+
+/* A part of a page: its name, small, over a thin line; the settings under it are its own. */
+.page h3.section {
+  margin: 16px 0 6px;
+  padding: 0 2px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.page h1 + h3.section {
+  margin-top: 0;
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 68px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* A setting that goes with the one above it. */
+.card.under {
+  margin-left: 32px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.card .hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  /* (What is said in more than one line is written so.) */
+  white-space: pre-line;
+}
+
+.card.hero .hint {
+  margin: 0;
+  font-size: 14px;
+}
+
+.card > div:first-child {
+  min-width: 0;
+}
+
+.card .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.page button:not(.switch),
+.page select {
+  flex: none;
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.page button:not(.switch, .accent):hover,
+.page select:hover {
+  border-color: var(--muted);
+}
+
+.page button.accent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.page button.accent:hover {
+  filter: brightness(0.94);
+}
+
+.page button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.page select {
+  min-width: 160px;
+}
+
+/* A number that is typed, and what it is a number of. */
+.page .seconds {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page .seconds input {
+  width: 76px;
+  height: 32px;
+  padding: 0 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.page .seconds input:hover {
+  border-color: var(--muted);
+}
+
+/* A kind that is ticked, among several that can be. */
+.page .check {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.page .check:hover {
+  border-color: var(--muted);
+}
+
+.page .check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Two choices about one thing, side by side: each as wide as what it says. */
+.page .pair select {
+  min-width: 0;
+}
+
+.page select option {
+  color: var(--text);
+  background: var(--surface);
+}
+
+/* The toggle of Windows: a pill with a dot that slides. */
+.switch {
+  flex: none;
+  position: relative;
+  width: 40px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--muted);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.switch span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: left 0.12s ease;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch[aria-checked="true"] span {
+  left: 23px;
+  background: var(--accent-text);
+}
+
+.notice {
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.notice.warning {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+
+.main progress {
+  display: block;
+  width: 180px;
+  height: 3px;
+  margin-top: 10px;
+  accent-color: var(--accent);
+}
+
+/* The list of windows, laid out like the task view of Windows: rows of pictures of one height, each
+   with its name above it, filling the monitor below the mode bar. The height is worked out by the
+   page (see `pictureHeight`), which has to know what a card adds around its picture: keep the two in
+   step. */
+.overlay .windows {
+  position: absolute;
+  inset: 116px 32px 32px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  /* More windows than there is room for, even at the smallest: the rest is reached by scrolling, from
+     the first row on. */
+  align-content: safe center;
+  gap: 20px;
+  overflow: hidden auto;
+}
+
+.overlay .windows.empty {
+  color: #fff;
+  font-size: 16px;
+}
+
+.overlay .windows li {
+  display: flex;
+}
+
+.overlay .windows button {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px;
+  font: inherit;
+  color: #fff;
+  text-align: left;
+  background: rgb(32 32 32 / 72%);
+  border: 2px solid transparent;
+  border-radius: var(--radius-large);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.overlay .windows button:hover,
+.overlay .windows button:focus-visible {
+  background: rgb(50 50 50 / 88%);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.overlay .windows .title {
+  /* As wide as the picture below it, never wider: a long name is cut, not the reason for a wide card. */
+  width: 0;
+  min-width: 100%;
+  height: 36px;
+  line-height: 36px;
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.overlay .windows .picture {
+  position: relative;
+  display: block;
+  height: var(--picture-height, 168px);
+  border-radius: var(--radius);
+  background: rgb(0 0 0 / 35%);
+  overflow: hidden;
+}
+
+.overlay .windows img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.overlay .windows .picture.loaded img {
+  opacity: 1;
+}
+
+/* The ring of Windows that turns while something is on its way. */
+.overlay .windows .ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 3px solid rgb(255 255 255 / 18%);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: turn 0.9s linear infinite;
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A button whose work is on its way: a ring that turns in it, and no pressing it meanwhile. */
+.page button.turning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+}
+
+.page button.turning:hover {
+  border-color: var(--border);
+}
+
+.page button.turning .ring {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: turn 0.9s linear infinite;
+}
+
+/* The pages of the main window that came after the first: lists of uploads, a folder, keys. */
+.switch:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.card .path {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl; /* a long path is cut at its start: its end says where */
+  text-align: left;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.keys {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
+.keys.recording {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.recent {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recent h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.recent .hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+.recent ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.recent li {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.recent .shot {
+  display: block;
+  width: 100%;
+  height: 96px !important;
+  padding: 0 !important;
+  background: var(--background) !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  cursor: pointer;
+}
+
+.recent .shot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.recent .about {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 2px 2px 2px 8px;
+}
+
+.recent .when {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent .icon-button {
+  width: 28px;
+  height: 28px !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+.recent .icon-button:hover {
+  background: var(--surface-hover) !important;
+}
+
+.recent .ring {
+  width: 22px;
+  height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: turn 0.9s linear infinite;
+}
+
+/* The button a tour is shown again by: an "i" in a ring. In the large window, alone at the top left;
+   in the small one, first in the row of things to do; on the selection screen, last on the bar. */
+.preview.large > .guide {
+  grid-area: 1 / 1;
+  justify-self: start;
+  align-self: start;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.preview.large > .guide:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.overlay .modes button.guide {
+  padding: 0 9px;
+  color: #9aa1ad;
+}
+
+.overlay .modes button.guide:hover {
+  color: #eceef2;
+}
+
+/* A tour: the window dimmed but for what a step is about, which has a frame in the accent, and
+   beside it what there is to say. Nothing under it is to be pressed meanwhile. */
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  cursor: default;
+  animation: tour-in 0.16s ease-out;
+}
+
+@keyframes tour-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.tour .spot {
+  position: fixed;
+  border-radius: 8px;
+  box-shadow: 0 0 0 100000px rgb(0 0 0 / 50%);
+  outline: 2px solid var(--accent);
+  pointer-events: none;
+  transition:
+    left 0.25s ease,
+    top 0.25s ease,
+    width 0.25s ease,
+    height 0.25s ease;
+}
+
+.tour .spot.none {
+  outline-color: transparent;
+}
+
+/* (A ring alone: nothing dimmed, for what the step shows on the rest of the window.) */
+.tour .spot.ring {
+  box-shadow: 0 0 0 4px rgb(79 140 255 / 30%);
+}
+
+/* On the selection screen, the frame is the one the screen shows around what would be chosen. */
+.overlay .tour .spot {
+  border-radius: 0;
+  box-shadow: 0 0 0 100000px rgb(0 0 0 / 45%);
+  outline-color: #4f8cff;
+}
+
+.overlay .tour .spot.none {
+  outline-color: transparent;
+}
+
+/* A frame being dragged open, from its corner, again and again: the pointer goes along with its
+   other corner, and the size shows once it is open. */
+.tour .spot.drag {
+  outline-width: 1px;
+  transition: none;
+  animation: tour-drag 2.6s ease-in-out infinite;
+}
+
+@keyframes tour-drag {
+  0%,
+  12% {
+    width: 0;
+    height: 0;
+  }
+  62%,
+  100% {
+    width: var(--width);
+    height: var(--height);
+  }
+}
+
+.tour .cursor {
+  position: fixed;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 40%));
+}
+
+.tour .cursor svg {
+  display: block;
+}
+
+.tour .cursor.drag {
+  animation: tour-drag-pointer 2.6s ease-in-out infinite;
+}
+
+@keyframes tour-drag-pointer {
+  0%,
+  12% {
+    transform: translate(0, 0);
+  }
+  62%,
+  100% {
+    transform: translate(var(--width), var(--height));
+  }
+}
+
+/* (The size, under the corner the pointer is at, as the screen shows it under the frame.) */
+.tour .cursor .size {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  transform: translateX(-100%);
+  padding: 2px 6px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #fff;
+  background: rgb(0 0 0 / 75%);
+  animation: tour-drag-size 2.6s ease-in-out infinite;
+}
+
+@keyframes tour-drag-size {
+  0%,
+  58% {
+    opacity: 0;
+  }
+  66%,
+  100% {
+    opacity: 1;
+  }
+}
+
+/* A click: the pointer on what it is about, and a ring that goes out from its tip. */
+.tour .cursor.click::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: -12px;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #4f8cff;
+  border-radius: 50%;
+  opacity: 0;
+  animation: tour-click 1.6s ease-out infinite;
+}
+
+@keyframes tour-click {
+  0%,
+  30% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  40% {
+    opacity: 1;
+  }
+  80%,
+  100% {
+    opacity: 0;
+    transform: scale(1.4);
+  }
+}
+
+/* A window drawn for the tour of the selection screen, where none on the screen will do. */
+.tour .sample-window {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f3f3f3;
+  border: 1px solid #8a8a8a;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
+}
+
+.tour .sample-window .title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+  color: #1a1a1a;
+  background: #e8e8e8;
+}
+
+.tour .sample-window .title .icon {
+  font-size: 10px;
+  white-space: pre;
+}
+
+.tour .sample-window .body {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 20px;
+}
+
+.tour .sample-window .body span {
+  height: 10px;
+  background: #d6d6d6;
+  border-radius: 5px;
+}
+
+.tour .sample-window .body span:nth-child(2) {
+  width: 70%;
+}
+
+.tour .sample-window .body span:nth-child(3) {
+  width: 45%;
+}
+
+/* What is said of a step, beside what it is about. */
+.tour .saying {
+  position: fixed;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 12px 14px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  transition:
+    left 0.25s ease,
+    top 0.25s ease;
+}
+
+.tour .saying p {
+  margin: 0 0 10px;
+  white-space: normal;
+  animation: tour-in 0.16s ease-out;
+}
+
+.tour .saying .foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tour .saying .count {
+  margin-right: auto;
+  padding-right: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.tour .saying button {
+  height: 28px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tour .saying button.primary {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.tour .saying button.quiet {
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.tour .saying button.quiet:hover {
+  color: var(--text);
+}
+
+/* (The small window has little room: less of it around what is said.) */
+.preview.small .tour .saying {
+  padding: 8px 10px 8px;
+  font-size: 12px;
+}
+
+.preview.small .tour .saying p {
+  margin-bottom: 6px;
+}
+
+.preview.small .tour .saying button {
+  height: 24px;
+  padding: 0 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour,
+  .tour .saying p,
+  .tour .spot.drag,
+  .tour .cursor.drag,
+  .tour .cursor .size,
+  .tour .cursor.click::before {
+    animation: none;
+  }
+
+  .tour .spot,
+  .tour .saying {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour .cursor.drag {
+    transform: translate(var(--width), var(--height));
+  }
+}
+
+/* The mouse beside the pointer, in the tours: its other button held (in the accent of the
+   selection screen) or pressed twice, its wheel turning one way or the other, with arrows in its
+   round under the buttons going that way. */
+.tour .hand {
+  position: fixed;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 45%));
+}
+
+.tour .mouse,
+.tour .mouse svg {
+  display: block;
+}
+
+.tour .mouse .button {
+  fill: transparent;
+}
+
+.tour .mouse.right .button,
+.tour .mouse .button.left {
+  fill: #4f8cff;
+}
+
+/* (Moved by the hand, the pointer and the mouse go along: from one beat of the tour to the next.) */
+.tour .cursor.moving,
+.tour .hand.moving {
+  transition:
+    left 0.04s linear,
+    top 0.04s linear;
+}
+
+.tour .mouse.twice .button {
+  animation: tour-twice 0.9s step-end;
+}
+
+@keyframes tour-twice {
+  0% {
+    fill: #4f8cff;
+  }
+  20% {
+    fill: transparent;
+  }
+  40% {
+    fill: #4f8cff;
+  }
+  60% {
+    fill: transparent;
+  }
+}
+
+/* (Dark, with white ridges: seen on the button whether it is held or not.) */
+.tour .mouse .wheel {
+  fill: #2f3338;
+}
+
+.tour .mouse.wheel-up .ridges {
+  animation: tour-wheel-up 0.25s linear infinite;
+}
+
+.tour .mouse.wheel-down .ridges {
+  animation: tour-wheel-down 0.25s linear infinite;
+}
+
+@keyframes tour-wheel-up {
+  to {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes tour-wheel-down {
+  to {
+    transform: translateY(4px);
+  }
+}
+
+.tour .mouse .way .chevron {
+  fill: none;
+  stroke: #4f8cff;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.25;
+}
+
+/* (One after another, the way the wheel turns.) */
+.tour .mouse.wheel-up .way .chevron:nth-child(3),
+.tour .mouse.wheel-down .way .chevron:nth-child(1) {
+  animation: tour-way 0.75s linear infinite;
+}
+
+.tour .mouse .way .chevron:nth-child(2) {
+  animation: tour-way 0.75s linear 0.25s infinite;
+}
+
+.tour .mouse.wheel-up .way .chevron:nth-child(1),
+.tour .mouse.wheel-down .way .chevron:nth-child(3) {
+  animation: tour-way 0.75s linear 0.5s infinite;
+}
+
+@keyframes tour-way {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour .mouse.twice .button,
+  .tour .mouse .ridges,
+  .tour .mouse .way .chevron {
+    animation: none;
+  }
+
+  .tour .mouse.twice .button {
+    fill: #4f8cff;
+  }
+
+  .tour .mouse .way .chevron {
+    opacity: 1;
+  }
+}
+
+/* (In the small window the "i" is the least of the row: narrower, and without a frame, so that the
+   row still fits the narrowest window.) */
+.preview.small .actions button.narrow.guide {
+  width: 20px;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.preview.small .actions button.narrow.guide:hover {
+  color: var(--text);
+}

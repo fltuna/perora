@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["src-tauri", "crates/core"]
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+# Packing a capture of several monitors into a PNG takes seconds without optimization; these are the
+# crates that do it, and the pixel loops of the core.
+[profile.dev.package.perora-core]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
