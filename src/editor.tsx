@@ -261,6 +261,10 @@ const STAMPS = { least: 1, most: 20, first: 4, step: 8 };
 /** The closest the picture is looked at: this many pixels of the screen to one of the image. */
 const CLOSEST = 8;
 
+/** The furthest it is looked at from: this part of the size it has fitted to its place. Further than
+    fitted, there is room around it, to begin drawing from (owner, 2026-10-14). */
+const FARTHEST = 0.25;
+
 /** How far from a line a press still means that line, in pixels of the screen. */
 const NEAR = 6;
 
@@ -1555,7 +1559,8 @@ export function Editor({
     return () => watching.disconnect();
   }, []);
   // How closely it is looked at: once is all of it (of what it is cut down to), fitted to its place;
-  // more is a part of it, as much larger, filling as much of the place as it needs. And which part.
+  // more is a part of it, as much larger, filling as much of the place as it needs; less is all of it,
+  // smaller, with room around it. And which part.
   const [looking, setLooking] = useState({ times: 1, x: 0, y: 0 });
   // (Not when the tour puts the window back from cutting down, which shows all of the picture: the
   // tour gives the look back as it was.)
@@ -1569,7 +1574,7 @@ export function Editor({
   }, [capture.id, view.x, view.y, view.width, view.height]);
   const fit = Math.min(1, room.width / view.width, room.height / view.height) || 0;
   const closest = fit > 0 ? Math.max(1, CLOSEST / fit) : 1;
-  const times = Math.min(closest, Math.max(1, looking.times));
+  const times = Math.min(closest, Math.max(FARTHEST, looking.times));
   /** How many pixels of the screen one of the image is. */
   const scale = fit * times;
   /** The size of what is shown, and the part of the picture that is, looked at so closely from
@@ -1735,8 +1740,9 @@ export function Editor({
   });
 
   /** Where a pointer is, in pixels of the image. */
+  // (Measured from the canvas wherever the pointer is: the room around the picture is pressed on too.)
   const placeOf = (event: React.PointerEvent): Place => {
-    const box = event.currentTarget.getBoundingClientRect();
+    const box = (canvas.current ?? event.currentTarget).getBoundingClientRect();
     return [
       tenth(look.x + ((event.clientX - box.left) / box.width) * look.width),
       tenth(look.y + ((event.clientY - box.top) / box.height) * look.height),
@@ -1750,7 +1756,9 @@ export function Editor({
     if (scale === 0 || hand.current || !box) return;
     const [across, down] = [(x - box.left) / box.width, (y - box.top) / box.height];
     const under: Place = [look.x + across * look.width, look.y + down * look.height];
-    const next = Math.min(closest, Math.max(1, times * Math.exp(-deltaY * 0.0015)));
+    let next = Math.min(closest, Math.max(FARTHEST, times * Math.exp(-deltaY * 0.0015)));
+    // (Passing fitted, it stops there once: all of it, as large as its place, is easy to come back to.)
+    if ((times > 1 && next < 1) || (times < 1 && next > 1)) next = 1;
     if (next === times) return;
     // That place stays under the pointer: as far across what is shown then as it is now.
     const then = lookAt(next, 0, 0).part;
@@ -1845,7 +1853,9 @@ export function Editor({
   };
 
   const onDown = (event: React.PointerEvent) => {
-    if (scale === 0) return;
+    if (scale === 0 || frozen) return;
+    // (The field something is written in, and its band, have presses of their own.)
+    if (event.target instanceof Element && event.target.closest(".holding")) return;
     // The middle button, or the main one with Space held: the picture is dragged along under the
     // pointer, whatever tool is in hand.
     if (event.button === 1 || (event.button === 0 && grabbing)) {
@@ -1856,10 +1866,14 @@ export function Editor({
     // (The picture is pressed on: the bar of the tool, there since its button was pressed, goes.)
     if (!shut) setShut(true);
     const at = placeOf(event);
+    // Pressed beside the picture: drawn from there, as much of it as falls on the picture. Not
+    // what would be put there whole, and so not be seen: something written, a number.
+    const offPicture = at[0] < look.x || at[1] < look.y || at[0] > look.x + look.width || at[1] > look.y + look.height;
     if (tool === "text") {
       // A press while something is being written: that is done. Otherwise writing starts there,
       // or, on something written before, that is written anew.
       if (typing) return void finish();
+      if (offPicture) return;
       let index = edits.length - 1;
       while (index >= 0 && !(edits[index].kind === "text" && isAt(edits[index], at, 0))) index -= 1;
       if (index !== -1) return rewrite(index);
@@ -1929,6 +1943,7 @@ export function Editor({
     setSelected(null);
     const u = unit(capture);
     if (tool === "stamp") {
+      if (offPicture) return;
       // The next number: one more than the highest there is.
       const number = 1 + Math.max(0, ...edits.map((edit) => (edit.kind === "stamp" ? edit.number : 0)));
       return setGesture({ kind: "draw", edit: stamped(at, stamps.step * STAMPS.step * u, number, stamps.color) });
@@ -2942,7 +2957,32 @@ export function Editor({
           </div>
         )}</Lingering>
       </div>
-      <div ref={stage} className="picture stage" data-tour="stage">
+      <div
+        ref={stage}
+        className={`picture stage tool-${tool}${grabbing || gesture?.kind === "pan" ? " grab" : ""}`}
+        data-tour="stage"
+        // The picture and the room around it alike: a drag may begin beside the picture.
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={() => setGesture(null)}
+        // (The pointer taken away without being let go here: nothing is in hand any more.)
+        onLostPointerCapture={() => hand.current && setGesture(null)}
+        onWheel={onWheel}
+        // (The middle button, pressed, would otherwise start the browser's own scrolling. And a
+        // press that starts something written is not to take the keyboard from its field.)
+        onMouseDown={(event) => (event.button === 1 || tool === "text") && !(event.target instanceof Element && event.target.closest(".holding")) && event.preventDefault()}
+        // Something written, pressed twice with nothing in hand: written anew. (Not with Ctrl held:
+        // those presses were about what is selected, wherever they were. Heard here, where the
+        // pointer is held while pressed, as the presses are.)
+        onDoubleClick={(event) => {
+          if (event.ctrlKey || tool !== "select" || selected === null || edits[selected]?.kind !== "text") return;
+          event.preventDefault();
+          const index = selected;
+          hold("text");
+          rewrite(index);
+        }}
+      >
         <div
           className={`sheet tool-${tool}${frozen ? " frozen" : ""}${grabbing || gesture?.kind === "pan" ? " grab" : ""}`}
           style={shownSize}
@@ -2973,25 +3013,6 @@ export function Editor({
                   ? { cursor: "move" }
                   : undefined
             }
-            onPointerDown={onDown}
-            onPointerMove={onMove}
-            onPointerUp={onUp}
-            onPointerCancel={() => setGesture(null)}
-            // (The pointer taken away without being let go here: nothing is in hand any more.)
-            onLostPointerCapture={() => hand.current && setGesture(null)}
-            onWheel={onWheel}
-            // (The middle button, pressed, would otherwise start the browser's own scrolling. And a
-            // press that starts something written is not to take the keyboard from its field.)
-            onMouseDown={(event) => (event.button === 1 || tool === "text") && event.preventDefault()}
-            onDoubleClick={(event) => {
-              // Something written, pressed twice with nothing in hand: written anew. (Not with Ctrl
-              // held: those presses were about what is selected, wherever they were.)
-              if (event.ctrlKey || tool !== "select" || selected === null || edits[selected]?.kind !== "text") return;
-              event.preventDefault();
-              const index = selected;
-              hold("text");
-              rewrite(index);
-            }}
           />
           {typing && writing && (
             // Around the field, a band to take hold of it by: dragged, what is being written goes

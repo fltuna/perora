@@ -768,6 +768,19 @@ button.picture img {
 
 .picture.stage {
   position: relative;
+  /* Beside the picture, a drag may begin as well: the pointer says so, as over the picture. Not for
+     what is not put beside it (something written, a number). */
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.picture.stage.tool-text,
+.picture.stage.tool-stamp {
+  cursor: default;
+}
+
+.picture.stage.grab {
+  cursor: grab;
 }
 
 /* On its way out, the capture is not drawn on. */
