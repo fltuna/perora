@@ -995,7 +995,7 @@ type Gesture =
   | { kind: "crop"; grip: Grip; from: Place; was: Box }
   // The part of the picture that is shown being dragged along: from where on the screen, and where
   // it was.
-  | { kind: "pan"; from: Place; was: Place };
+  | { kind: "pan"; from: Place; was: Place; shifted: Place };
 
 export function Editor({
   capture,
@@ -1561,7 +1561,8 @@ export function Editor({
   // How closely it is looked at: once is all of it (of what it is cut down to), fitted to its place;
   // more is a part of it, as much larger, filling as much of the place as it needs; less is all of it,
   // smaller, with room around it. And which part.
-  const [looking, setLooking] = useState({ times: 1, x: 0, y: 0 });
+  // (And, shown smaller than its place, how far from the middle of it the picture was moved.)
+  const [looking, setLooking] = useState<{ times: number; x: number; y: number; dx?: number; dy?: number }>({ times: 1, x: 0, y: 0 });
   // (Not when the tour puts the window back from cutting down, which shows all of the picture: the
   // tour gives the look back as it was.)
   const lookKept = useRef(false);
@@ -1598,6 +1599,11 @@ export function Editor({
     };
   };
   const { shown: shownSize, part: look } = lookAt(times, looking.x, looking.y);
+  // Shown smaller than its place (looked at from further away, or so one way): where in the place it
+  // is, as far from the middle as it was moved, never past the place's edges.
+  const leeway: Place = [Math.max(0, (room.width - shownSize.width) / 2), Math.max(0, (room.height - shownSize.height) / 2)];
+  const inPlace = (by: number, most: number) => Math.min(most, Math.max(-most, by));
+  const shift: Place = [inPlace(looking.dx ?? 0, leeway[0]), inPlace(looking.dy ?? 0, leeway[1])];
   // Space held down: the pointer takes hold of the picture, not of a tool.
   const [grabbing, setGrabbing] = useState(false);
 
@@ -1767,7 +1773,8 @@ export function Editor({
     if (next === times) return;
     // That place stays under the pointer: as far across what is shown then as it is now.
     const then = lookAt(next, 0, 0).part;
-    setLooking({ times: next, x: under[0] - across * then.width, y: under[1] - down * then.height });
+    // (Where the picture was moved to in its place, it stays.)
+    setLooking({ times: next, x: under[0] - across * then.width, y: under[1] - down * then.height, dx: looking.dx, dy: looking.dy });
   };
 
   /** The frame the image is cut down to, after the pointer went from where it took hold to `at`. */
@@ -1865,7 +1872,7 @@ export function Editor({
     // pointer, whatever tool is in hand.
     if (event.button === 1 || (event.button === 0 && grabbing)) {
       (canvas.current ?? event.currentTarget).setPointerCapture(event.pointerId);
-      return setGesture({ kind: "pan", from: [event.clientX, event.clientY], was: [look.x, look.y] });
+      return setGesture({ kind: "pan", from: [event.clientX, event.clientY], was: [look.x, look.y], shifted: shift });
     }
     if (event.button !== 0) return;
     // (The picture is pressed on: the bar of the tool, there since its button was pressed, goes.)
@@ -2048,10 +2055,14 @@ export function Editor({
     }
     if (!gesture) return;
     if (gesture.kind === "pan") {
+      // Larger than its place, the part of it shown goes along; smaller, the picture itself.
+      const [across, down] = [event.clientX - gesture.from[0], event.clientY - gesture.from[1]];
       return setLooking({
         times,
-        x: gesture.was[0] - (event.clientX - gesture.from[0]) / scale,
-        y: gesture.was[1] - (event.clientY - gesture.from[1]) / scale,
+        x: gesture.was[0] - across / scale,
+        y: gesture.was[1] - down / scale,
+        dx: inPlace(gesture.shifted[0] + across, leeway[0]),
+        dy: inPlace(gesture.shifted[1] + down, leeway[1]),
       });
     }
     const at = placeOf(event);
@@ -3010,7 +3021,7 @@ export function Editor({
       >
         <div
           className={`sheet tool-${tool}${frozen ? " frozen" : ""}${grabbing || gesture?.kind === "pan" ? " grab" : ""}`}
-          style={shownSize}
+          style={{ ...shownSize, left: shift[0], top: shift[1] }}
         >
           {/* The picture is drawn on the canvas. Until it is there to draw, this shows it; and should
               it never come, this is what is seen (not once the image is looked at more closely or
