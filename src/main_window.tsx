@@ -388,6 +388,9 @@ function Capture({ view, t }: { view: View; t: Translate }) {
   // under it, while it is on.
   const signedIn = view.account.state === "signedIn";
   const uploads = signedIn && settings.enableUpload;
+  // Captures are copied: as they are shown, or straight after being taken (then with no preview,
+  // and nothing to discard).
+  const copies = settings.copyToClipboard || settings.afterCapture === "copy";
   return (
     <>
       <Section title={t("main.capture.section.general")} />
@@ -419,15 +422,18 @@ function Capture({ view, t }: { view: View; t: Translate }) {
           onChange={(on) => set("copyToClipboard", on)}
         />
       </Setting>
-      <Leaving view={view} t={t} of="copy" under />
-      <Setting title={t("main.capture.clear")} hint={t("main.capture.clearHint")}>
-        <Switch
-          label={t("main.capture.clear")}
-          on={settings.clearClipboardOnDiscard}
-          disabled={!settings.copyToClipboard || settings.afterCapture === "copy"}
-          onChange={(on) => set("clearClipboardOnDiscard", on)}
-        />
-      </Setting>
+      {/* What goes with copying, under it: shown while captures are copied (owner, 2026-10-14). */}
+      <Reveal shown={copies}>
+        <Leaving view={view} t={t} of="copy" under />
+        <Setting under title={t("main.capture.clear")} hint={t("main.capture.clearHint")}>
+          <Switch
+            label={t("main.capture.clear")}
+            on={settings.clearClipboardOnDiscard}
+            disabled={settings.afterCapture === "copy"}
+            onChange={(on) => set("clearClipboardOnDiscard", on)}
+          />
+        </Setting>
+      </Reveal>
       <Section title={t("main.capture.section.after")} />
       <Setting title={t("main.capture.after")} hint={t("main.capture.afterHint")}>
         <select
