@@ -171,6 +171,8 @@
   "notify.savedAsTaken": "Saved to {path} automatically",
   "notify.savedAsTakenSeveral": "Saved to {path} automatically, and as {others} more kinds beside it",
   "notify.copiedAndSaved": "The capture is on the clipboard, and saved to {path}",
+  "notify.savedButNotCopied": "Saved to {path} automatically, but not put on the clipboard: {detail}",
+  "notify.copiedButNotSaved": "The capture is on the clipboard, but could not be saved automatically: {detail}",
   "notify.notSavedAsTaken": "The capture could not be saved automatically: {detail}",
   "notify.savedButNot": "Saved to {path}, but not as {kind}",
   "save.notAll": "{kind}: {detail} ({name} was written)",

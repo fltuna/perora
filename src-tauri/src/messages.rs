@@ -287,6 +287,17 @@ impl Language {
         self.text("notify.copiedAndSaved", &[("path", path)])
     }
 
+    pub fn saved_but_not_copied(&self, path: &str, detail: &str) -> String {
+        self.text(
+            "notify.savedButNotCopied",
+            &[("path", path), ("detail", detail)],
+        )
+    }
+
+    pub fn copied_but_not_saved(&self, detail: &str) -> String {
+        self.text("notify.copiedButNotSaved", &[("detail", detail)])
+    }
+
     pub fn not_saved_as_taken(&self, detail: &str) -> String {
         self.text("notify.notSavedAsTaken", &[("detail", detail)])
     }

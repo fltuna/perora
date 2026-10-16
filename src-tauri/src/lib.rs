@@ -847,23 +847,33 @@ fn deliver(app: &AppHandle, frame: Frame) {
         let copied = preview::copy_alone(app, &frame);
         // (Saved meanwhile too, when it is: one notice says both, and a click on it shows the file.)
         let saved = saves.then(|| preview::save_as_taken(app, &frame, None));
+        // (What became of each is said: one of them not done is no reason to leave out the other.)
         match (copied, saved) {
-            (_, Some(Err(detail))) => {
-                notify(app, Lasting::Long, language.not_saved_as_taken(&detail));
-            }
+            (Ok(()), None) => notify(app, Lasting::Brief, language.copied()),
+            (Err(detail), None) => notify(app, Lasting::Long, language.not_copied(&detail)),
             (copied, Some(Ok(files))) => {
                 let first = files.first().cloned().unwrap_or_default();
+                let shown = first.display().to_string();
                 let (lasting, message) = match copied {
-                    Ok(()) => (
-                        Lasting::Brief,
-                        language.copied_and_saved(&first.display().to_string()),
+                    Ok(()) => (Lasting::Brief, language.copied_and_saved(&shown)),
+                    Err(detail) => (
+                        Lasting::Long,
+                        language.saved_but_not_copied(&shown, &detail),
                     ),
-                    Err(detail) => (Lasting::Long, language.not_copied(&detail)),
                 };
                 notify_of_file(app, lasting, message, first);
             }
-            (Ok(()), None) => notify(app, Lasting::Brief, language.copied()),
-            (Err(detail), None) => notify(app, Lasting::Long, language.not_copied(&detail)),
+            (copied, Some(Err(detail))) => {
+                let message = match copied {
+                    Ok(()) => language.copied_but_not_saved(&detail),
+                    Err(not_copied) => format!(
+                        "{}\n{}",
+                        language.not_copied(&not_copied),
+                        language.not_saved_as_taken(&detail)
+                    ),
+                };
+                notify(app, Lasting::Long, message);
+            }
         }
         // What was being previewed before this capture is still to be dealt with.
         return preview::restore(app);

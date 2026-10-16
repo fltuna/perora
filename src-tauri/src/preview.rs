@@ -102,9 +102,34 @@ pub struct State {
     /// Which fading in of the large window is the one going on: one that began later, or the
     /// window going away, ends the ones before it.
     appearing: AtomicU64,
-    /// The capture the user last discarded: what is saved of it after that (it was saved as it was
-    /// taken, and that took a moment) is taken away again, as it would have been had it been there.
-    discarded: AtomicU64,
+    /// The captures the user last discarded, the latest last: what is saved of one after that (it
+    /// was saved as it was taken, and that took a moment) is taken away again, as it would have been
+    /// had it been there. (A few: another capture may have been taken and discarded meanwhile.)
+    discarded: Mutex<Vec<u64>>,
+}
+
+/// How many of the captures discarded last are kept in mind.
+const DISCARDED_KEPT: usize = 8;
+
+impl State {
+    /// Keeps in mind that the user discarded a capture.
+    fn was_discarded(&self, id: u64) {
+        let mut discarded = self
+            .discarded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        discarded.push(id);
+        let over = discarded.len().saturating_sub(DISCARDED_KEPT);
+        discarded.drain(..over);
+    }
+
+    /// Whether the user discarded a capture, lately.
+    fn is_discarded(&self, id: u64) -> bool {
+        self.discarded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&id)
+    }
 }
 
 struct Pending {
@@ -239,9 +264,9 @@ impl Once {
     }
 }
 
-/// Reads what a window asks. The small window names the capture, `{"id": â€¦}`. The large one hands
+/// Reads what a window asks. The small window names the capture, `{"id": Ã¢â‚¬Â¦}`. The large one hands
 /// over bytes: four that say how long what follows them is (least first), then that, which names the
-/// capture and what is drawn (`{"id": â€¦, "edits": [â€¦]}`), then the image as a PNG file. All in one,
+/// capture and what is drawn (`{"id": Ã¢â‚¬Â¦, "edits": [Ã¢â‚¬Â¦]}`), then the image as a PNG file. All in one,
 /// so that the image and the drawing it shows cannot come apart on the way.
 fn asked(body: &InvokeBody) -> Result<Asked, &'static str> {
     #[derive(serde::Deserialize)]
@@ -1303,10 +1328,7 @@ pub fn discard_by_user(app: &AppHandle, id: Option<u64>) {
             if id.is_none_or(|id| id == current.id)
                 && !matches!(current.progress, Progress::Uploading) =>
         {
-            perora
-                .preview
-                .discarded
-                .store(current.id, Ordering::Relaxed);
+            perora.preview.was_discarded(current.id);
             (current.on_clipboard(), current.saved.clone())
         }
         _ => (false, Vec::new()),
@@ -1376,7 +1398,7 @@ pub fn saved_as_taken(app: &AppHandle, id: u64, files: &[PathBuf]) -> bool {
     // takes what is kept of it here then. Being discarded is what counts, gone or not yet.)
     let discarded = {
         let mut pending = perora.preview.lock();
-        let discarded = perora.preview.discarded.load(Ordering::Relaxed) == id;
+        let discarded = perora.preview.is_discarded(id);
         if let Some(pending) = pending
             .as_mut()
             .filter(|pending| pending.id == id && !discarded)
@@ -1857,7 +1879,7 @@ struct NotAll {
 ///
 /// Over what is there with `replaces`; what was written before one could not be stays then.
 /// Otherwise never over a file: the name is the first that no file of any of the kinds has (a
-/// second capture in the same second becomes `â€¦ (2)`), and should one not be written, the ones
+/// second capture in the same second becomes `Ã¢â‚¬Â¦ (2)`), and should one not be written, the ones
 /// that were are taken away again.
 fn write_each(
     folder: &Path,
@@ -2142,7 +2164,7 @@ fn show_large(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{asked, named, write_each};
+    use super::{DISCARDED_KEPT, State, asked, named, take_away, write_each};
     use std::path::Path;
     use tauri::ipc::InvokeBody;
 
@@ -2262,6 +2284,51 @@ mod tests {
         assert_eq!(of("pictures/v1.2"), (folder.clone(), "v1.2".into()));
         assert_eq!(of("pictures/shot"), (folder, "shot".into()));
         assert_eq!(of("shot.jpg"), (otherwise.to_owned(), "shot".into()));
+    }
+
+    #[test]
+    fn the_captures_discarded_lately_are_kept_in_mind_a_few_at_a_time() {
+        let state = State::default();
+        assert!(!state.is_discarded(1));
+        // (Another taken and discarded while the first was still being saved: both count.)
+        state.was_discarded(1);
+        state.was_discarded(2);
+        assert!(state.is_discarded(1) && state.is_discarded(2));
+        for id in 3..3 + DISCARDED_KEPT as u64 {
+            state.was_discarded(id);
+        }
+        assert!(!state.is_discarded(1) && !state.is_discarded(2));
+        assert!(state.is_discarded(2 + DISCARDED_KEPT as u64));
+    }
+
+    #[test]
+    fn what_is_saved_as_taken_is_named_as_saving_names_it_each_kind_beside_the_first() {
+        let directory =
+            std::env::temp_dir().join(format!("perora-as-taken-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let files: [(&'static str, &[u8]); 2] = [("png", b"a"), ("webp", b"b")];
+        // (A second in the same second: each kind by the name with its number.)
+        for want in ["Perora 2026-10-16 120000", "Perora 2026-10-16 120000 (2)"] {
+            let first = write_each(&directory, "Perora 2026-10-16 120000", &files, false).unwrap();
+            let all: Vec<_> = files
+                .iter()
+                .map(|(kind, _)| first.with_extension(kind))
+                .collect();
+            assert_eq!(
+                all,
+                [
+                    directory.join(format!("{want}.png")),
+                    directory.join(format!("{want}.webp"))
+                ]
+            );
+            assert!(all.iter().all(|file| file.exists()));
+        }
+        take_away(&[
+            directory.join("Perora 2026-10-16 120000.png"),
+            directory.join("nothing.png"),
+        ]);
+        assert!(!directory.join("Perora 2026-10-16 120000.png").exists());
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }
 

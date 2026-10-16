@@ -171,6 +171,8 @@
   "notify.savedAsTaken": "{path} に自動保存しました。",
   "notify.savedAsTakenSeveral": "{path} と、ほか {others} つの形式で自動保存しました。",
   "notify.copiedAndSaved": "クリップボードにコピーし、{path} に自動保存しました。",
+  "notify.savedButNotCopied": "{path} に自動保存しましたが、クリップボードにはコピーできませんでした: {detail}",
+  "notify.copiedButNotSaved": "クリップボードにはコピーしましたが、自動保存できませんでした: {detail}",
   "notify.notSavedAsTaken": "キャプチャを自動保存できませんでした: {detail}",
   "notify.savedButNot": "{path} には保存しましたが、{kind} では保存できませんでした。",
   "save.notAll": "{kind}: {detail}（{name} は保存済みです）",
