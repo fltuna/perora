@@ -169,6 +169,16 @@ pub struct Settings {
     pub save_directory: Option<PathBuf>,
     /// Whether "save" asks where to, each time.
     pub ask_where_to_save: bool,
+    /// Whether every capture is saved as it was taken, the moment it is, into the folder for saving
+    /// (never asking where), whatever else becomes of it.
+    pub save_on_capture: bool,
+    /// Whether discarding a capture also takes away what was saved of it that way.
+    pub delete_saved_on_discard: bool,
+    /// Whether what a capture is saved as that way is its own (the kinds of file, at least one, and
+    /// the square it is made to fit), or as "save" has it.
+    pub as_taken_custom: bool,
+    pub as_taken_formats: Vec<Format>,
+    pub as_taken_fit: Option<u32>,
     /// The global shortcut that captures, as `Ctrl+Shift+H`.
     pub shortcut: String,
     /// Whether the system's own combination for snipping (Win+Shift+S) captures with Perora too:
@@ -238,6 +248,30 @@ impl Settings {
         }
     }
 
+    /// What a capture is saved as the moment it is taken: the kinds of file (one file of each), and
+    /// what it is made into (of the first kind).
+    pub fn as_taken(&self) -> (Vec<Format>, Output) {
+        if !self.as_taken_custom {
+            return (self.save_formats.clone(), self.output(Leaves::Save));
+        }
+        let kinds = self.as_taken_formats.clone();
+        let output = Output {
+            format: kinds.first().copied().unwrap_or_default(),
+            quality: self.quality,
+            fit: self.as_taken_fit,
+        };
+        (kinds, output)
+    }
+
+    /// Has a capture saved as these kinds of file the moment it is taken, when that is the user's
+    /// own; as it was, when none is named.
+    pub fn save_as_taken_as(&mut self, kinds: &[Format]) {
+        let kinds = several(kinds.iter().copied());
+        if !kinds.is_empty() {
+            self.as_taken_formats = kinds;
+        }
+    }
+
     /// What a capture is made into as it leaves that way.
     pub fn output(&self, leaves: Leaves) -> Output {
         let which = leaves as usize;
@@ -266,6 +300,9 @@ impl Settings {
         let copy_to_clipboard = flag("copyToClipboard", true);
         let clear_clipboard_on_discard = flag("clearClipboardOnDiscard", false);
         let ask_where_to_save = flag("askWhereToSave", false);
+        let save_on_capture = flag("saveOnCapture", false);
+        let delete_saved_on_discard = flag("deleteSavedOnDiscard", false);
+        let as_taken_custom = flag("saveOnCaptureCustom", false);
         // (Notices could once be switched off. What a file says of that is let go of: not kept
         // for a version that does not know it, as other things it does not know are.)
         flag("noticeEnabled", true);
@@ -273,6 +310,27 @@ impl Settings {
         let preview_enabled = flag("previewEnabled", true);
         let take_snipping = flag("takeSnipping", false);
         let hide_own_windows = flag("hideOwnWindows", true);
+        // (What is saved as it is taken, when that has kinds and a size of its own.)
+        let as_taken_formats = match file.remove("saveOnCaptureFormats") {
+            Some(Value::Array(names)) => several(
+                names
+                    .iter()
+                    .filter_map(|name| name.as_str().and_then(Format::from_name)),
+            ),
+            _ => Vec::new(),
+        };
+        let as_taken_formats = if as_taken_formats.is_empty() {
+            vec![Format::default()]
+        } else {
+            as_taken_formats
+        };
+        let as_taken_fit = match file.remove("saveOnCaptureFit") {
+            Some(Value::Number(side)) => side
+                .as_u64()
+                .and_then(|side| u32::try_from(side).ok())
+                .filter(|side| FITS.contains(side)),
+            _ => None,
+        };
 
         let mut text = |key: &str| match file.remove(key) {
             Some(Value::String(value)) if !value.is_empty() => Some(value),
@@ -378,6 +436,11 @@ impl Settings {
             clear_clipboard_on_discard,
             save_directory,
             ask_where_to_save,
+            save_on_capture,
+            delete_saved_on_discard,
+            as_taken_custom,
+            as_taken_formats,
+            as_taken_fit,
             shortcut,
             take_snipping,
             notice_seconds,
@@ -409,6 +472,24 @@ impl Settings {
         file.insert("enableUpload".into(), self.upload_enabled.into());
         file.insert("startMode".into(), self.start_mode.name().into());
         file.insert("hideOwnWindows".into(), self.hide_own_windows.into());
+        file.insert("saveOnCapture".into(), self.save_on_capture.into());
+        file.insert(
+            "deleteSavedOnDiscard".into(),
+            self.delete_saved_on_discard.into(),
+        );
+        file.insert("saveOnCaptureCustom".into(), self.as_taken_custom.into());
+        file.insert(
+            "saveOnCaptureFormats".into(),
+            self.as_taken_formats
+                .iter()
+                .map(|kind| Value::from(kind.name()))
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        file.insert(
+            "saveOnCaptureFit".into(),
+            self.as_taken_fit.unwrap_or(0).into(),
+        );
         file.insert("copyToClipboard".into(), self.copy_to_clipboard.into());
         file.insert(
             "clearClipboardOnDiscard".into(),
@@ -606,6 +687,31 @@ mod tests {
                 .unwrap()
                 .hide_own_windows
         );
+        // Captures are not saved unless the user asks for that; nor is what was saved taken away.
+        assert!(!settings.save_on_capture);
+        assert!(!settings.delete_saved_on_discard);
+        let saving = parse(br#"{"saveOnCapture": true, "deleteSavedOnDiscard": true}"#).unwrap();
+        assert!(saving.save_on_capture && saving.delete_saved_on_discard);
+        // Saved then as "save" has it, unless the user gave it kinds and a size of its own.
+        let mut saving = parse(br#"{"saveFormats": ["jpg", "webp"], "saveFit": 2048}"#).unwrap();
+        assert_eq!(saving.as_taken().0, [Format::Jpeg, Format::WebP]);
+        assert_eq!(saving.as_taken().1.fit, Some(2048));
+        saving.as_taken_custom = true;
+        assert_eq!(saving.as_taken().0, [Format::Png]);
+        assert_eq!(saving.as_taken().1, Output::default());
+        let mut own = parse(
+            br#"{"saveOnCaptureCustom": true, "saveOnCaptureFormats": ["webp", "png", "gif"], "saveOnCaptureFit": 1280}"#,
+        )
+        .unwrap();
+        assert_eq!(own.as_taken().0, [Format::Png, Format::WebP]);
+        assert_eq!(
+            (own.as_taken().1.format, own.as_taken().1.fit),
+            (Format::Png, Some(1280))
+        );
+        own.save_as_taken_as(&[]);
+        assert_eq!(own.as_taken_formats, [Format::Png, Format::WebP]);
+        own.save_as_taken_as(&[Format::Jpeg]);
+        assert_eq!(own.as_taken_formats, [Format::Jpeg]);
         assert_eq!(settings.notice_seconds, 7);
         assert_eq!(settings.notice_corner, Corner::BottomRight);
         assert_eq!(
@@ -810,6 +916,11 @@ mod tests {
         assert_eq!(written["enableUpload"], false);
         assert_eq!(written["startMode"], "monitor");
         assert_eq!(written["hideOwnWindows"], true);
+        assert_eq!(written["saveOnCapture"], false);
+        assert_eq!(written["deleteSavedOnDiscard"], false);
+        assert_eq!(written["saveOnCaptureCustom"], false);
+        assert_eq!(written["saveOnCaptureFormats"], serde_json::json!(["png"]));
+        assert_eq!(written["saveOnCaptureFit"], 0);
         assert_eq!(written["noticeSeconds"], 7);
         assert_eq!(written["uploadFormat"], "png");
         assert_eq!(written["uploadFit"], 0);

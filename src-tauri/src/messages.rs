@@ -269,6 +269,28 @@ impl Language {
         )
     }
 
+    /// A capture saved the moment it was taken, as the user has every capture saved: as one kind of
+    /// file, or as `others` more beside it.
+    pub fn saved_as_taken(&self, path: &str, others: usize) -> String {
+        match others {
+            0 => self.text("notify.savedAsTaken", &[("path", path)]),
+            others => self.text(
+                "notify.savedAsTakenSeveral",
+                &[("path", path), ("others", &others.to_string())],
+            ),
+        }
+    }
+
+    /// Put on the clipboard and saved as it was taken: all that becomes of a capture without a
+    /// preview.
+    pub fn copied_and_saved(&self, path: &str) -> String {
+        self.text("notify.copiedAndSaved", &[("path", path)])
+    }
+
+    pub fn not_saved_as_taken(&self, detail: &str) -> String {
+        self.text("notify.notSavedAsTaken", &[("detail", detail)])
+    }
+
     pub fn saved_but_not(&self, path: &str, kind: &str) -> String {
         self.text("notify.savedButNot", &[("path", path), ("kind", kind)])
     }

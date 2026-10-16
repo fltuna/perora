@@ -26,6 +26,13 @@ interface View {
     saveDirectory: string;
     saveDirectoryIsDefault: boolean;
     askWhereToSave: boolean;
+    /** Whether every capture is saved as it was taken, and whether discarding takes that away;
+        whether it is saved as kinds of file and a size of its own, and those. */
+    saveOnCapture: boolean;
+    deleteSavedOnDiscard: boolean;
+    saveOnCaptureCustom: boolean;
+    saveOnCaptureFormats: string[];
+    saveOnCaptureFit: number;
     /** `system`, `light` or `dark`. */
     theme: string;
     /** The kind of file a capture leaves as, each way it leaves (`png`, `jpg` or `webp`), and the
@@ -543,6 +550,38 @@ function Save({ view, t }: { view: View; t: Translate }) {
       </Setting>
       <Section title={t("main.save.section.detail")} />
       <Leaving view={view} t={t} of="save" />
+      <Section title={t("main.save.section.onCapture")} />
+      <Setting title={t("main.save.onCapture")} hint={t("main.save.onCaptureHint")}>
+        <Switch
+          label={t("main.save.onCapture")}
+          on={settings.saveOnCapture}
+          onChange={(on) => set("saveOnCapture", on)}
+        />
+      </Setting>
+      {/* What goes with it, under it, while it is on: what the files are (as saving has them, or
+          their own, chosen under that), and whether discarding takes them away (owner, 2026-10-16). */}
+      <Reveal shown={settings.saveOnCapture}>
+        <Setting under title={t("main.save.onCaptureAs")} hint={t("main.save.onCaptureAsHint")}>
+          <select
+            value={settings.saveOnCaptureCustom ? "custom" : "save"}
+            aria-label={t("main.save.onCaptureAs")}
+            onChange={(event) => set("saveOnCaptureCustom", event.target.value === "custom")}
+          >
+            <option value="save">{t("main.save.onCaptureAs.save")}</option>
+            <option value="custom">{t("main.save.onCaptureAs.custom")}</option>
+          </select>
+        </Setting>
+        <Reveal shown={settings.saveOnCaptureCustom}>
+          <Leaving view={view} t={t} of="saveOnCapture" under />
+        </Reveal>
+        <Setting under title={t("main.save.deleteOnDiscard")} hint={t("main.save.deleteOnDiscardHint")}>
+          <Switch
+            label={t("main.save.deleteOnDiscard")}
+            on={settings.deleteSavedOnDiscard}
+            onChange={(on) => set("deleteSavedOnDiscard", on)}
+          />
+        </Setting>
+      </Reveal>
     </>
   );
 }
@@ -841,28 +880,32 @@ function Leaving({
 }: {
   view: View;
   t: Translate;
-  of: "copy" | "upload" | "save";
+  of: "copy" | "upload" | "save" | "saveOnCapture";
   under?: boolean;
 }) {
+  // Saved, as several kinds at once: one file of each. (Saved as it is taken, too, when that has
+  // kinds of its own.)
+  const formatsOf = of === "saveOnCapture" ? "saveOnCaptureFormats" : "saveFormats";
+  const several = of === "save" || of === "saveOnCapture";
   // The kinds saved, as last set from here: shown at once, and what the next tick starts from
   // (two quick ticks are two kinds, not the second in place of a first that had not come back).
   // (What the application says back of an earlier tick is not shown over a later one: for a
   // moment after the last tick only what was ticked is shown, and then what the application says.)
-  const [saved, setSaved] = useState(view.settings.saveFormats);
+  const [saved, setSaved] = useState(view.settings[formatsOf]);
   const latest = useRef(saved);
   latest.current = saved;
-  const said = useRef(view.settings.saveFormats);
-  said.current = view.settings.saveFormats;
+  const said = useRef(view.settings[formatsOf]);
+  said.current = view.settings[formatsOf];
   const awaited = useRef(false);
   const settling = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(settling.current), []);
   useEffect(() => {
-    if (!awaited.current) setSaved(view.settings.saveFormats);
-  }, [view.settings.saveFormats.join()]);
+    if (!awaited.current) setSaved(view.settings[formatsOf]);
+  }, [view.settings[formatsOf].join()]);
   return (
     <Setting under={under} title={t(`main.output.${of}`)} hint={t(`main.output.${of}Hint`)}>
       <div className="buttons pair">
-        {of === "save" ? (
+        {several ? (
           // Saved as several kinds at once, one file of each: ticked. The last one stays ticked.
           view.formats.map((format) => (
             <label key={format} className="check">
@@ -876,7 +919,7 @@ function Leaving({
                   latest.current = next;
                   setSaved(next);
                   awaited.current = true;
-                  set("saveFormats", next);
+                  set(formatsOf, next);
                   window.clearTimeout(settling.current);
                   settling.current = window.setTimeout(() => {
                     awaited.current = false;
@@ -889,7 +932,7 @@ function Leaving({
           ))
         ) : (
           <select
-            value={view.settings[`${of}Format`]}
+            value={view.settings[`${of as "copy" | "upload"}Format`]}
             aria-label={t("main.output.format")}
             onChange={(event) => set(`${of}Format`, event.target.value)}
           >

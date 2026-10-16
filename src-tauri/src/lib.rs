@@ -830,6 +830,9 @@ fn deliver(app: &AppHandle, frame: Frame) {
     let immediately = perora.uploads() && perora.setting(|settings| settings.upload_immediately);
     // Heard the moment there is a capture, whatever becomes of it.
     notice::sound(app, notice::Occasion::Capture);
+    // Saved as it was taken, when the user has every capture saved: whatever else becomes of it
+    // (owner, 2026-10-16).
+    let saves = perora.setting(|settings| settings.save_on_capture);
 
     // Without a preview, a notification says that something was captured, before the image is
     // packed and sent: that takes a while. Not when the sign-in turns out to be gone: then all of
@@ -841,11 +844,27 @@ fn deliver(app: &AppHandle, frame: Frame) {
     // Without a preview either (the user chose to have none): to the clipboard, and that is all
     // that becomes of it.
     if !immediately && perora.setting(|settings| settings.after_capture) == settings::After::Copy {
-        let (lasting, message) = match preview::copy_alone(app, &frame) {
-            Ok(()) => (Lasting::Brief, language.copied()),
-            Err(detail) => (Lasting::Long, language.not_copied(&detail)),
-        };
-        notify(app, lasting, message);
+        let copied = preview::copy_alone(app, &frame);
+        // (Saved meanwhile too, when it is: one notice says both, and a click on it shows the file.)
+        let saved = saves.then(|| preview::save_as_taken(app, &frame, None));
+        match (copied, saved) {
+            (_, Some(Err(detail))) => {
+                notify(app, Lasting::Long, language.not_saved_as_taken(&detail));
+            }
+            (copied, Some(Ok(files))) => {
+                let first = files.first().cloned().unwrap_or_default();
+                let (lasting, message) = match copied {
+                    Ok(()) => (
+                        Lasting::Brief,
+                        language.copied_and_saved(&first.display().to_string()),
+                    ),
+                    Err(detail) => (Lasting::Long, language.not_copied(&detail)),
+                };
+                notify_of_file(app, lasting, message, first);
+            }
+            (Ok(()), None) => notify(app, Lasting::Brief, language.copied()),
+            (Err(detail), None) => notify(app, Lasting::Long, language.not_copied(&detail)),
+        }
         // What was being previewed before this capture is still to be dealt with.
         return preview::restore(app);
     }
@@ -864,7 +883,16 @@ fn deliver(app: &AppHandle, frame: Frame) {
         }
     };
     if !immediately {
-        return preview::present(app, frame, image);
+        // (Saved once it is shown: the preview is not kept waiting for the files.)
+        let taken = saves.then(|| (frame.clone(), image.clone()));
+        let id = preview::present(app, frame, image);
+        if let Some((frame, png)) = taken {
+            save_as_taken(app, Some(id), frame, Some(png));
+        }
+        return;
+    }
+    if saves {
+        save_as_taken(app, None, frame, None);
     }
 
     let _uploading = recovery::Uploading::begin();
@@ -887,6 +915,31 @@ fn deliver(app: &AppHandle, frame: Frame) {
     notify(app, lasting, message);
     // What was being previewed before this capture is still to be dealt with.
     preview::restore(app);
+}
+
+/// Saves a capture as it was taken, apart from whatever else becomes of it (that is not kept waiting
+/// for the files), and says where it went. `id` is the preview it is shown in, when it is: discarding
+/// that takes the files away, as the user may have it.
+fn save_as_taken(app: &AppHandle, id: Option<u64>, frame: Frame, png: Option<Vec<u8>>) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let language = app.state::<Perora>().language();
+        match preview::save_as_taken(&app, &frame, png.as_deref()) {
+            Ok(files) => {
+                // (Discarded meanwhile, and taken away with it: there is nothing to say.)
+                if id.is_some_and(|id| !preview::saved_as_taken(&app, id, &files)) {
+                    return;
+                }
+                let Some(first) = files.first().cloned() else {
+                    return;
+                };
+                let message =
+                    language.saved_as_taken(&first.display().to_string(), files.len() - 1);
+                notify_of_file(&app, Lasting::Brief, message, first);
+            }
+            Err(detail) => notify(&app, Lasting::Long, language.not_saved_as_taken(&detail)),
+        }
+    });
 }
 
 /// Clears a flag when dropped: however the work it guards ends.

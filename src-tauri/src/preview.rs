@@ -102,6 +102,9 @@ pub struct State {
     /// Which fading in of the large window is the one going on: one that began later, or the
     /// window going away, ends the ones before it.
     appearing: AtomicU64,
+    /// The capture the user last discarded: what is saved of it after that (it was saved as it was
+    /// taken, and that took a moment) is taken away again, as it would have been had it been there.
+    discarded: AtomicU64,
 }
 
 struct Pending {
@@ -138,6 +141,8 @@ struct Pending {
     touched: bool,
     /// Whether it was shown in the large window: put back on screen, it is there again.
     large: bool,
+    /// The files it was saved as, as it was taken, when the user has every capture saved.
+    saved: Vec<PathBuf>,
     /// Which time it is that the small preview was left to: one that began later counts, not the
     /// ones before it.
     timer: u64,
@@ -811,8 +816,9 @@ fn leave_to_its_time(app: &AppHandle) {
     });
 }
 
-/// Shows a capture in the small window, in place of whatever was previewed before.
-pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) {
+/// Shows a capture in the small window, in place of whatever was previewed before. Returns the id
+/// it is previewed by.
+pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) -> u64 {
     let perora = app.state::<Perora>();
     // A thumbnail that cannot be made is no reason to lose the capture: the whole image serves.
     let png = Arc::new(png);
@@ -856,6 +862,7 @@ pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) {
         touched: large_at_once,
         large: large_at_once,
         timer: 0,
+        saved: Vec::new(),
     });
 
     if large_at_once {
@@ -874,13 +881,15 @@ pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) {
         // (The windows were taken off the screen meanwhile, for the next capture: this one is
         // shown when that comes to nothing, or not at all.)
         if perora.preview.appearing.load(Ordering::Relaxed) != before {
-            return;
+            return id;
         }
-        return show(app);
+        show(app);
+        return id;
     }
     show_small(app);
     changed(app);
     leave_to_its_time(app);
+    id
 }
 
 /// Puts the capture being previewed back on screen, if there is one waiting to be dealt with: after a
@@ -1287,18 +1296,110 @@ pub fn discard(app: &AppHandle, id: Option<u64>) {
 /// clipboard after it stays.
 pub fn discard_by_user(app: &AppHandle, id: Option<u64>) {
     let perora = app.state::<Perora>();
-    // Whether the image this preview put on the clipboard is still what is there.
-    let on_clipboard = matches!(
-        &*perora.preview.lock(),
+    // Whether the image this preview put on the clipboard is still what is there; and what was
+    // saved of it as it was taken.
+    let (on_clipboard, saved) = match &*perora.preview.lock() {
         Some(current)
             if id.is_none_or(|id| id == current.id)
-                && !matches!(current.progress, Progress::Uploading)
-                && current.on_clipboard()
-    );
+                && !matches!(current.progress, Progress::Uploading) =>
+        {
+            perora
+                .preview
+                .discarded
+                .store(current.id, Ordering::Relaxed);
+            (current.on_clipboard(), current.saved.clone())
+        }
+        _ => (false, Vec::new()),
+    };
     discard(app, id);
     if on_clipboard && perora.setting(|settings| settings.clear_clipboard_on_discard) {
         let _ = app.clipboard().clear();
         forget_copied(app, None);
+    }
+    if perora.setting(|settings| settings.delete_saved_on_discard) {
+        take_away(&saved);
+    }
+}
+
+/// Saves a capture as it was taken, as the user has captures saved: every kind of file they save
+/// as, all by one name, in the folder for saving (never asking where: the user wants every capture
+/// there). `png` is the capture as a PNG already, when there is one. The files written; refused with
+/// the reason when one could not be (then none is there).
+pub fn save_as_taken(
+    app: &AppHandle,
+    frame: &Frame,
+    png: Option<&[u8]>,
+) -> Result<Vec<PathBuf>, String> {
+    let perora = app.state::<Perora>();
+    // (As "save" has it, or as the user would rather have these saved.)
+    let (kinds, how) = perora.setting(|settings| settings.as_taken());
+    let directory = perora
+        .setting(|settings| save_directory(app, settings))
+        .ok_or("no folder to save to")?;
+    // Every kind is made before any is written: one that cannot be made leaves no file behind.
+    let files = kinds
+        .iter()
+        .map(|kind| {
+            let how = Output {
+                format: *kind,
+                ..how
+            };
+            Ok((
+                kind.name(),
+                match png {
+                    Some(png) if how.keeps(frame.width(), frame.height()) => png.to_vec(),
+                    _ => frame.to_file(how)?,
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let files: Vec<_> = files
+        .iter()
+        .map(|(kind, file)| (*kind, file.as_slice()))
+        .collect();
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let name = format!("Perora {}", perora_core::platform::local_timestamp());
+    let first = write_each(&directory, &name, &files, false)
+        .map_err(|not_all| not_all.error.to_string())?;
+    Ok(files
+        .iter()
+        .map(|(kind, _)| first.with_extension(kind))
+        .collect())
+}
+
+/// Keeps in mind what a capture was saved as, as it was taken, for discarding to take away. When it
+/// was discarded meanwhile (and the user has discarding take that away), it is taken away at once.
+/// Whether it is still there.
+pub fn saved_as_taken(app: &AppHandle, id: u64, files: &[PathBuf]) -> bool {
+    let perora = app.state::<Perora>();
+    // (Looked at with the preview held: the user discarding it says so before it is gone, and
+    // takes what is kept of it here then. Being discarded is what counts, gone or not yet.)
+    let discarded = {
+        let mut pending = perora.preview.lock();
+        let discarded = perora.preview.discarded.load(Ordering::Relaxed) == id;
+        if let Some(pending) = pending
+            .as_mut()
+            .filter(|pending| pending.id == id && !discarded)
+        {
+            pending.saved = files.to_vec();
+        }
+        discarded
+    };
+    if discarded && perora.setting(|settings| settings.delete_saved_on_discard) {
+        take_away(files);
+        return false;
+    }
+    true
+}
+
+/// Takes away files Perora saved, as far as they are still there.
+fn take_away(files: &[PathBuf]) {
+    for file in files {
+        if let Err(error) = std::fs::remove_file(file)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!("save: {} was not taken away: {error}", file.display());
+        }
     }
 }
 

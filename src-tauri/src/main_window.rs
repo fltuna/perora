@@ -123,6 +123,13 @@ struct SettingsView {
     /// Whether that is the folder Perora uses when none was chosen.
     save_directory_is_default: bool,
     ask_where_to_save: bool,
+    /// Whether every capture is saved as it was taken, and whether discarding takes that away.
+    save_on_capture: bool,
+    delete_saved_on_discard: bool,
+    /// Whether that is saved as kinds of file and a size of its own; and those.
+    save_on_capture_custom: bool,
+    save_on_capture_formats: Vec<&'static str>,
+    save_on_capture_fit: u32,
     /// `system`, `light` or `dark`.
     theme: &'static str,
     /// The kind of file a capture leaves as, each way it leaves (`png`, `jpg` or `webp`), and the
@@ -359,6 +366,15 @@ pub fn main_state(app: AppHandle) -> View {
                 .unwrap_or_default(),
             save_directory_is_default: settings.save_directory.is_none(),
             ask_where_to_save: settings.ask_where_to_save,
+            save_on_capture: settings.save_on_capture,
+            delete_saved_on_discard: settings.delete_saved_on_discard,
+            save_on_capture_custom: settings.as_taken_custom,
+            save_on_capture_formats: settings
+                .as_taken_formats
+                .iter()
+                .map(|kind| kind.name())
+                .collect(),
+            save_on_capture_fit: settings.as_taken_fit.unwrap_or(0),
             theme: settings.look.name(),
             copy_format: settings.output(Leaves::Copy).format.name(),
             copy_fit: settings.output(Leaves::Copy).fit.unwrap_or(0),
@@ -473,7 +489,7 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
     // What a capture is made into as it leaves, each way it leaves: the kind of file, the square
     // it is to fit (0 for none), and how good a file that loses something is.
     // (Saved as several kinds at once: named together.)
-    if setting == "saveFormats" {
+    if setting == "saveFormats" || setting == "saveOnCaptureFormats" {
         let kinds: Vec<Format> = value
             .as_array()
             .map(|names| {
@@ -483,8 +499,22 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
                     .collect()
             })
             .unwrap_or_default();
-        settings::update(&app, |settings| settings.save_as(&kinds));
+        settings::update(&app, |settings| match setting.as_str() {
+            "saveFormats" => settings.save_as(&kinds),
+            _ => settings.save_as_taken_as(&kinds),
+        });
         preview::changed(&app);
+        return changed(&app);
+    }
+    // (And the size of what is saved as it is taken, when that has one of its own.)
+    if setting == "saveOnCaptureFit" {
+        if let Some(side) = value.as_u64().and_then(|side| u32::try_from(side).ok())
+            && (side == 0 || FITS.contains(&side))
+        {
+            settings::update(&app, |settings| {
+                settings.as_taken_fit = (side != 0).then_some(side);
+            });
+        }
         return changed(&app);
     }
     let leaves = Leaves::ALL.into_iter().find(|leaves| {
@@ -558,6 +588,9 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
             ("hideOwnWindows", Some(on), ..) => settings.hide_own_windows = on,
             ("clearClipboardOnDiscard", Some(on), ..) => settings.clear_clipboard_on_discard = on,
             ("askWhereToSave", Some(on), ..) => settings.ask_where_to_save = on,
+            ("saveOnCapture", Some(on), ..) => settings.save_on_capture = on,
+            ("deleteSavedOnDiscard", Some(on), ..) => settings.delete_saved_on_discard = on,
+            ("saveOnCaptureCustom", Some(on), ..) => settings.as_taken_custom = on,
             ("startMode", _, Some(mode), _) => settings.start_mode = mode,
             ("noticeCorner", _, _, Some(corner)) => {
                 settings.notice_corner = corner;
@@ -781,6 +814,11 @@ mod tests {
             save_directory: String::new(),
             save_directory_is_default: true,
             ask_where_to_save: true,
+            save_on_capture: true,
+            delete_saved_on_discard: true,
+            save_on_capture_custom: true,
+            save_on_capture_formats: vec!["png"],
+            save_on_capture_fit: 1280,
             theme: "dark",
             copy_format: "png",
             copy_fit: 0,
@@ -812,6 +850,9 @@ mod tests {
             "hideOwnWindows",
             "clearClipboardOnDiscard",
             "askWhereToSave",
+            "saveOnCapture",
+            "deleteSavedOnDiscard",
+            "saveOnCaptureCustom",
             "startAtSignIn",
             "startMinimized",
         ] {
