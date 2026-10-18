@@ -119,8 +119,8 @@ interface Upload {
 }
 
 type Translate = ReturnType<typeof translator>;
-type Page = "home" | "capture" | "save" | "shortcut" | "general" | "account";
-const PAGES: Page[] = ["home", "capture", "save", "shortcut", "general", "account"];
+type Page = "home" | "capture" | "save" | "editor" | "shortcut" | "general" | "account";
+const PAGES: Page[] = ["home", "capture", "save", "editor", "shortcut", "general", "account"];
 
 // Glyphs of "Segoe Fluent Icons", the icon font Windows 11 has ("Segoe MDL2 Assets" on Windows 10
 // has the same ones at the same places).
@@ -128,6 +128,7 @@ const ICONS: Record<Page | "camera" | "copy" | "done", string> = {
   home: "",
   capture: "",
   save: "",
+  editor: "\uE70F",
   shortcut: "",
   general: "",
   account: "",
@@ -213,6 +214,7 @@ export function MainWindow() {
           {current === "home" && <Home view={view} t={t} />}
           {current === "capture" && <Capture view={view} t={t} />}
           {current === "save" && <Save view={view} t={t} />}
+          {current === "editor" && <Editing view={view} t={t} />}
           {current === "shortcut" && <Shortcut view={view} t={t} />}
           {current === "general" && <General view={view} t={t} />}
           {current === "account" && <Account view={view} changes={changes} t={t} />}
@@ -516,16 +518,25 @@ function Capture({ view, t }: { view: View; t: Translate }) {
         </Setting>
         <Leaving view={view} t={t} of="upload" under />
       </Reveal>
-      <Section title={t("main.capture.section.editor")} />
-      <Setting title={t("main.capture.defaultHider")} hint={t("main.capture.defaultHiderHint")}>
+    </>
+  );
+}
+
+/** How the editor is, where a capture is drawn on (owner, 2026-10-19: a page of its own). */
+function Editing({ view, t }: { view: View; t: Translate }) {
+  const { settings } = view;
+  return (
+    <>
+      <Section title={t("main.editor.section.tools")} />
+      <Setting title={t("main.editor.defaultHider")} hint={t("main.editor.defaultHiderHint")}>
         <select
           value={settings.defaultHider}
-          aria-label={t("main.capture.defaultHider")}
+          aria-label={t("main.editor.defaultHider")}
           onChange={(event) => set("defaultHider", event.target.value)}
         >
           {["last", "mosaic", "blur"].map((hider) => (
             <option key={hider} value={hider}>
-              {t(`main.capture.defaultHider.${hider}`)}
+              {t(`main.editor.defaultHider.${hider}`)}
             </option>
           ))}
         </select>
