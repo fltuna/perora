@@ -1,6 +1,6 @@
 [package]
 name = "perora"
-version = "0.1.3"
+version = "0.1.4"
 description = "A screenshot tool: capture any part of every monitor, draw on it, copy or save it"
 license = "MIT"
 edition = "2024"
