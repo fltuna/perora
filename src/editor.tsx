@@ -1092,9 +1092,6 @@ export function Editor({
   // last.
   const [strengths, setStrengths] = useState(keptStrengths);
   const [hider, setHider] = useState<"blur" | "mosaic">(() => firstHider(defaultHider));
-  // (Kept as it is in hand, whatever put it there: what the tour has in hand for a while, it puts
-  // back.)
-  useEffect(() => keepHider(hider), [hider]);
   // The frame the image is being cut down to, while the tool for that is in hand; and the shape it
   // is held to, if any.
   const [frame, setFrame] = useState<Box | null>(null);
@@ -1561,8 +1558,8 @@ export function Editor({
     window.addEventListener("resize", again);
     return () => window.removeEventListener("resize", again);
   }, []);
-  /** A tool is taken in hand. */
-  const hold = (one: Tool) => {
+  /** A tool is taken in hand: by the user, or by the tour (`touring`), for a while. */
+  const hold = (one: Tool, touring = false) => {
     // (What is being written is done first: it is not given up for another tool. Where it cannot be
     // done, it stays in hand.)
     if (finish() === null) {
@@ -1574,7 +1571,12 @@ export function Editor({
     setPointing(null);
     setTool(one);
     if (isFigure(one)) setFigure(one);
-    if (one === "blur" || one === "mosaic") setHider(one);
+    if (one === "blur" || one === "mosaic") {
+      setHider(one);
+      // (Kept as the user takes one: not as the tour does. A window gone in the middle of the tour
+      // would leave the tour's.)
+      if (!touring) keepHider(one);
+    }
     // Cutting down starts from what the image is cut down to already, or from all of it, in any
     // shape.
     setFrame(one === "crop" ? (keptOf(edits, whole) ?? whole) : null);
@@ -2564,12 +2566,12 @@ export function Editor({
       const next = round[Math.max(0, at) + by];
       window.clearTimeout(turning.current.gone);
       setTurned({ x, y });
-      if (next !== undefined && next !== tool) hold(next);
+      if (next !== undefined && next !== tool) hold(next, true);
     },
     take: (one) => {
       // (Taken right after the tour put the window back: against what it is about to be, not what it
       // was last drawn as.)
-      if (!stopped() && one !== (puttingBack.current?.tool ?? tool)) hold(one);
+      if (!stopped() && one !== (puttingBack.current?.tool ?? tool)) hold(one, true);
     },
     settingsAt: (x, y) => {
       if (stopped()) return;
@@ -2588,7 +2590,7 @@ export function Editor({
       setAfloat(null);
       setPanel(null);
       // (Whatever tool the window is about to have: taken again, so that what taking it set is set.)
-      hold(was.tool);
+      hold(was.tool, true);
       setFigure(was.figure);
       setHider(was.hider);
       setSelected(was.selected);
