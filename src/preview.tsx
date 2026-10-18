@@ -388,6 +388,7 @@ export function Preview() {
           show={show}
           beside={beside}
           frozen={busy}
+          defaultHider={view?.defaultHider ?? "last"}
           t={t}
           onCount={setDrawn}
           onEdits={(edits) => {

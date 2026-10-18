@@ -457,6 +457,9 @@ pub struct View {
     leaves: HashMap<&'static str, LeavesView>,
     /// The tours that were seen, by their names: one that was not is shown as its window opens.
     tours_seen: Vec<&'static str>,
+    /// Which way of making a part unreadable the editor starts with: `last` (the one used last),
+    /// `mosaic` or `blur`.
+    default_hider: &'static str,
 }
 
 #[derive(Serialize)]
@@ -1499,6 +1502,7 @@ pub fn preview_state(app: AppHandle) -> View {
         formats: Format::ALL.iter().map(|format| format.name()).collect(),
         fits: FITS.to_vec(),
         tours_seen: perora.setting(|settings| settings.tours_seen()),
+        default_hider: perora.setting(|settings| settings.default_hider.name()),
         leaves: Leaves::ALL
             .into_iter()
             .map(|leaves| {

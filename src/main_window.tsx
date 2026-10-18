@@ -54,6 +54,8 @@ interface View {
     noticeCorner: string;
     /** What becomes of a capture once it is taken: "preview", "edit" or "copy". */
     afterCapture: string;
+    /** Which way of making a part unreadable the editor starts with: "last", "mosaic" or "blur". */
+    defaultHider: string;
     /** How long the small preview stays, in seconds; 0 for until something is done with it. */
     previewSeconds: number;
     previewCorner: string;
@@ -514,6 +516,20 @@ function Capture({ view, t }: { view: View; t: Translate }) {
         </Setting>
         <Leaving view={view} t={t} of="upload" under />
       </Reveal>
+      <Section title={t("main.capture.section.editor")} />
+      <Setting title={t("main.capture.defaultHider")} hint={t("main.capture.defaultHiderHint")}>
+        <select
+          value={settings.defaultHider}
+          aria-label={t("main.capture.defaultHider")}
+          onChange={(event) => set("defaultHider", event.target.value)}
+        >
+          {["last", "mosaic", "blur"].map((hider) => (
+            <option key={hider} value={hider}>
+              {t(`main.capture.defaultHider.${hider}`)}
+            </option>
+          ))}
+        </select>
+      </Setting>
     </>
   );
 }

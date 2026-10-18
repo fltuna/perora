@@ -44,6 +44,33 @@ impl After {
     }
 }
 
+/// Which of the two ways of making a part unreadable is in hand in the editor, before the user picks
+/// one: the one they used last, or always the same (owner, 2026-10-19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hider {
+    #[default]
+    Last,
+    Mosaic,
+    Blur,
+}
+
+impl Hider {
+    pub const ALL: [Hider; 3] = [Hider::Last, Hider::Mosaic, Hider::Blur];
+
+    /// The name used in settings, language files and between the windows and the application.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Hider::Last => "last",
+            Hider::Mosaic => "mosaic",
+            Hider::Blur => "blur",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|hider| hider.name() == name)
+    }
+}
+
 /// A tour: what one of the windows shows of itself, a step at a time, the first time it is seen
 /// (and again whenever it is asked for).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +213,8 @@ pub struct Settings {
     pub take_snipping: bool,
     /// What becomes of a capture once it is taken.
     pub after_capture: After,
+    /// Which way of making a part unreadable the editor starts with.
+    pub default_hider: Hider,
     /// How long the small preview stays before the capture is given up, in seconds; 0 for until
     /// something is done with it.
     pub preview_seconds: u32,
@@ -338,6 +367,9 @@ impl Settings {
         };
         let language = text("language");
         let skipped_version = text("skippedVersion");
+        let default_hider = text("defaultHider")
+            .and_then(|name| Hider::from_name(&name))
+            .unwrap_or_default();
         let after_capture = text("afterCapture")
             .and_then(|name| After::from_name(&name))
             .unwrap_or(match preview_enabled {
@@ -448,6 +480,7 @@ impl Settings {
             notice_sound,
             notice_sound_file,
             after_capture,
+            default_hider,
             preview_seconds,
             preview_corner,
             capture_sound,
@@ -532,6 +565,7 @@ impl Settings {
         file.insert("noticeCorner".into(), self.notice_corner.name().into());
         file.insert("noticeSound".into(), self.notice_sound.name().into());
         file.insert("afterCapture".into(), self.after_capture.name().into());
+        file.insert("defaultHider".into(), self.default_hider.name().into());
         file.insert("previewSeconds".into(), self.preview_seconds.into());
         file.insert("previewCorner".into(), self.preview_corner.name().into());
         file.insert("captureSound".into(), self.capture_sound.name().into());
@@ -720,6 +754,24 @@ mod tests {
         );
         assert_eq!(settings.notice_sound_file, None);
         assert_eq!(settings.after_capture, After::Preview);
+        // The editor starts with the way used last, unless the user always wants one.
+        assert_eq!(settings.default_hider, Hider::Last);
+        assert_eq!(
+            parse(br#"{"defaultHider": "mosaic"}"#)
+                .unwrap()
+                .default_hider,
+            Hider::Mosaic
+        );
+        assert_eq!(
+            parse(br#"{"defaultHider": "blur"}"#).unwrap().default_hider,
+            Hider::Blur
+        );
+        assert_eq!(
+            parse(br#"{"defaultHider": "smudge"}"#)
+                .unwrap()
+                .default_hider,
+            Hider::Last
+        );
         assert_eq!(settings.preview_seconds, 0);
         assert_eq!(settings.preview_corner, Corner::BottomRight);
         assert_eq!(settings.capture_sound, Sound::default());
@@ -926,6 +978,7 @@ mod tests {
         assert_eq!(written["uploadFit"], 0);
         assert_eq!(written["quality"], "high");
         assert_eq!(written["afterCapture"], "preview");
+        assert_eq!(written["defaultHider"], "last");
         assert_eq!(written["previewSeconds"], 0);
         assert_eq!(written["toursSeen"], serde_json::json!(["capture"]));
         assert_eq!(written["somethingNew"]["a"], 1);

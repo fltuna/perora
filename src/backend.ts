@@ -102,6 +102,9 @@ export interface View {
   leaves: Record<Way, Required<Once>>;
   /** The tours that were seen, by their names. */
   toursSeen: string[];
+  /** Which way of making a part unreadable the editor starts with: the one used last, or always
+      the same. */
+  defaultHider?: "last" | "mosaic" | "blur";
 }
 
 /** A way a capture leaves. */

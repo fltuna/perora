@@ -165,6 +165,26 @@ function keepStrengths(strengths: { blur: number; mosaic: number }) {
   }
 }
 
+/** Which of the two ways was in hand last: kept from one capture to the next, and from one run to the
+    next, for the editor to start with it when the user has it so (owner, 2026-10-19). Blurring,
+    where nothing is kept. */
+const KEPT_HIDER = "perora.editor.hider";
+function firstHider(chosen: "last" | "mosaic" | "blur"): "blur" | "mosaic" {
+  if (chosen !== "last") return chosen;
+  try {
+    return localStorage.getItem(KEPT_HIDER) === "mosaic" ? "mosaic" : "blur";
+  } catch {
+    return "blur";
+  }
+}
+function keepHider(hider: "blur" | "mosaic") {
+  try {
+    localStorage.setItem(KEPT_HIDER, hider);
+  } catch {
+    // Not kept, then: the next capture starts as the first one did.
+  }
+}
+
 /** The shapes the image can be cut down to: as wide to as tall as this, or any (`null`). */
 const RATIOS: { name: string; ratio: number | null }[] = [
   { name: "free", ratio: null },
@@ -1027,6 +1047,7 @@ export function Editor({
   show,
   beside,
   frozen,
+  defaultHider,
   t,
   onEdits,
   onCount,
@@ -1034,6 +1055,9 @@ export function Editor({
   onUnmade,
 }: {
   capture: Capture;
+  /** Which way of making a part unreadable is in hand to start with: the one used last, or always
+      the same. */
+  defaultHider: "last" | "mosaic" | "blur";
   /** A place beside the status under the picture: for how closely the picture is looked at. */
   beside: HTMLElement | null;
   /** The capture is on its way out: nothing is drawn on it meanwhile. */
@@ -1067,7 +1091,10 @@ export function Editor({
   // How strongly a part is made unreadable, by each of the two ways, and which of them was in hand
   // last.
   const [strengths, setStrengths] = useState(keptStrengths);
-  const [hider, setHider] = useState<"blur" | "mosaic">("blur");
+  const [hider, setHider] = useState<"blur" | "mosaic">(() => firstHider(defaultHider));
+  // (Kept as it is in hand, whatever put it there: what the tour has in hand for a while, it puts
+  // back.)
+  useEffect(() => keepHider(hider), [hider]);
   // The frame the image is being cut down to, while the tool for that is in hand; and the shape it
   // is held to, if any.
   const [frame, setFrame] = useState<Box | null>(null);

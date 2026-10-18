@@ -21,7 +21,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::notice::{Corner, Lasting, MOST_SECONDS, Occasion, Sound};
-use crate::settings::{After, Leaves, Look};
+use crate::settings::{After, Hider, Leaves, Look};
 use crate::{Perora, preview, recovery, settings};
 
 /// How many of the user's uploads the account page shows.
@@ -154,6 +154,8 @@ struct SettingsView {
     notice_corner: &'static str,
     /// What becomes of a capture once it is taken: `preview`, `edit` or `copy`.
     after_capture: &'static str,
+    /// Which way of making a part unreadable the editor starts with: `last`, `mosaic` or `blur`.
+    default_hider: &'static str,
     /// How long the small preview stays, in seconds; 0 for until something is done with it.
     preview_seconds: u32,
     preview_corner: &'static str,
@@ -393,6 +395,7 @@ pub fn main_state(app: AppHandle) -> View {
             notice_seconds: settings.notice_seconds,
             notice_corner: settings.notice_corner.name(),
             after_capture: settings.after_capture.name(),
+            default_hider: settings.default_hider.name(),
             preview_seconds: settings.preview_seconds,
             preview_corner: settings.preview_corner.name(),
             capture_sound: settings.capture_sound.shown(),
@@ -540,6 +543,14 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
         }
         // (A capture being previewed is offered what the settings say now.)
         preview::changed(&app);
+        return changed(&app);
+    }
+    if setting == "defaultHider" {
+        if let Some(hider) = value.as_str().and_then(Hider::from_name) {
+            settings::update(&app, |settings| settings.default_hider = hider);
+            // (A capture being drawn on starts with it next time, not now.)
+            preview::changed(&app);
+        }
         return changed(&app);
     }
     if setting == "afterCapture" {
@@ -835,6 +846,7 @@ mod tests {
             notice_sound: "none".into(),
             notice_sound_file: None,
             after_capture: "edit",
+            default_hider: "mosaic",
             preview_seconds: 20,
             preview_corner: "topRight",
             capture_sound: "custom".into(),
@@ -860,6 +872,7 @@ mod tests {
         }
         assert_eq!(view["startMode"], "smart");
         assert_eq!(view["afterCapture"], "edit");
+        assert_eq!(view["defaultHider"], "mosaic");
         // (And what a capture leaves as, by the names of `Leaves` with what is set of each.)
         assert_eq!(view["uploadFormat"], "webp");
         assert_eq!(view["uploadFit"], 2048);
