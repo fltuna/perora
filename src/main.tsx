@@ -5,6 +5,7 @@ import { MainWindow } from "./main_window";
 import { Notice } from "./notice";
 import { Overlay } from "./overlay";
 import { Preview } from "./preview";
+import { RevealScreen } from "./reveal";
 import "./style.css";
 
 // These windows are parts of an application, not pages: no browser menu, no developer tools, no
@@ -34,6 +35,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <Notice />
     ) : label.startsWith("overlay-") ? (
       <Overlay />
+    ) : label === "reveal" ? (
+      <RevealScreen />
     ) : (
       <Preview />
     )}

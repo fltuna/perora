@@ -12,6 +12,7 @@ mod messages;
 mod notice;
 mod preview;
 mod recovery;
+mod reveal;
 mod selection;
 mod settings;
 mod update;
@@ -123,6 +124,7 @@ struct Perora {
     notice: notice::State,
     preview: preview::State,
     selection: selection::State,
+    reveal: reveal::State,
     update: update::State,
 }
 
@@ -245,6 +247,10 @@ pub fn run() {
             main_window::main_cancel_sign_in,
             main_window::main_sign_out,
             main_window::main_capture,
+            reveal::main_edit_reveal_area,
+            reveal::reveal_state,
+            reveal::reveal_ready,
+            reveal::reveal_done,
             preview::preview_state,
             preview::preview_image,
             preview::preview_fonts,
@@ -443,6 +449,7 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
         notice: notice::State::default(),
         preview: preview::State::default(),
         selection: selection::State::default(),
+        reveal: reveal::State::default(),
         update: update::State::default(),
     });
     main_window::create(app)?;
@@ -1118,6 +1125,7 @@ fn serve(
     let image = match parts.split_first() {
         Some((&"capture", rest)) => preview::image(&perora, rest),
         Some((&"selection", rest)) => selection::image(&perora, rest),
+        Some((&"reveal", rest)) => reveal::image(&perora, rest),
         _ => None,
     };
 

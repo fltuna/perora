@@ -3044,8 +3044,51 @@ button:focus-visible {
   color: var(--text);
 }
 
-/* The part of the monitor that brings the selection screen's mode bar back: drawn by dragging on a
-   small monitor, with the bar where it is. */
+/* A part of a monitor: set as the editor's crop is (zone.tsx), or only shown. */
+.zone-editor,
+.zone-view {
+  touch-action: none;
+  user-select: none;
+}
+
+.zone-editor .zone,
+.zone-view .zone {
+  position: absolute;
+  box-sizing: border-box;
+  /* At least a line, however thin: a strip of a few pixels at the top is less than one on a small one. */
+  min-width: 2px;
+  min-height: 2px;
+  background: rgb(79 140 255 / 35%);
+  border: 1px solid #4f8cff;
+  pointer-events: none;
+}
+
+.zone-editor .zone.drawing {
+  border-style: dashed;
+}
+
+/* The holds, as the crop's: on its corners and the middles of its edges. */
+.zone-editor .hold {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #4f8cff;
+  border-radius: 1px;
+}
+
+.zone-editor .hold.nw { left: 0; top: 0; }
+.zone-editor .hold.n { left: 50%; top: 0; }
+.zone-editor .hold.ne { left: 100%; top: 0; }
+.zone-editor .hold.e { left: 100%; top: 50%; }
+.zone-editor .hold.se { left: 100%; top: 100%; }
+.zone-editor .hold.s { left: 50%; top: 100%; }
+.zone-editor .hold.sw { left: 0; top: 100%; }
+.zone-editor .hold.w { left: 0; top: 50%; }
+
+/* The settings: the part on a small 16:9 monitor with the bar where it is, and what sets it. */
 .reveal-area {
   display: flex;
   flex-direction: column;
@@ -3053,19 +3096,16 @@ button:focus-visible {
   gap: 8px;
 }
 
-/* (Not clipped: the holds of a part at the edge stand out over it.) */
-.reveal-area .monitor {
+.reveal-area .zone-view {
   position: relative;
-  width: 280px;
+  width: 240px;
+  aspect-ratio: 16 / 9;
   background: #1b1e24;
   border: 1px solid #3a3f4a;
   border-radius: 4px;
-  cursor: crosshair;
-  touch-action: none;
-  user-select: none;
 }
 
-.reveal-area .monitor .bar {
+.reveal-area .zone-view .bar {
   position: absolute;
   top: 3%;
   left: 50%;
@@ -3075,46 +3115,52 @@ button:focus-visible {
   background: #2a2e36;
   border: 1px solid #454b57;
   border-radius: 3px;
+}
+
+.reveal-area .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+/* The screen that sets it: the monitor's still, dimmed, in a 16:9 stage as large as fits (the whole
+   monitor when it is 16:9), with the bar where the selection screen has it. */
+.overlay.area-screen {
+  cursor: default;
+}
+
+.area-screen .stage {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+  outline: none;
+}
+
+.area-screen .stage .bar {
   pointer-events: none;
 }
 
-/* At least a line, however thin: a strip of a few pixels at the top is less than one here. */
-.reveal-area .monitor .zone {
-  position: absolute;
-  box-sizing: border-box;
-  min-width: 2px;
-  min-height: 2px;
-  background: rgb(79 140 255 / 35%);
-  border: 1px solid #4f8cff;
-  pointer-events: none;
+/* What it is for, and saving or giving up: at the bottom, out of the way of the top. */
+.area-screen-tools {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  translate: -50% 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
 }
 
-.reveal-area .monitor .zone.drawing {
-  border-style: dashed;
+.area-screen-tools p {
+  margin: 0;
+  max-width: 720px;
+  padding: 6px 14px;
+  color: #fff;
+  text-align: center;
+  background: rgb(0 0 0 / 70%);
+  border-radius: 10px;
 }
-
-.reveal-area .monitor:focus-visible {
-  outline: 2px solid #4f8cff;
-  outline-offset: 2px;
-}
-
-/* The holds, as the crop's: on its corners and the middles of its edges. */
-.reveal-area .monitor .hold {
-  position: absolute;
-  width: 7px;
-  height: 7px;
-  margin: -4px 0 0 -4px;
-  box-sizing: border-box;
-  background: #fff;
-  border: 1px solid #4f8cff;
-  border-radius: 1px;
-}
-
-.reveal-area .monitor .hold.nw { left: 0; top: 0; }
-.reveal-area .monitor .hold.n { left: 50%; top: 0; }
-.reveal-area .monitor .hold.ne { left: 100%; top: 0; }
-.reveal-area .monitor .hold.e { left: 100%; top: 50%; }
-.reveal-area .monitor .hold.se { left: 100%; top: 100%; }
-.reveal-area .monitor .hold.s { left: 50%; top: 100%; }
-.reveal-area .monitor .hold.sw { left: 0; top: 100%; }
-.reveal-area .monitor .hold.w { left: 0; top: 50%; }
