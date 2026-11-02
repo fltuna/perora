@@ -21,6 +21,8 @@ interface View {
     startMode: string;
     /** How long the selection screen's mode bar stays, in seconds; 0 for for good. */
     barHideSeconds: number;
+    /** Where on its monitor the pointer brings the mode bar back: shares of its width and height. */
+    barRevealArea: Zone;
     /** Whether the selection screen draws a + where the pointer is. */
     showCrosshair: boolean;
     /** Whether Perora's own windows are hidden before the screen is captured. */
@@ -292,7 +294,7 @@ function UpdateBand({ view, t }: { view: View; t: Translate }) {
   );
 }
 
-const set = (setting: string, value: boolean | string | number | string[]) =>
+const set = (setting: string, value: boolean | string | number | string[] | Zone) =>
   void invoke("main_set", { setting, value });
 
 /** Capturing, and nothing else: that is what Perora is for. */
@@ -458,6 +460,16 @@ function Capture({ view, t }: { view: View; t: Translate }) {
           onChange={(seconds) => set("barHideSeconds", seconds)}
         />
       </Setting>
+      <Reveal shown={settings.barHideSeconds > 0}>
+        <Setting under title={t("main.capture.barRevealArea")} hint={t("main.capture.barRevealAreaHint")}>
+          <RevealArea
+            label={t("main.capture.barRevealArea")}
+            reset={t("main.capture.barRevealAreaReset")}
+            value={settings.barRevealArea}
+            onChange={(zone) => set("barRevealArea", zone)}
+          />
+        </Setting>
+      </Reveal>
       <Setting title={t("main.capture.showCrosshair")} hint={t("main.capture.showCrosshairHint")}>
         <Switch
           label={t("main.capture.showCrosshair")}
@@ -867,6 +879,170 @@ function Updates({ view, t }: { view: View; t: Translate }) {
 
 /** The most seconds a notice can be told to stay. */
 const MOST_SECONDS = 3600;
+
+/** A part of a monitor, as shares of its width and height (0 to 1) from its top left corner. */
+interface Zone {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Where the pointer brings the selection screen's mode bar back at first (as the application has
+    it): a thin strip right at the top, under the bar. */
+const BAR_REVEAL: Zone = { x: 0.3, y: 0, width: 0.4, height: 0.01 };
+
+/** A place on the small monitor, as shares of its width and height. */
+type Spot = { x: number; y: number };
+
+/** What a press on the small monitor does to the part: pull an edge or a corner of it (which way on
+    each side: -1 the left or top one, 1 the right or bottom one), move it, or draw a new one. */
+type Grip = { x: -1 | 0 | 1; y: -1 | 0 | 1 } | "move" | "new";
+
+/** How near an edge of the part, in pixels of the page, a press takes hold of that edge. */
+const GRIP_NEAR = 6;
+
+/** The pointer that says what a press would do: the arrows of an edge or a corner, the four arrows
+    of moving, the cross of drawing anew. */
+function gripCursor(grip: Grip) {
+  if (grip === "move") return "move";
+  if (grip === "new") return "crosshair";
+  if (grip.x === 0) return "ns-resize";
+  if (grip.y === 0) return "ew-resize";
+  return grip.x === grip.y ? "nwse-resize" : "nesw-resize";
+}
+
+/** The part of the monitor that brings the selection screen's mode bar back, set on a small monitor
+    the way the editor's crop is: drag outside it to draw a new one, pull its edges and corners, drag
+    it by its inside to move it (owner, 2026-11-02: 「ドラッグで好きな範囲を設定するみたいな感じ！」
+    「切り抜きツールみたいな感じに調整もできるようにしておきたい」). The bar is drawn where it is, to
+    set it by. The monitor has the shape of the one this window is on. */
+function RevealArea({
+  label,
+  reset,
+  value,
+  onChange,
+}: {
+  label: string;
+  reset: string;
+  value: Zone;
+  onChange: (zone: Zone) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [gesture, setGesture] = useState<{ grip: Grip; from: Spot; was: Zone } | null>(null);
+  const [draft, setDraft] = useState<Zone | null>(null);
+  const [hover, setHover] = useState<Grip>("new");
+  // Shown at once, before the application says it back.
+  const [shown, setShown] = useState(value);
+  useEffect(() => setShown(value), [value.x, value.y, value.width, value.height]);
+
+  const room = () => box.current!.getBoundingClientRect();
+  const clamp = (n: number) => Math.min(1, Math.max(0, n));
+  const share = (event: React.PointerEvent): Spot => {
+    const { left, top, width, height } = room();
+    return { x: clamp((event.clientX - left) / width), y: clamp((event.clientY - top) / height) };
+  };
+  const gripAt = (event: React.PointerEvent): Grip => {
+    const { left, top, width, height } = room();
+    const [px, py] = [event.clientX - left, event.clientY - top];
+    const [x0, y0] = [shown.x * width, shown.y * height];
+    const [x1, y1] = [x0 + shown.width * width, y0 + shown.height * height];
+    const across = px >= x0 - GRIP_NEAR && px <= x1 + GRIP_NEAR;
+    const along = py >= y0 - GRIP_NEAR && py <= y1 + GRIP_NEAR;
+    // (Of a part thinner than two holds, the edge nearer the press.)
+    const nearer = (p: number, a: number, b: number): -1 | 0 | 1 =>
+      Math.abs(p - a) <= GRIP_NEAR && Math.abs(p - a) <= Math.abs(p - b) ? -1 : Math.abs(p - b) <= GRIP_NEAR ? 1 : 0;
+    const x = along ? nearer(px, x0, x1) : 0;
+    const y = across ? nearer(py, y0, y1) : 0;
+    if (x !== 0 || y !== 0) return { x, y };
+    return px > x0 && px < x1 && py > y0 && py < y1 ? "move" : "new";
+  };
+  const between = (a: Spot, b: Spot): Zone => ({
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    width: Math.abs(a.x - b.x),
+    height: Math.abs(a.y - b.y),
+  });
+  /** The part as the gesture leaves it with the pointer at `at`. */
+  const pulled = (grip: Grip, was: Zone, from: Spot, at: Spot): Zone => {
+    if (grip === "new") return between(from, at);
+    if (grip === "move") {
+      const x = Math.min(1 - was.width, Math.max(0, was.x + at.x - from.x));
+      const y = Math.min(1 - was.height, Math.max(0, was.y + at.y - from.y));
+      return { ...was, x, y };
+    }
+    // The edge held goes as far as the pointer does (not to where it is: a press on a hold beside
+    // the edge moves nothing); the one across from it stays, and passing it turns the part.
+    const [dx, dy] = [at.x - from.x, at.y - from.y];
+    let [left, right, top, bottom] = [was.x, was.x + was.width, was.y, was.y + was.height];
+    if (grip.x === -1) left = clamp(left + dx);
+    if (grip.x === 1) right = clamp(right + dx);
+    if (grip.y === -1) top = clamp(top + dy);
+    if (grip.y === 1) bottom = clamp(bottom + dy);
+    return between({ x: left, y: top }, { x: right, y: bottom });
+  };
+  const zone = draft ?? shown;
+  const percent = (n: number) => `${n * 100}%`;
+  const ratio = window.screen.width / Math.max(window.screen.height, 1);
+  const end = () => {
+    setGesture(null);
+    setDraft(null);
+  };
+
+  return (
+    <div className="reveal-area">
+      <div
+        ref={box}
+        className="monitor"
+        role="img"
+        aria-label={label}
+        style={{ aspectRatio: `${ratio}`, cursor: gripCursor(gesture?.grip ?? hover) }}
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          const grip = gripAt(event);
+          const from = share(event);
+          setGesture({ grip, from, was: shown });
+          setDraft(pulled(grip, shown, from, from));
+        }}
+        onPointerMove={(event) => {
+          if (!gesture) return setHover(gripAt(event));
+          setDraft(pulled(gesture.grip, gesture.was, gesture.from, share(event)));
+        }}
+        onPointerUp={() => {
+          // (A click, a part too thin to reach, or one that did not change, sets nothing.)
+          const changed =
+            draft && (["x", "y", "width", "height"] as const).some((side) => Math.abs(draft[side] - shown[side]) > 1e-6);
+          if (draft && changed && draft.width > 0.005 && draft.height > 0.002) {
+            setShown(draft);
+            onChange(draft);
+          }
+          end();
+        }}
+        onPointerCancel={end}
+      >
+        <span className="bar" />
+        <span
+          className={draft ? "zone drawing" : "zone"}
+          style={{ left: percent(zone.x), top: percent(zone.y), width: percent(zone.width), height: percent(zone.height) }}
+        >
+          {/* The holds at its corners and the middles of its edges, as the crop's. */}
+          {(["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const).map((hold) => (
+            <span key={hold} className={`hold ${hold}`} />
+          ))}
+        </span>
+      </div>
+      <button
+        onClick={() => {
+          setShown(BAR_REVEAL);
+          onChange(BAR_REVEAL);
+        }}
+      >
+        {reset}
+      </button>
+    </div>
+  );
+}
 
 /** A number of seconds, typed: set as soon as what is typed is one (a whole number, not more than
     can be chosen). What is not one is not set, and is gone when the field is left. */

@@ -188,6 +188,8 @@ pub struct Settings {
     /// How long the selection screen's mode bar stays before it slides up out of the way, in
     /// seconds; 0 for for good. It comes back while the pointer is up there.
     pub bar_hide_seconds: u32,
+    /// Where on its monitor the pointer brings the slid-away bar back.
+    pub bar_reveal_area: Zone,
     /// Whether the selection screen draws a + where the pointer is (seen where the system's pointer
     /// is not, as in VR).
     pub show_crosshair: bool,
@@ -318,8 +320,50 @@ impl Settings {
     }
 }
 
-/// How long the mode bar stays at first, in seconds (owner: 「3~5秒ほど」).
-pub const DEFAULT_BAR_HIDE_SECONDS: u32 = 3;
+/// How long the mode bar stays at first, in seconds (owner: 「3~5秒ほど」, then 「デフォルトの消える
+/// 秒数を2秒ぐらいにしておこ」).
+pub const DEFAULT_BAR_HIDE_SECONDS: u32 = 2;
+
+/// A part of a monitor, as shares of its width and height (0 to 1), from its top left corner: the
+/// same on a monitor of any size.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Zone {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Zone {
+    /// Where the pointer brings the mode bar back at first: a thin strip right at the top, under
+    /// the bar (owner, 2026-11-02: 「本当にかなり上にいかないと出ないようにしてほしい」). Drawn
+    /// otherwise in the settings, by dragging (「ドラッグで好きな範囲を設定するみたいな感じ！」).
+    pub const BAR_REVEAL: Self = Self {
+        x: 0.3,
+        y: 0.0,
+        width: 0.4,
+        height: 0.01,
+    };
+
+    /// One as written: shares that make a part of the monitor, not nothing.
+    pub fn from_value(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let share = |key: &str| object.get(key)?.as_f64().filter(|share| share.is_finite());
+        let zone = Self {
+            x: share("x")?,
+            y: share("y")?,
+            width: share("width")?,
+            height: share("height")?,
+        };
+        let within =
+            |start: f64, length: f64| start >= 0.0 && length > 0.0 && start + length <= 1.0 + 1e-9;
+        (within(zone.x, zone.width) && within(zone.y, zone.height)).then_some(zone)
+    }
+
+    pub fn to_value(self) -> Value {
+        serde_json::json!({ "x": self.x, "y": self.y, "width": self.width, "height": self.height })
+    }
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -457,6 +501,11 @@ impl Settings {
         let notice_seconds = seconds("noticeSeconds").unwrap_or(DEFAULT_SECONDS);
         let preview_seconds = seconds("previewSeconds").unwrap_or(0);
         let bar_hide_seconds = seconds("barHideSeconds").unwrap_or(DEFAULT_BAR_HIDE_SECONDS);
+        let bar_reveal_area = file
+            .remove("barRevealArea")
+            .as_ref()
+            .and_then(Zone::from_value)
+            .unwrap_or(Zone::BAR_REVEAL);
         // (One of the squares there are to choose from; anything else is no square.)
         let fits = Leaves::ALL.map(
             |leaves| match file.remove(&format!("{}Fit", leaves.name())) {
@@ -475,6 +524,7 @@ impl Settings {
             upload_enabled,
             start_mode,
             bar_hide_seconds,
+            bar_reveal_area,
             show_crosshair,
             hide_own_windows,
             copy_to_clipboard,
@@ -519,6 +569,7 @@ impl Settings {
         file.insert("startMode".into(), self.start_mode.name().into());
         file.insert("hideOwnWindows".into(), self.hide_own_windows.into());
         file.insert("barHideSeconds".into(), self.bar_hide_seconds.into());
+        file.insert("barRevealArea".into(), self.bar_reveal_area.to_value());
         file.insert("showCrosshair".into(), self.show_crosshair.into());
         file.insert("saveOnCapture".into(), self.save_on_capture.into());
         file.insert(
@@ -736,8 +787,8 @@ mod tests {
                 .unwrap()
                 .hide_own_windows
         );
-        // The mode bar slides away after 3 seconds, or never; the + is drawn unless switched off.
-        assert_eq!(settings.bar_hide_seconds, 3);
+        // The mode bar slides away after 2 seconds, or never; the + is drawn unless switched off.
+        assert_eq!(settings.bar_hide_seconds, 2);
         assert_eq!(
             parse(br#"{"barHideSeconds": 0}"#).unwrap().bar_hide_seconds,
             0
@@ -752,8 +803,35 @@ mod tests {
             parse(br#"{"barHideSeconds": -1}"#)
                 .unwrap()
                 .bar_hide_seconds,
-            3
+            2
         );
+        // It comes back with the pointer in a part of the monitor: a strip at the top, or one drawn.
+        assert_eq!(settings.bar_reveal_area, Zone::BAR_REVEAL);
+        let drawn = parse(br#"{"barRevealArea": {"x": 0.1, "y": 0, "width": 0.8, "height": 0.2}}"#)
+            .unwrap();
+        assert_eq!(
+            drawn.bar_reveal_area,
+            Zone {
+                x: 0.1,
+                y: 0.0,
+                width: 0.8,
+                height: 0.2
+            }
+        );
+        for odd in [
+            r#"{"x": 0.5, "y": 0, "width": 0.6, "height": 0.1}"#,
+            r#"{"x": -0.1, "y": 0, "width": 0.5, "height": 0.1}"#,
+            r#"{"x": 0.1, "y": 0, "width": 0, "height": 0.1}"#,
+            r#"{"x": 0.1, "y": 0, "width": 0.5}"#,
+            r#""top""#,
+        ] {
+            let file = format!(r#"{{"barRevealArea": {odd}}}"#);
+            assert_eq!(
+                parse(file.as_bytes()).unwrap().bar_reveal_area,
+                Zone::BAR_REVEAL,
+                "{odd}"
+            );
+        }
         assert!(settings.show_crosshair);
         assert!(
             !parse(br#"{"showCrosshair": false}"#)
@@ -1007,7 +1085,8 @@ mod tests {
         assert_eq!(written["enableUpload"], false);
         assert_eq!(written["startMode"], "monitor");
         assert_eq!(written["hideOwnWindows"], true);
-        assert_eq!(written["barHideSeconds"], 3);
+        assert_eq!(written["barHideSeconds"], 2);
+        assert_eq!(written["barRevealArea"]["width"], 0.4);
         assert_eq!(written["showCrosshair"], true);
         assert_eq!(written["saveOnCapture"], false);
         assert_eq!(written["deleteSavedOnDiscard"], false);

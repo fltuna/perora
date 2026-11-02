@@ -120,6 +120,8 @@ struct SelectionView {
     windows: Vec<WindowView>,
     /// How long the mode bar stays before it slides up out of the way, in seconds; 0 for for good.
     bar_hide_seconds: u32,
+    /// Where on this monitor the pointer brings it back.
+    bar_reveal_area: crate::settings::Zone,
     /// Whether a + is drawn where the pointer is.
     crosshair: bool,
     /// Where the pointer is as the window asks (until it moves: then `selection-pointer` says).
@@ -655,8 +657,13 @@ pub fn selection_state(app: AppHandle, window: WebviewWindow) -> View {
     let perora = app.state::<Perora>();
     let language = perora.language();
     // (Read before the selection is locked: nothing else is held while that is.)
-    let (bar_hide_seconds, crosshair) =
-        perora.setting(|settings| (settings.bar_hide_seconds, settings.show_crosshair));
+    let (bar_hide_seconds, bar_reveal_area, crosshair) = perora.setting(|settings| {
+        (
+            settings.bar_hide_seconds,
+            settings.bar_reveal_area,
+            settings.show_crosshair,
+        )
+    });
     let selection = monitor_of(&window).and_then(|monitor| {
         let active = perora.selection.lock();
         let active = active.as_ref()?;
@@ -682,6 +689,7 @@ pub fn selection_state(app: AppHandle, window: WebviewWindow) -> View {
                 })
                 .collect(),
             bar_hide_seconds,
+            bar_reveal_area,
             crosshair,
             pointer: desktop().pointer().ok().map(|pointer| At {
                 x: pointer.x,

@@ -116,6 +116,8 @@ struct SettingsView {
     start_mode: &'static str,
     /// How long the selection screen's mode bar stays, in seconds; 0 for for good.
     bar_hide_seconds: u32,
+    /// Where on its monitor the pointer brings the bar back.
+    bar_reveal_area: settings::Zone,
     /// Whether the selection screen draws a + where the pointer is.
     show_crosshair: bool,
     /// Whether Perora's own windows are hidden before the screen is captured.
@@ -365,6 +367,7 @@ pub fn main_state(app: AppHandle) -> View {
             enable_upload: settings.upload_enabled,
             start_mode: settings.start_mode.name(),
             bar_hide_seconds: settings.bar_hide_seconds,
+            bar_reveal_area: settings.bar_reveal_area,
             show_crosshair: settings.show_crosshair,
             hide_own_windows: settings.hide_own_windows,
             copy_to_clipboard: settings.copy_to_clipboard,
@@ -568,6 +571,13 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
     if setting == "quality" {
         if let Some(quality) = value.as_str().and_then(Quality::from_name) {
             settings::update(&app, |settings| settings.quality = quality);
+        }
+        return changed(&app);
+    }
+    // (Where the pointer brings the mode bar back: a part of the monitor, drawn in the settings.)
+    if setting == "barRevealArea" {
+        if let Some(zone) = settings::Zone::from_value(&value) {
+            settings::update(&app, |settings| settings.bar_reveal_area = zone);
         }
         return changed(&app);
     }
@@ -829,6 +839,7 @@ mod tests {
             enable_upload: true,
             start_mode: "smart",
             bar_hide_seconds: 5,
+            bar_reveal_area: settings::Zone::BAR_REVEAL,
             show_crosshair: true,
             hide_own_windows: true,
             copy_to_clipboard: true,
@@ -884,6 +895,7 @@ mod tests {
         }
         assert_eq!(view["startMode"], "smart");
         assert_eq!(view["barHideSeconds"], 5);
+        assert_eq!(view["barRevealArea"]["height"], 0.01);
         assert_eq!(view["afterCapture"], "edit");
         assert_eq!(view["defaultHider"], "mosaic");
         // (And what a capture leaves as, by the names of `Leaves` with what is set of each.)

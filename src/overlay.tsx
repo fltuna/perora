@@ -36,6 +36,8 @@ interface Selection extends Now {
   windows: { index: number; title: string; width: number; height: number; area: Area }[];
   /** How long the mode bar stays before it slides up out of the way, in seconds; 0 for for good. */
   barHideSeconds: number;
+  /** Where on this monitor the pointer brings it back: shares of its width and height. */
+  barRevealArea: Area;
   /** Whether a + is drawn where the pointer is. */
   crosshair: boolean;
   /** Where the pointer was as the screen was asked for (virtual screen, physical pixels). */
@@ -462,9 +464,12 @@ function ModeBar({
   const own = (event: React.PointerEvent) => event.stopPropagation();
 
   // The bar slides up out of the way after a while (it can be in the way of what is captured), and
-  // comes back while the pointer is at its place: owner, 2026-11-02. It stays while the tour is on,
-  // and comes back for a while when the mode changes (by a key: the bar says which it is now).
-  const { id, mode, dragging, barHideSeconds } = selection;
+  // comes back when the pointer goes into a part of the monitor drawn in the settings, at first a
+  // strip right at the top: owner, 2026-11-02 (at first anywhere near its place, then 「本当にかなり
+  // 上にいかないと出ないようにしてほしい」「ドラッグで好きな範囲を設定する」). Once back it stays
+  // while the pointer is at its place, so that it can be used. It stays while the tour is on, and
+  // comes back for a while when the mode changes (by a key: the bar says which it is now).
+  const { id, mode, dragging, barHideSeconds, barRevealArea } = selection;
   const bar = useRef<HTMLDivElement>(null);
   const [tucked, setTucked] = useState(false);
   const [near, setNear] = useState(false);
@@ -483,6 +488,12 @@ function ModeBar({
     return () => window.clearTimeout(timer);
   }, [stays, draggedAway, shownAt, barHideSeconds]);
 
+  // (Read by the listener below, which is set up once.)
+  const tuckedNow = useRef(tucked);
+  tuckedNow.current = tucked;
+  const reveal = useRef(barRevealArea);
+  reveal.current = barRevealArea;
+
   // Where the pointer is, against where the bar is when shown (its place, not where it slid to: the
   // offsets do not move with a transform). In the capture phase: the bar keeps its own moves from
   // the screen behind it.
@@ -492,11 +503,15 @@ function ModeBar({
       if (!place) return;
       // (Its left is the middle of the screen: it is moved back by half its width.)
       const left = place.offsetLeft - place.offsetWidth / 2;
-      setNear(
+      const atPlace =
         event.clientX >= left - BAR_REACH &&
-          event.clientX <= left + place.offsetWidth + BAR_REACH &&
-          event.clientY <= place.offsetTop + place.offsetHeight + BAR_REACH,
-      );
+        event.clientX <= left + place.offsetWidth + BAR_REACH &&
+        event.clientY <= place.offsetTop + place.offsetHeight + BAR_REACH;
+      const zone = reveal.current;
+      const [x, y] = [event.clientX / window.innerWidth, event.clientY / window.innerHeight];
+      const inZone = !!zone && x >= zone.x && x <= zone.x + zone.width && y >= zone.y && y <= zone.y + zone.height;
+      // Slid away, only the part drawn in the settings brings it back; shown, its place keeps it.
+      setNear((was) => inZone || (atPlace && (was || !tuckedNow.current)));
     };
     // The pointer gone from this monitor (up through its top edge, to another monitor): not near.
     const onOut = (event: PointerEvent) => event.relatedTarget === null && setNear(false);
