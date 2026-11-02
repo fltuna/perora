@@ -119,16 +119,22 @@ export function Overlay() {
     return () => window.removeEventListener("keydown", onKey);
   }, [id, selection?.modes.join(), selection?.touring]);
 
-  // Pointer moves come faster than they can be drawn: one report a frame is enough.
+  // Pointer moves come faster than they can be drawn: one report a frame is enough, of where the
+  // pointer last was. Where it is, the page says: the system's pointer stays behind where the press
+  // is not a mouse's (a VR headset's, as Virtual Desktop sends it).
   const pending = useRef(false);
-  const report = (what: Pointer) => {
+  const latest = useRef<Spot | null>(null);
+  const report = (what: Pointer, at: Spot | null) => {
     if (id === null) return;
-    if (what !== "move") return void invoke("selection_pointer", { id, what });
+    // (Also at a press and its release: a move still to be reported then says where they were, not
+    // where the pointer was before.)
+    if (at) latest.current = at;
+    if (what !== "move") return void invoke("selection_pointer", { id, what, at });
     if (pending.current) return;
     pending.current = true;
     requestAnimationFrame(() => {
       pending.current = false;
-      void invoke("selection_pointer", { id, what });
+      void invoke("selection_pointer", { id, what, at: latest.current });
     });
   };
 
@@ -155,6 +161,11 @@ export function Overlay() {
     height: rect.height / scale,
   });
   const highlight = selection.highlight;
+  // Where the pointer is on the virtual screen, as the + is drawn by it.
+  const screenAt = (event: React.PointerEvent): Spot => ({
+    x: Math.round(area.x + event.clientX * scale),
+    y: Math.round(area.y + event.clientY * scale),
+  });
 
   return (
     <div
@@ -164,13 +175,13 @@ export function Overlay() {
         if (event.button !== 0) return;
         // The press belongs to this window until it ends, wherever the pointer goes (another monitor).
         event.currentTarget.setPointerCapture(event.pointerId);
-        report("down");
+        report("down", screenAt(event));
       }}
-      onPointerMove={() => report("move")}
+      onPointerMove={(event) => report("move", screenAt(event))}
       onPointerUp={(event) => {
-        if (event.button === 0) report("up");
+        if (event.button === 0) report("up", screenAt(event));
       }}
-      onPointerCancel={() => report("leave")}
+      onPointerCancel={() => report("leave", null)}
     >
       <img
         key={selection.id}

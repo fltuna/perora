@@ -23,10 +23,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use perora_core::geometry::Rect;
+use perora_core::geometry::{Point, Rect};
 use perora_core::platform::{Desktop, Frame, ScreenCapture, WindowId, desktop, screen_capture};
 use perora_core::selection::{Choice, Highlight, Mode, Session};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::window::Color;
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
@@ -133,8 +133,8 @@ struct SelectionView {
 /// Where the pointer is on the virtual screen, in physical pixels: what `selection-pointer` carries,
 /// with the selection it is over. The windows draw their + by it, also where the pointer is over one
 /// window and another has it (a press that goes on across monitors).
-#[derive(Serialize, Clone, Copy)]
-struct At {
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct At {
     x: i32,
     y: i32,
 }
@@ -715,12 +715,21 @@ pub fn selection_ready(app: AppHandle, window: WebviewWindow, id: u64) {
 }
 
 /// The pointer did something over one of the windows: `down`, `move`, `up`, or `leave` (a press was
-/// broken off). Where it is, is asked of the system.
+/// broken off), `at` where the page saw it.
+///
+/// That place is taken while it is on the window's own monitor. The system's pointer stays where it
+/// was when the press is not a mouse's (a VR headset's, as Virtual Desktop sends it): the press then
+/// seemed a click where it began. Off the monitor, a press held on from here, the page's place is
+/// reckoned at this monitor's scale, wrong for another of another scale: there the system is asked.
 #[tauri::command]
-pub fn selection_pointer(app: AppHandle, window: WebviewWindow, id: u64, what: String) {
-    let Ok(pointer) = desktop().pointer() else {
-        return;
-    };
+pub fn selection_pointer(
+    app: AppHandle,
+    window: WebviewWindow,
+    id: u64,
+    what: String,
+    at: Option<At>,
+) {
+    let system = desktop().pointer().ok();
     let perora = app.state::<Perora>();
     // (Read before the selection is locked: nothing else is held while that is.)
     let crosshair = perora.setting(|settings| settings.show_crosshair);
@@ -732,13 +741,21 @@ pub fn selection_pointer(app: AppHandle, window: WebviewWindow, id: u64, what: S
         return;
     };
 
+    let bounds = monitor_of(&window)
+        .and_then(|monitor| active.session.layout().monitors.get(monitor))
+        .map(|on| on.bounds);
+    let seen = at
+        .map(|at| Point::new(at.x, at.y))
+        .filter(|seen| bounds.is_some_and(|bounds| bounds.contains(*seen)));
+    let Some(pointer) = seen.or(system) else {
+        return;
+    };
+
     // Each window draws its + from the pointer's moves over it. A press goes on being reported by
     // the window it started in, also when the pointer is over another monitor, whose window then
     // hears nothing: only then are the windows told where it is, and once more as it comes back
     // (for the other window to take its + away). Not at every move: that would go to every window.
-    let away = monitor_of(&window)
-        .and_then(|monitor| active.session.layout().monitors.get(monitor))
-        .is_some_and(|on| !on.bounds.contains(pointer));
+    let away = bounds.is_some_and(|bounds| !bounds.contains(pointer));
     let tell = (crosshair && (away || active.pointer_away)).then_some(PointerAt {
         id,
         at: At {
