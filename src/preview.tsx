@@ -514,7 +514,7 @@ function Awaiting({ dropping, t }: { dropping: boolean; t: Translate }) {
       if (event.key === "Escape") {
         event.preventDefault();
         void getCurrentWindow().close();
-      } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "v" && !event.repeat) {
+      } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.code === "KeyV" && !event.repeat) {
         event.preventDefault();
         void openClipboard();
       }

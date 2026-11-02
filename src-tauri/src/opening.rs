@@ -21,6 +21,10 @@ use crate::preview;
 const MOST_PIXELS: u64 = 64 * 1024 * 1024;
 const LONGEST_SIDE: u32 = 16_384;
 
+/// How often the clipboard is asked for again while another program has it, and how long between.
+const CLIPBOARD_ASKED: u32 = 5;
+const CLIPBOARD_ASKED_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// One image is put in the editor at a time: what is asked about one (a drawing it would take the
 /// place of) is asked and answered before the next is looked at.
 static PUTTING_IN: Mutex<()> = Mutex::new(());
@@ -57,15 +61,27 @@ pub fn open_clipboard(app: &AppHandle) {
             crate::notify(&app, Lasting::Long, language.nothing_on_clipboard());
             return;
         };
+        // (A file that is no longer there, or a folder, is passed over: the image, if there is one.)
         if let Some(file) = clipboard
             .get()
             .file_list()
             .ok()
             .and_then(|files| files.into_iter().next())
+            .filter(|file| file.is_file())
         {
             return open_now(&app, &file);
         }
-        let Ok(image) = clipboard.get_image() else {
+        // Another program may have the clipboard for a moment: asked again a few times, not told
+        // that there is nothing there.
+        let mut image = clipboard.get_image();
+        for _ in 0..CLIPBOARD_ASKED {
+            if !matches!(image, Err(arboard::Error::ClipboardOccupied)) {
+                break;
+            }
+            std::thread::sleep(CLIPBOARD_ASKED_EVERY);
+            image = clipboard.get_image();
+        }
+        let Ok(image) = image else {
             crate::notify(&app, Lasting::Long, language.nothing_on_clipboard());
             return;
         };
