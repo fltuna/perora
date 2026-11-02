@@ -549,13 +549,19 @@ function ModeBar({
 function Crosshair({ selection }: { selection: Selection }) {
   const { id, area, scale } = selection;
   const [at, setAt] = useState<Spot | null>(selection.pointer);
+  // Over the mode bar the system's pointer is shown, and the + is not (owner, 2026-11-02: 「上の選択
+  // ウィンドウに合わせてるときは非表示にするようにしたい」).
+  const [overBar, setOverBar] = useState(false);
 
   useEffect(() => {
     const listening = listen<{ id: number } & Spot>("selection-pointer", ({ payload }) => {
       if (payload.id === id) setAt({ x: payload.x, y: payload.y });
     });
     // (Off this monitor, as with a press held on from here, the + is not drawn here.)
-    const onMove = (event: PointerEvent) => setAt({ x: area.x + event.clientX * scale, y: area.y + event.clientY * scale });
+    const onMove = (event: PointerEvent) => {
+      setAt({ x: area.x + event.clientX * scale, y: area.y + event.clientY * scale });
+      setOverBar(event.target instanceof Element && event.target.closest(".bar") !== null);
+    };
     const onOut = (event: PointerEvent) => event.relatedTarget === null && setAt(null);
     window.addEventListener("pointermove", onMove, true);
     document.addEventListener("pointerout", onOut);
@@ -566,7 +572,7 @@ function Crosshair({ selection }: { selection: Selection }) {
     };
   }, [id, area.x, area.y, area.width, area.height, scale]);
 
-  if (!at || !on(area, at)) return null;
+  if (!at || !on(area, at) || overBar) return null;
   // Two lines that cross on the point, white in black: seen on anything. A whole +, the point
   // included (owner, 2026-11-02: 「真ん中開けずにちゃんとした + であってほしい」).
   const arms = "M15.5 0v31M0 15.5h31";
