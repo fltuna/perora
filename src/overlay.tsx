@@ -577,27 +577,41 @@ function ModeBar({
 
 /** A + where the pointer is, drawn by the page: the system's pointer is not seen everywhere the screen
     is (in VR, owner 2026-11-02), and the + shows the pixel a frame starts at. Every window draws it
-    while the pointer is on its monitor, from its own pointer moves (also over the bar, the list and
-    the tour). The pointer leaving the window takes it away. A press held on into another monitor is
+    while the pointer is on its monitor, from its own pointer moves (over the tour too; not over the
+    bar or a card of the window list, where the system's pointer is). The pointer leaving the window takes it away. A press held on into another monitor is
     still reported by the window it started in, and the one under the pointer hears nothing: for
     that, the application tells every window where the pointer is. */
 function Crosshair({ selection }: { selection: Selection }) {
   const { id, area, scale } = selection;
   const [at, setAt] = useState<Spot | null>(selection.pointer);
-  // Over the mode bar the system's pointer is shown, and the + is not (owner, 2026-11-02: 「上の選択
-  // ウィンドウに合わせてるときは非表示にするようにしたい」).
-  const [overBar, setOverBar] = useState(false);
+  // Over the mode bar and the cards of the window list the system's pointer is shown, and the + is not
+  // (owner, 2026-11-02: 「上の選択ウィンドウに合わせてるときは非表示にするようにしたい」; and
+  // 「ウィンドウカード上はカーソルでほしいね」).
+  const [overOwn, setOverOwn] = useState(false);
+  // Where this window last saw the pointer (in its own pixels), to look again when what is under it
+  // changes with the pointer still: a mode picked by a key brings the list in, or takes it away.
+  const seen = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const listening = listen<{ id: number } & Spot>("selection-pointer", ({ payload }) => {
-      if (payload.id === id) setAt({ x: payload.x, y: payload.y });
+      if (payload.id !== id) return;
+      // (Told, not seen here: what is under it is not known, and a press held on is over nothing.)
+      seen.current = null;
+      setOverOwn(false);
+      setAt({ x: payload.x, y: payload.y });
     });
     // (Off this monitor, as with a press held on from here, the + is not drawn here.)
     const onMove = (event: PointerEvent) => {
+      seen.current = { x: event.clientX, y: event.clientY };
       setAt({ x: area.x + event.clientX * scale, y: area.y + event.clientY * scale });
-      setOverBar(event.target instanceof Element && event.target.closest(".bar") !== null);
+      setOverOwn(event.target instanceof Element && underOwn(event.target));
     };
-    const onOut = (event: PointerEvent) => event.relatedTarget === null && setAt(null);
+    const onOut = (event: PointerEvent) => {
+      if (event.relatedTarget !== null) return;
+      seen.current = null;
+      setOverOwn(false);
+      setAt(null);
+    };
     window.addEventListener("pointermove", onMove, true);
     document.addEventListener("pointerout", onOut);
     return () => {
@@ -607,7 +621,18 @@ function Crosshair({ selection }: { selection: Selection }) {
     };
   }, [id, area.x, area.y, area.width, area.height, scale]);
 
-  if (!at || !on(area, at) || overBar) return null;
+  // The mode changed (by a key, the pointer still): look at what is under the pointer now, once the
+  // screen is drawn for the new mode.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (!seen.current) return;
+      const under = document.elementFromPoint(seen.current.x, seen.current.y);
+      setOverOwn(under !== null && underOwn(under));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selection.mode]);
+
+  if (!at || !on(area, at) || overOwn) return null;
   // Two lines that cross on the point, white in black: seen on anything. A whole +, the point
   // included (owner, 2026-11-02: 「真ん中開けずにちゃんとした + であってほしい」).
   const arms = "M15.5 0v31M0 15.5h31";
@@ -624,6 +649,11 @@ function Crosshair({ selection }: { selection: Selection }) {
       <path d={arms} stroke="#fff" strokeWidth="1" />
     </svg>
   );
+}
+
+/** Whether the system's pointer is the one shown there (the bar, a card of the list), not the +. */
+function underOwn(element: Element) {
+  return element.closest(".bar, .windows button") !== null;
 }
 
 function on(area: Area, spot: Spot) {
