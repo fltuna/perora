@@ -1807,13 +1807,15 @@ button:focus-visible {
   transition-timing-function: ease-in;
 }
 
-/* A + where the pointer is: its middle on the pointer's pixel. Over everything, and never in the way. */
+/* A + where the pointer is: its middle line on the pointer's pixel (the lines run through the middle
+   of the 31px square, from the pixel's own edge 15px before). Over everything, the tour too, and
+   never in the way. */
 .overlay .crosshair {
   position: absolute;
-  margin: -15.5px 0 0 -15.5px;
+  margin: -15px 0 0 -15px;
   overflow: visible;
   pointer-events: none;
-  z-index: 10;
+  z-index: 200;
 }
 
 .overlay .modes {

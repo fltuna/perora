@@ -76,6 +76,9 @@ struct Active {
     /// Whether the screen is showing its tour: nothing on any monitor is chosen meanwhile, and
     /// nothing is shown as what would be.
     touring: bool,
+    /// Whether the pointer was last seen away from the monitor of the window that reported it (a
+    /// press held on into another monitor): the windows were told where it is, for their +.
+    pointer_away: bool,
 }
 
 impl State {
@@ -381,6 +384,7 @@ pub fn start(app: &AppHandle, hide: bool) -> Result<(), String> {
         highlight,
         thumbnails: thumbnails.clone(),
         touring: false,
+        pointer_away: false,
     });
     // Only now: the thread ends as soon as it finds its selection gone.
     take_window_pictures(app, id, still, windows, own, pictures, thumbnails);
@@ -705,23 +709,13 @@ pub fn selection_ready(app: AppHandle, window: WebviewWindow, id: u64) {
 /// The pointer did something over one of the windows: `down`, `move`, `up`, or `leave` (a press was
 /// broken off). Where it is, is asked of the system.
 #[tauri::command]
-pub fn selection_pointer(app: AppHandle, id: u64, what: String) {
+pub fn selection_pointer(app: AppHandle, window: WebviewWindow, id: u64, what: String) {
     let Ok(pointer) = desktop().pointer() else {
         return;
     };
-    // The + follows the pointer, whatever comes of what it did. (Not under the lock, as nothing told
-    // to the windows is; one of another selection, or of none, is let go of by them.)
-    let _ = app.emit(
-        "selection-pointer",
-        PointerAt {
-            id,
-            at: At {
-                x: pointer.x,
-                y: pointer.y,
-            },
-        },
-    );
     let perora = app.state::<Perora>();
+    // (Read before the selection is locked: nothing else is held while that is.)
+    let crosshair = perora.setting(|settings| settings.show_crosshair);
     let mut guard = perora.selection.lock();
     let Some(active) = guard
         .as_mut()
@@ -729,6 +723,22 @@ pub fn selection_pointer(app: AppHandle, id: u64, what: String) {
     else {
         return;
     };
+
+    // Each window draws its + from the pointer's moves over it. A press goes on being reported by
+    // the window it started in, also when the pointer is over another monitor, whose window then
+    // hears nothing: only then are the windows told where it is, and once more as it comes back
+    // (for the other window to take its + away). Not at every move: that would go to every window.
+    let away = monitor_of(&window)
+        .and_then(|monitor| active.session.layout().monitors.get(monitor))
+        .is_some_and(|on| !on.bounds.contains(pointer));
+    let tell = (crosshair && (away || active.pointer_away)).then_some(PointerAt {
+        id,
+        at: At {
+            x: pointer.x,
+            y: pointer.y,
+        },
+    });
+    active.pointer_away = away;
 
     let choice = match what.as_str() {
         "down" => {
@@ -757,6 +767,9 @@ pub fn selection_pointer(app: AppHandle, id: u64, what: String) {
     let redraw = highlight != active.highlight;
     active.highlight = highlight;
     drop(guard);
+    if let Some(tell) = tell {
+        let _ = app.emit("selection-pointer", tell);
+    }
     if redraw {
         changed(&app);
     }

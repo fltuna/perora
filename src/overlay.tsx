@@ -204,7 +204,7 @@ export function Overlay() {
           onTour={tour.start}
         />
       )}
-      {selection.crosshair && !tour.on && <Crosshair key={selection.id} selection={selection} />}
+      {selection.crosshair && <Crosshair key={selection.id} selection={selection} />}
       {tour.on && <Tour steps={captureSteps(selection, local, t)} t={t} onEnd={tour.end} />}
     </div>
   );
@@ -473,12 +473,14 @@ function ModeBar({
   const pointedAt = near && !dragging;
   // (No number of seconds, or none above 0: it stays.)
   const stays = touring || pointedAt || !(barHideSeconds > 0);
+  // (A frame being dragged sends it away at once.)
+  const draggedAway = dragging && !touring && barHideSeconds > 0;
   useEffect(() => {
-    setTucked(false);
-    if (stays) return;
+    setTucked(draggedAway);
+    if (stays || draggedAway) return;
     const timer = window.setTimeout(() => setTucked(true), barHideSeconds * 1000);
     return () => window.clearTimeout(timer);
-  }, [stays, shownAt, barHideSeconds]);
+  }, [stays, draggedAway, shownAt, barHideSeconds]);
 
   // Where the pointer is, against where the bar is when shown (its place, not where it slid to: the
   // offsets do not move with a transform). In the capture phase: the bar keeps its own moves from
@@ -495,8 +497,14 @@ function ModeBar({
           event.clientY <= place.offsetTop + place.offsetHeight + BAR_REACH,
       );
     };
+    // The pointer gone from this monitor (up through its top edge, to another monitor): not near.
+    const onOut = (event: PointerEvent) => event.relatedTarget === null && setNear(false);
     window.addEventListener("pointermove", onMove, true);
-    return () => window.removeEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerout", onOut);
+    return () => {
+      window.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerout", onOut);
+    };
   }, []);
 
   return (
@@ -533,33 +541,27 @@ function ModeBar({
 
 /** A + where the pointer is, drawn by the page: the system's pointer is not seen everywhere the screen
     is (in VR, owner 2026-11-02), and the + shows the pixel a frame starts at. Every window draws it
-    while the pointer is on its monitor: told where by the application, which also knows of a press
-    that went on to another monitor; and straight from the page's own pointer moves, which come
-    sooner. */
+    while the pointer is on its monitor, from its own pointer moves (also over the bar, the list and
+    the tour). The pointer leaving the window takes it away. A press held on into another monitor is
+    still reported by the window it started in, and the one under the pointer hears nothing: for
+    that, the application tells every window where the pointer is. */
 function Crosshair({ selection }: { selection: Selection }) {
   const { id, area, scale } = selection;
   const [at, setAt] = useState<Spot | null>(selection.pointer);
-  // The page's own moves are newer than what the application says of the same ones: for a moment
-  // after one, what the application says is not drawn (it would pull the + back).
-  const lastOwn = useRef(0);
 
   useEffect(() => {
     const listening = listen<{ id: number } & Spot>("selection-pointer", ({ payload }) => {
-      if (payload.id !== id) return;
-      if (on(area, payload) && performance.now() - lastOwn.current < 150) return;
-      setAt({ x: payload.x, y: payload.y });
+      if (payload.id === id) setAt({ x: payload.x, y: payload.y });
     });
-    const onMove = (event: PointerEvent) => {
-      const [x, y] = [event.clientX, event.clientY];
-      // (A press held on from here reports moves over other monitors too: those are told.)
-      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return;
-      lastOwn.current = performance.now();
-      setAt({ x: area.x + x * scale, y: area.y + y * scale });
-    };
+    // (Off this monitor, as with a press held on from here, the + is not drawn here.)
+    const onMove = (event: PointerEvent) => setAt({ x: area.x + event.clientX * scale, y: area.y + event.clientY * scale });
+    const onOut = (event: PointerEvent) => event.relatedTarget === null && setAt(null);
     window.addEventListener("pointermove", onMove, true);
+    document.addEventListener("pointerout", onOut);
     return () => {
       void listening.then((stop) => stop());
       window.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerout", onOut);
     };
   }, [id, area.x, area.y, area.width, area.height, scale]);
 
