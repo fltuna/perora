@@ -932,8 +932,11 @@ function Seconds({
         onChange={(event) => {
           const now = event.target.value;
           setTyped(now);
-          if (!/^\d+(\.\d+)?$/.test(now) || Number(now) > MOST_SECONDS || Number(now) === set.current) return;
-          set.current = Number(now);
+          // (As the application keeps it: 0, or a tenth or more, to the thousandth.)
+          const seconds = Math.round(Number(now) * 1000) / 1000;
+          if (!/^(\d+(\.\d*)?|\.\d+)$/.test(now) || seconds > MOST_SECONDS || (seconds > 0 && seconds < 0.1)) return;
+          if (seconds === set.current) return;
+          set.current = seconds;
           onChange(set.current);
         }}
         onBlur={() => setTyped(String(set.current))}

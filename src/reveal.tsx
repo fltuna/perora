@@ -47,11 +47,12 @@ export function RevealScreen() {
   const save = () => void invoke("reveal_done", { zone });
   const cancel = () => void invoke("reveal_done", { zone: null });
 
-  // Enter saves, Escape gives up; the arrows are the part's (the stage has the keyboard).
+  // Enter saves, Escape gives up; the arrows are the part's (the stage has the keyboard). On a
+  // button, Enter is the button's: Cancel is not a save.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.repeat) return;
-      if (event.key === "Enter") save();
+      if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) save();
       if (event.key === "Escape") cancel();
     };
     window.addEventListener("keydown", onKey);

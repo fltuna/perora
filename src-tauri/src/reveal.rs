@@ -3,7 +3,7 @@
 //! and the bar drawn where it is. The part is drawn and adjusted there as the editor's crop is
 //! (owner, 2026-11-02: 「設定ボタン押したらキャプチャ画面みたいなのが出てくるイメージ！」).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,6 +30,8 @@ const SHOW_ANYWAY: Duration = Duration::from_millis(1500);
 pub struct State {
     /// How many stills there were.
     next: AtomicU64,
+    /// Whether the screen is on its way up: from the press to the still being kept.
+    opening: AtomicBool,
     /// The still behind the screen while it is up, and which one it is (a new one each time, so
     /// that the page does not show the one before).
     still: Mutex<Option<(u64, Arc<Vec<u8>>)>>,
@@ -48,11 +50,33 @@ pub struct View {
     still: Option<u64>,
 }
 
-/// From the settings: the screen comes up. Off the main thread: the still takes a moment.
+/// Whether the screen is up, or on its way: no capture is taken meanwhile (it would take this
+/// screen, and bring the main window back over it).
+pub fn is_up(app: &AppHandle) -> bool {
+    let state = &app.state::<Perora>().reveal;
+    state.opening.load(Ordering::Acquire) || state.still.lock().unwrap().is_some()
+}
+
+/// From the settings: the screen comes up. Off the main thread: the still takes a moment. Once:
+/// pressed again while it is coming or up, nothing more happens.
 #[tauri::command]
 pub fn main_edit_reveal_area(app: AppHandle) {
+    if is_up(&app)
+        || app
+            .state::<Perora>()
+            .reveal
+            .opening
+            .swap(true, Ordering::AcqRel)
+    {
+        return;
+    }
     std::thread::spawn(move || {
-        if let Err(error) = open(&app) {
+        let result = open(&app);
+        app.state::<Perora>()
+            .reveal
+            .opening
+            .store(false, Ordering::Release);
+        if let Err(error) = result {
             eprintln!("the screen for the bar's area: {error}");
             close(&app);
         }
@@ -97,7 +121,7 @@ fn open(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| error.to_string())?
         .crop(monitor)
         .map(|part| part.to_bmp())
-        .unwrap_or_default();
+        .ok_or("the monitor is not in the capture")?;
     let perora = app.state::<Perora>();
     let id = perora.reveal.next.fetch_add(1, Ordering::Relaxed) + 1;
     *perora.reveal.still.lock().unwrap() = Some((id, Arc::new(still)));
@@ -161,8 +185,9 @@ fn show(app: &AppHandle) {
     }
 }
 
-/// Takes the screen down, and the main window comes back.
-fn close(app: &AppHandle) {
+/// Takes the screen down, and the main window comes back. (Also when the window is closed by the
+/// system, as with Alt+F4.)
+pub fn close(app: &AppHandle) {
     *app.state::<Perora>().reveal.still.lock().unwrap() = None;
     if let Some(window) = app.get_webview_window(LABEL) {
         let _ = window.hide();
@@ -209,8 +234,21 @@ pub fn reveal_ready(app: AppHandle, window: WebviewWindow, still: u64) {
 }
 
 /// Done with the screen: the part is set when one is given (saved), not when none is (given up).
+/// Only from the screen, while it is up, and once.
 #[tauri::command]
-pub fn reveal_done(app: AppHandle, zone: Option<serde_json::Value>) {
+pub fn reveal_done(app: AppHandle, window: WebviewWindow, zone: Option<serde_json::Value>) {
+    if window.label() != LABEL
+        || app
+            .state::<Perora>()
+            .reveal
+            .still
+            .lock()
+            .unwrap()
+            .take()
+            .is_none()
+    {
+        return;
+    }
     if let Some(zone) = zone.as_ref().and_then(Zone::from_value) {
         crate::settings::update(&app, |settings| settings.bar_reveal_area = zone);
         main_window::changed(&app);

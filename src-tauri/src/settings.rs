@@ -320,9 +320,10 @@ impl Settings {
     }
 }
 
-/// A number of seconds as it can be set: from 0 to as many as can be chosen, to the thousandth.
+/// A number of seconds as it can be set: 0 (for good), or from a tenth to as many as can be chosen,
+/// to the thousandth. (Less than a tenth is too short to see, and would be taken for 0 rounded.)
 pub fn seconds_to_set(seconds: f64) -> Option<f64> {
-    (seconds.is_finite() && (0.0..=MOST_SECONDS).contains(&seconds))
+    (seconds.is_finite() && (seconds == 0.0 || (0.1..=MOST_SECONDS).contains(&seconds)))
         .then(|| (seconds * 1000.0).round() / 1000.0)
 }
 
@@ -1007,7 +1008,7 @@ mod tests {
             parse(br#"{"noticeSeconds": 2.5}"#).unwrap().notice_seconds,
             2.5
         );
-        for seconds in ["\"5\"", "-1", "-0.5", "3600.5", "true"] {
+        for seconds in ["\"5\"", "-1", "-0.5", "0.05", "3600.5", "true"] {
             let file = format!(r#"{{"noticeSeconds": {seconds}}}"#);
             let odd = parse(file.as_bytes()).unwrap();
             assert_eq!(odd.notice_seconds, 7.0, "{seconds}");

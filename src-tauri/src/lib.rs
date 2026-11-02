@@ -290,6 +290,9 @@ pub fn run() {
                     main_window::close(app);
                 } else if window.label() == notice::LABEL {
                     notice::put_away(app);
+                } else if window.label() == reveal::LABEL {
+                    // Alt+F4 on the screen that sets the bar's area: given up.
+                    reveal::close(app);
                 } else if app.state::<Perora>().selection.is_active() {
                     // Alt+F4 on the selection screen is "never mind".
                     selection::cancel(app);
@@ -804,7 +807,8 @@ fn capture(app: &AppHandle) {
         return;
     }
     let perora = app.state::<Perora>();
-    if perora.capturing.swap(true, Ordering::AcqRel) {
+    // (Not while the screen that sets the bar's area is up: it would be in the picture.)
+    if reveal::is_up(app) || perora.capturing.swap(true, Ordering::AcqRel) {
         return;
     }
 
