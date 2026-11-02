@@ -160,19 +160,11 @@ fn put_in(app: &AppHandle, frame: Frame, name: &str) {
         if agreed == Some(drawn) {
             break;
         }
-        let mut asked = app
-            .dialog()
-            .message(language.open_over_drawing(name))
-            .title("Perora")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                language.open_anyway(),
-                language.keep_drawing(),
-            ));
-        if let Some(editor) = app.get_webview_window(preview::LARGE) {
-            asked = asked.parent(&editor);
-        }
-        if !asked.blocking_show() {
+        if !ask_over_drawing(
+            app,
+            &language.open_over_drawing(name),
+            language.open_anyway(),
+        ) {
             return;
         }
         agreed = Some(drawn);
@@ -185,6 +177,26 @@ fn put_in(app: &AppHandle, frame: Frame, name: &str) {
 #[tauri::command]
 pub fn main_open_editor(app: AppHandle) {
     preview::open_editor(&app);
+}
+
+/// Asks whether what is drawn on the image in the editor may be given up for what comes next: `said`
+/// says what that is, `go` is the button that goes ahead. Waits for the answer (not on the thread
+/// the windows live on).
+pub fn ask_over_drawing(app: &AppHandle, said: &str, go: String) -> bool {
+    let language = app.state::<Perora>().language();
+    let mut asked = app
+        .dialog()
+        .message(said)
+        .title("Perora")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            go,
+            language.keep_drawing(),
+        ));
+    if let Some(editor) = app.get_webview_window(preview::LARGE) {
+        asked = asked.parent(&editor);
+    }
+    asked.blocking_show()
 }
 
 /// What is on the clipboard, in the editor: from the main window, or the editor that waits for an

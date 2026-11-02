@@ -902,6 +902,21 @@ fn capture(app: &AppHandle) {
     std::thread::spawn(move || {
         let perora = app.state::<Perora>();
         let _done = Done(&perora.capturing);
+        // A capture that goes to the preview takes the place of the image there: when something is
+        // drawn on that, the user says first whether that is what they want (owner, 2026-11-02:
+        // 「撮影入る前に出そうか」). Not when the capture goes elsewhere (only copied, or uploaded
+        // at once): the image stays then.
+        if goes_to_preview(&perora) && preview::drawn_on(&app).is_some() {
+            if !opening::ask_over_drawing(
+                &app,
+                &perora.language().capture_over_drawing(),
+                perora.language().capture_anyway(),
+            ) {
+                return;
+            }
+            // (The question is gone from the screen before the screen is taken.)
+            std::thread::sleep(SETTLE);
+        }
         // The main window is not what is to be captured (unless the user wants Perora's windows in
         // the picture), nor is a notice: gone at once (the window is back when this is over). A
         // window that was just hidden is on screen for one more frame.
@@ -918,6 +933,13 @@ fn capture(app: &AppHandle) {
             );
         }
     });
+}
+
+/// Whether a capture goes to the preview, as `deliver` has it: not when it is uploaded at once, nor
+/// when it is only put on the clipboard.
+fn goes_to_preview(perora: &Perora) -> bool {
+    let immediately = perora.uploads() && perora.setting(|settings| settings.upload_immediately);
+    !immediately && perora.setting(|settings| settings.after_capture) != settings::After::Copy
 }
 
 /// What the user selected goes to the preview; or, when the user chose so, straight to the server.

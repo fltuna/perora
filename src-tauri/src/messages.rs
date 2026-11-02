@@ -372,6 +372,15 @@ impl Language {
         )
     }
 
+    /// Asked before a capture takes the place of an image that is drawn on.
+    pub fn capture_over_drawing(&self) -> String {
+        self.text("capture.overDrawing", &[])
+    }
+
+    pub fn capture_anyway(&self) -> String {
+        self.text("capture.anyway", &[])
+    }
+
     pub fn open_anyway(&self) -> String {
         self.text("open.anyway", &[])
     }
@@ -523,6 +532,8 @@ mod tests {
             english.open_over_drawing("n"),
             english.open_anyway(),
             english.keep_drawing(),
+            english.capture_over_drawing(),
+            english.capture_anyway(),
             english.clipboard_image(),
             english.nothing_on_clipboard(),
             english.clipboard_too_large(1, 2),

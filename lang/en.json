@@ -212,6 +212,8 @@
   "open.overDrawing": "Opening {name} discards what you drew on the current image. Open it?",
   "open.anyway": "Open",
   "open.keepDrawing": "Cancel",
+  "capture.overDrawing": "Capturing discards what you drew on the current image. Capture anyway?",
+  "capture.anyway": "Capture",
   "open.clipboardImage": "the image on the clipboard",
   "open.clipboardEmpty": "There is no image on the clipboard.",
   "open.clipboardTooLarge": "The image on the clipboard is too large to open ({width} × {height}).",

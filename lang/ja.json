@@ -212,6 +212,8 @@
   "open.overDrawing": "{name} を開くと、今の画像に描いた内容は破棄されます。開きますか？",
   "open.anyway": "開く",
   "open.keepDrawing": "キャンセル",
+  "capture.overDrawing": "撮影すると、今の画像に描いた内容は破棄されます。撮影しますか？",
+  "capture.anyway": "撮影",
   "open.clipboardImage": "クリップボードの画像",
   "open.clipboardEmpty": "クリップボードに画像がありません。",
   "open.clipboardTooLarge": "クリップボードの画像は大きすぎるため開けません ({width} × {height})。",
