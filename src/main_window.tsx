@@ -19,6 +19,10 @@ interface View {
     uploadImmediately: boolean;
     enableUpload: boolean;
     startMode: string;
+    /** How long the selection screen's mode bar stays, in seconds; 0 for for good. */
+    barHideSeconds: number;
+    /** Whether the selection screen draws a + where the pointer is. */
+    showCrosshair: boolean;
     /** Whether Perora's own windows are hidden before the screen is captured. */
     hideOwnWindows: boolean;
     copyToClipboard: boolean;
@@ -445,6 +449,22 @@ function Capture({ view, t }: { view: View; t: Translate }) {
           />
         </Setting>
       </Reveal>
+      <Section title={t("main.capture.section.screen")} />
+      <Setting title={t("main.capture.barHideSeconds")} hint={t("main.capture.barHideSecondsHint")}>
+        <Seconds
+          label={t("main.capture.barHideSeconds")}
+          unit={t("main.general.seconds")}
+          value={settings.barHideSeconds}
+          onChange={(seconds) => set("barHideSeconds", seconds)}
+        />
+      </Setting>
+      <Setting title={t("main.capture.showCrosshair")} hint={t("main.capture.showCrosshairHint")}>
+        <Switch
+          label={t("main.capture.showCrosshair")}
+          on={settings.showCrosshair}
+          onChange={(on) => set("showCrosshair", on)}
+        />
+      </Setting>
       <Section title={t("main.capture.section.after")} />
       <Setting title={t("main.capture.after")} hint={t("main.capture.afterHint")}>
         <select

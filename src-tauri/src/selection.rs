@@ -115,8 +115,30 @@ struct SelectionView {
     modes: Vec<&'static str>,
     /// The windows that can be chosen, front to back: for the list of them.
     windows: Vec<WindowView>,
+    /// How long the mode bar stays before it slides up out of the way, in seconds; 0 for for good.
+    bar_hide_seconds: u32,
+    /// Whether a + is drawn where the pointer is.
+    crosshair: bool,
+    /// Where the pointer is as the window asks (until it moves: then `selection-pointer` says).
+    pointer: Option<At>,
     #[serde(flatten)]
     now: Now,
+}
+
+/// Where the pointer is on the virtual screen, in physical pixels: what `selection-pointer` carries,
+/// with the selection it is over. The windows draw their + by it, also where the pointer is over one
+/// window and another has it (a press that goes on across monitors).
+#[derive(Serialize, Clone, Copy)]
+struct At {
+    x: i32,
+    y: i32,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct PointerAt {
+    id: u64,
+    #[serde(flatten)]
+    at: At,
 }
 
 #[derive(Serialize)]
@@ -628,6 +650,9 @@ pub fn image(perora: &Perora, path: &[&str]) -> Option<(&'static str, Arc<Vec<u8
 pub fn selection_state(app: AppHandle, window: WebviewWindow) -> View {
     let perora = app.state::<Perora>();
     let language = perora.language();
+    // (Read before the selection is locked: nothing else is held while that is.)
+    let (bar_hide_seconds, crosshair) =
+        perora.setting(|settings| (settings.bar_hide_seconds, settings.show_crosshair));
     let selection = monitor_of(&window).and_then(|monitor| {
         let active = perora.selection.lock();
         let active = active.as_ref()?;
@@ -652,6 +677,12 @@ pub fn selection_state(app: AppHandle, window: WebviewWindow) -> View {
                     area: window.bounds.into(),
                 })
                 .collect(),
+            bar_hide_seconds,
+            crosshair,
+            pointer: desktop().pointer().ok().map(|pointer| At {
+                x: pointer.x,
+                y: pointer.y,
+            }),
             now: active.now(),
         })
     });
@@ -678,6 +709,18 @@ pub fn selection_pointer(app: AppHandle, id: u64, what: String) {
     let Ok(pointer) = desktop().pointer() else {
         return;
     };
+    // The + follows the pointer, whatever comes of what it did. (Not under the lock, as nothing told
+    // to the windows is; one of another selection, or of none, is let go of by them.)
+    let _ = app.emit(
+        "selection-pointer",
+        PointerAt {
+            id,
+            at: At {
+                x: pointer.x,
+                y: pointer.y,
+            },
+        },
+    );
     let perora = app.state::<Perora>();
     let mut guard = perora.selection.lock();
     let Some(active) = guard

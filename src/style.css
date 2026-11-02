@@ -1797,6 +1797,23 @@ button:focus-visible {
   align-items: center;
   gap: 8px;
   cursor: default;
+  transition: transform 0.2s ease-out;
+}
+
+/* Slid up out of the way (above the screen, past its own shadow); back while the pointer is at its
+   place. */
+.overlay .bar.tucked {
+  transform: translate(-50%, calc(-100% - 24px - 32px));
+  transition-timing-function: ease-in;
+}
+
+/* A + where the pointer is: its middle on the pointer's pixel. Over everything, and never in the way. */
+.overlay .crosshair {
+  position: absolute;
+  margin: -15.5px 0 0 -15.5px;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 10;
 }
 
 .overlay .modes {

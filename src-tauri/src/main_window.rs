@@ -114,6 +114,10 @@ struct SettingsView {
     upload_immediately: bool,
     enable_upload: bool,
     start_mode: &'static str,
+    /// How long the selection screen's mode bar stays, in seconds; 0 for for good.
+    bar_hide_seconds: u32,
+    /// Whether the selection screen draws a + where the pointer is.
+    show_crosshair: bool,
     /// Whether Perora's own windows are hidden before the screen is captured.
     hide_own_windows: bool,
     copy_to_clipboard: bool,
@@ -360,6 +364,8 @@ pub fn main_state(app: AppHandle) -> View {
             upload_immediately: settings.upload_immediately,
             enable_upload: settings.upload_enabled,
             start_mode: settings.start_mode.name(),
+            bar_hide_seconds: settings.bar_hide_seconds,
+            show_crosshair: settings.show_crosshair,
             hide_own_windows: settings.hide_own_windows,
             copy_to_clipboard: settings.copy_to_clipboard,
             clear_clipboard_on_discard: settings.clear_clipboard_on_discard,
@@ -565,9 +571,10 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
         }
         return changed(&app);
     }
-    // (How long a notice stays, and the small preview, are the ones that are numbers: of seconds,
-    // no more than can be chosen. They count from the next one that appears.)
-    if let "noticeSeconds" | "previewSeconds" = setting.as_str() {
+    // (How long a notice stays, the small preview, and the selection screen's mode bar, are the ones
+    // that are numbers: of seconds, no more than can be chosen. They count from the next one that
+    // appears.)
+    if let "noticeSeconds" | "previewSeconds" | "barHideSeconds" = setting.as_str() {
         let seconds = value
             .as_u64()
             .and_then(|seconds| u32::try_from(seconds).ok())
@@ -575,6 +582,7 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
         if let Some(seconds) = seconds {
             settings::update(&app, |settings| match setting.as_str() {
                 "noticeSeconds" => settings.notice_seconds = seconds,
+                "barHideSeconds" => settings.bar_hide_seconds = seconds,
                 _ => settings.preview_seconds = seconds,
             });
         }
@@ -597,6 +605,7 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
             ("enableUpload", Some(on), ..) => settings.upload_enabled = on,
             ("copyToClipboard", Some(on), ..) => settings.copy_to_clipboard = on,
             ("hideOwnWindows", Some(on), ..) => settings.hide_own_windows = on,
+            ("showCrosshair", Some(on), ..) => settings.show_crosshair = on,
             ("clearClipboardOnDiscard", Some(on), ..) => settings.clear_clipboard_on_discard = on,
             ("askWhereToSave", Some(on), ..) => settings.ask_where_to_save = on,
             ("saveOnCapture", Some(on), ..) => settings.save_on_capture = on,
@@ -819,6 +828,8 @@ mod tests {
             upload_immediately: true,
             enable_upload: true,
             start_mode: "smart",
+            bar_hide_seconds: 5,
+            show_crosshair: true,
             hide_own_windows: true,
             copy_to_clipboard: true,
             clear_clipboard_on_discard: true,
@@ -860,6 +871,7 @@ mod tests {
             "enableUpload",
             "copyToClipboard",
             "hideOwnWindows",
+            "showCrosshair",
             "clearClipboardOnDiscard",
             "askWhereToSave",
             "saveOnCapture",
@@ -871,6 +883,7 @@ mod tests {
             assert_eq!(view[name], true, "{name}");
         }
         assert_eq!(view["startMode"], "smart");
+        assert_eq!(view["barHideSeconds"], 5);
         assert_eq!(view["afterCapture"], "edit");
         assert_eq!(view["defaultHider"], "mosaic");
         // (And what a capture leaves as, by the names of `Leaves` with what is set of each.)

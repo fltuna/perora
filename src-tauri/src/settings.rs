@@ -185,6 +185,12 @@ pub struct Settings {
     pub upload_immediately: bool,
     /// The mode the selection screen starts in.
     pub start_mode: Mode,
+    /// How long the selection screen's mode bar stays before it slides up out of the way, in
+    /// seconds; 0 for for good. It comes back while the pointer is up there.
+    pub bar_hide_seconds: u32,
+    /// Whether the selection screen draws a + where the pointer is (seen where the system's pointer
+    /// is not, as in VR).
+    pub show_crosshair: bool,
     /// Whether Perora's own windows (the main window, the previews) are out of the picture: hidden
     /// before the screen is captured. Otherwise they are captured too, and hidden only once they are.
     pub hide_own_windows: bool,
@@ -312,6 +318,9 @@ impl Settings {
     }
 }
 
+/// How long the mode bar stays at first, in seconds (owner: 「3~5秒ほど」).
+pub const DEFAULT_BAR_HIDE_SECONDS: u32 = 3;
+
 impl Default for Settings {
     fn default() -> Self {
         Self::from_file(Map::new())
@@ -339,6 +348,7 @@ impl Settings {
         let preview_enabled = flag("previewEnabled", true);
         let take_snipping = flag("takeSnipping", false);
         let hide_own_windows = flag("hideOwnWindows", true);
+        let show_crosshair = flag("showCrosshair", true);
         // (What is saved as it is taken, when that has kinds and a size of its own.)
         let as_taken_formats = match file.remove("saveOnCaptureFormats") {
             Some(Value::Array(names)) => several(
@@ -446,6 +456,7 @@ impl Settings {
         };
         let notice_seconds = seconds("noticeSeconds").unwrap_or(DEFAULT_SECONDS);
         let preview_seconds = seconds("previewSeconds").unwrap_or(0);
+        let bar_hide_seconds = seconds("barHideSeconds").unwrap_or(DEFAULT_BAR_HIDE_SECONDS);
         // (One of the squares there are to choose from; anything else is no square.)
         let fits = Leaves::ALL.map(
             |leaves| match file.remove(&format!("{}Fit", leaves.name())) {
@@ -463,6 +474,8 @@ impl Settings {
             upload_immediately,
             upload_enabled,
             start_mode,
+            bar_hide_seconds,
+            show_crosshair,
             hide_own_windows,
             copy_to_clipboard,
             clear_clipboard_on_discard,
@@ -505,6 +518,8 @@ impl Settings {
         file.insert("enableUpload".into(), self.upload_enabled.into());
         file.insert("startMode".into(), self.start_mode.name().into());
         file.insert("hideOwnWindows".into(), self.hide_own_windows.into());
+        file.insert("barHideSeconds".into(), self.bar_hide_seconds.into());
+        file.insert("showCrosshair".into(), self.show_crosshair.into());
         file.insert("saveOnCapture".into(), self.save_on_capture.into());
         file.insert(
             "deleteSavedOnDiscard".into(),
@@ -720,6 +735,30 @@ mod tests {
             !parse(br#"{"hideOwnWindows": false}"#)
                 .unwrap()
                 .hide_own_windows
+        );
+        // The mode bar slides away after 3 seconds, or never; the + is drawn unless switched off.
+        assert_eq!(settings.bar_hide_seconds, 3);
+        assert_eq!(
+            parse(br#"{"barHideSeconds": 0}"#).unwrap().bar_hide_seconds,
+            0
+        );
+        assert_eq!(
+            parse(br#"{"barHideSeconds": 10}"#)
+                .unwrap()
+                .bar_hide_seconds,
+            10
+        );
+        assert_eq!(
+            parse(br#"{"barHideSeconds": -1}"#)
+                .unwrap()
+                .bar_hide_seconds,
+            3
+        );
+        assert!(settings.show_crosshair);
+        assert!(
+            !parse(br#"{"showCrosshair": false}"#)
+                .unwrap()
+                .show_crosshair
         );
         // Captures are not saved unless the user asks for that; nor is what was saved taken away.
         assert!(!settings.save_on_capture);
@@ -968,6 +1007,8 @@ mod tests {
         assert_eq!(written["enableUpload"], false);
         assert_eq!(written["startMode"], "monitor");
         assert_eq!(written["hideOwnWindows"], true);
+        assert_eq!(written["barHideSeconds"], 3);
+        assert_eq!(written["showCrosshair"], true);
         assert_eq!(written["saveOnCapture"], false);
         assert_eq!(written["deleteSavedOnDiscard"], false);
         assert_eq!(written["saveOnCaptureCustom"], false);

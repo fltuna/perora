@@ -34,6 +34,17 @@ interface Selection extends Now {
   modes: string[];
   /** The windows that can be chosen, front to back, and where each is on the virtual screen. */
   windows: { index: number; title: string; width: number; height: number; area: Area }[];
+  /** How long the mode bar stays before it slides up out of the way, in seconds; 0 for for good. */
+  barHideSeconds: number;
+  /** Whether a + is drawn where the pointer is. */
+  crosshair: boolean;
+  /** Where the pointer was as the screen was asked for (virtual screen, physical pixels). */
+  pointer: Spot | null;
+}
+
+interface Spot {
+  x: number;
+  y: number;
 }
 
 interface View {
@@ -187,11 +198,13 @@ export function Overlay() {
         <ModeBar
           selection={selection}
           t={t}
+          touring={tour.on}
           onMode={(mode) => void invoke("selection_mode", { id: selection.id, mode })}
           onCancel={() => void invoke("selection_cancel", { id: selection.id })}
           onTour={tour.start}
         />
       )}
+      {selection.crosshair && !tour.on && <Crosshair key={selection.id} selection={selection} />}
       {tour.on && <Tour steps={captureSteps(selection, local, t)} t={t} onEnd={tour.end} />}
     </div>
   );
@@ -425,15 +438,20 @@ function pictureHeight(aspects: number[], roomWidth: number, roomHeight: number)
   return Math.floor(low);
 }
 
+/** How near the bar's place the pointer brings a slid-away bar back, in pixels of the page. */
+const BAR_REACH = 24;
+
 function ModeBar({
   selection,
   t,
+  touring,
   onMode,
   onCancel,
   onTour,
 }: {
   selection: Selection;
   t: ReturnType<typeof translator>;
+  touring: boolean;
   onMode: (mode: string) => void;
   onCancel: () => void;
   onTour: () => void;
@@ -442,8 +460,54 @@ function ModeBar({
   // What happens on the bar is the bar's: not a press on the screen behind it.
   const own = (event: React.PointerEvent) => event.stopPropagation();
 
+  // The bar slides up out of the way after a while (it can be in the way of what is captured), and
+  // comes back while the pointer is at its place: owner, 2026-11-02. It stays while the tour is on,
+  // and comes back for a while when the mode changes (by a key: the bar says which it is now).
+  const { id, mode, dragging, barHideSeconds } = selection;
+  const bar = useRef<HTMLDivElement>(null);
+  const [tucked, setTucked] = useState(false);
+  const [near, setNear] = useState(false);
+  const [shownAt, setShownAt] = useState(0);
+  useEffect(() => setShownAt((count) => count + 1), [id, mode]);
+  // (Not brought back by a frame being dragged up there: it would be in the way of that.)
+  const pointedAt = near && !dragging;
+  // (No number of seconds, or none above 0: it stays.)
+  const stays = touring || pointedAt || !(barHideSeconds > 0);
+  useEffect(() => {
+    setTucked(false);
+    if (stays) return;
+    const timer = window.setTimeout(() => setTucked(true), barHideSeconds * 1000);
+    return () => window.clearTimeout(timer);
+  }, [stays, shownAt, barHideSeconds]);
+
+  // Where the pointer is, against where the bar is when shown (its place, not where it slid to: the
+  // offsets do not move with a transform). In the capture phase: the bar keeps its own moves from
+  // the screen behind it.
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const place = bar.current;
+      if (!place) return;
+      // (Its left is the middle of the screen: it is moved back by half its width.)
+      const left = place.offsetLeft - place.offsetWidth / 2;
+      setNear(
+        event.clientX >= left - BAR_REACH &&
+          event.clientX <= left + place.offsetWidth + BAR_REACH &&
+          event.clientY <= place.offsetTop + place.offsetHeight + BAR_REACH,
+      );
+    };
+    window.addEventListener("pointermove", onMove, true);
+    return () => window.removeEventListener("pointermove", onMove, true);
+  }, []);
+
   return (
-    <div className="bar" data-tour="modes" onPointerDown={own} onPointerMove={own} onPointerUp={own}>
+    <div
+      ref={bar}
+      className={tucked ? "bar tucked" : "bar"}
+      data-tour="modes"
+      onPointerDown={own}
+      onPointerMove={own}
+      onPointerUp={own}
+    >
       <div className="modes" role="radiogroup">
         {selection.modes.map((mode, index) => (
           <button
@@ -465,4 +529,58 @@ function ModeBar({
       <p className="hint">{t(hint) === hint ? "" : t(hint)}</p>
     </div>
   );
+}
+
+/** A + where the pointer is, drawn by the page: the system's pointer is not seen everywhere the screen
+    is (in VR, owner 2026-11-02), and the + shows the pixel a frame starts at. Every window draws it
+    while the pointer is on its monitor: told where by the application, which also knows of a press
+    that went on to another monitor; and straight from the page's own pointer moves, which come
+    sooner. */
+function Crosshair({ selection }: { selection: Selection }) {
+  const { id, area, scale } = selection;
+  const [at, setAt] = useState<Spot | null>(selection.pointer);
+  // The page's own moves are newer than what the application says of the same ones: for a moment
+  // after one, what the application says is not drawn (it would pull the + back).
+  const lastOwn = useRef(0);
+
+  useEffect(() => {
+    const listening = listen<{ id: number } & Spot>("selection-pointer", ({ payload }) => {
+      if (payload.id !== id) return;
+      if (on(area, payload) && performance.now() - lastOwn.current < 150) return;
+      setAt({ x: payload.x, y: payload.y });
+    });
+    const onMove = (event: PointerEvent) => {
+      const [x, y] = [event.clientX, event.clientY];
+      // (A press held on from here reports moves over other monitors too: those are told.)
+      if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) return;
+      lastOwn.current = performance.now();
+      setAt({ x: area.x + x * scale, y: area.y + y * scale });
+    };
+    window.addEventListener("pointermove", onMove, true);
+    return () => {
+      void listening.then((stop) => stop());
+      window.removeEventListener("pointermove", onMove, true);
+    };
+  }, [id, area.x, area.y, area.width, area.height, scale]);
+
+  if (!at || !on(area, at)) return null;
+  // Four arms around the point, white in black: seen on anything. The point itself is left clear.
+  const arms = "M15.5 0v11M15.5 20v11M0 15.5h11M20 15.5h11";
+  return (
+    <svg
+      className="crosshair"
+      aria-hidden="true"
+      width="31"
+      height="31"
+      viewBox="0 0 31 31"
+      style={{ left: (at.x - area.x) / scale, top: (at.y - area.y) / scale }}
+    >
+      <path d={arms} stroke="#000" strokeOpacity="0.7" strokeWidth="3" />
+      <path d={arms} stroke="#fff" strokeWidth="1" />
+    </svg>
+  );
+}
+
+function on(area: Area, spot: Spot) {
+  return spot.x >= area.x && spot.x < area.x + area.width && spot.y >= area.y && spot.y < area.y + area.height;
 }
