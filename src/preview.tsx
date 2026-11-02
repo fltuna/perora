@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 import { Editor, type EditorShow, MOST_EDITS } from "./editor";
 import {
@@ -8,6 +9,7 @@ import {
   type Way,
   appear,
   choose,
+  chooseFile,
   copy,
   discard,
   enlarge,
@@ -16,6 +18,7 @@ import {
   save,
   translator,
   upload,
+  useDropping,
   useView,
   vanish,
 } from "./backend";
@@ -30,6 +33,9 @@ export const choosingNow = () => document.querySelector(".actions .menu") !== nu
 
 export function Preview() {
   const view = useView();
+  // An image dragged over the large window: dropped, it is opened there (asked first, when what is
+  // there now is drawn on).
+  const dropping = useDropping();
   // The small window, on screen for a moment with no capture: it shows where it appears (the user
   // just chose the corner), looking as it does with a capture in it. What it shows then is no
   // capture, and nothing in it does anything.
@@ -271,6 +277,10 @@ export function Preview() {
     if (!large && capture) tell(capture, onceNow.current);
   }, [tour.on, capture?.id]);
 
+  // The editor with no image yet, from the main window: one is dropped on it, or chosen.
+  if (large && view && !view.capture && view.awaitingFile) {
+    return <Awaiting dropping={dropping} t={translator(view.texts)} />;
+  }
   // While it uploads the windows are hidden; there is nothing to draw then either.
   if (!view || !capture || capture.progress === "uploading") return null;
   const t = translator(view.texts);
@@ -484,6 +494,41 @@ export function Preview() {
           onEnd={tour.end}
         />
       )}
+      {large && dropping && (
+        <div className="dropping" aria-live="polite">
+          <p>{t("preview.drop")}</p>
+        </div>
+      )}
+    </main>
+  );
+}
+
+/** The large window with no image in it: the editor asked for from the main window. An image is
+    dropped on it, or chosen; Escape, or the button, closes it (as closing the window does). */
+function Awaiting({ dropping, t }: { dropping: boolean; t: Translate }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      void getCurrentWindow().close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  return (
+    <main className={dropping ? "preview large awaiting over" : "preview large awaiting"}>
+      <div className="well">
+        <span className="icon" aria-hidden="true">
+          {"\uE91B"}
+        </span>
+        <p>{dropping ? t("preview.drop") : t("preview.awaiting")}</p>
+        <div className="buttons">
+          <button className="primary" onClick={() => void chooseFile()}>
+            {t("preview.awaiting.choose")}
+          </button>
+          <button onClick={() => void getCurrentWindow().close()}>{t("preview.awaiting.close")}</button>
+        </div>
+      </div>
     </main>
   );
 }

@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import { translator } from "./backend";
+import { translator, useDropping } from "./backend";
 import { BAR_REVEAL, type Zone, ZoneView } from "./zone";
 
 interface View {
@@ -63,6 +63,8 @@ interface View {
     afterCapture: string;
     /** Which way of making a part unreadable the editor starts with: "last", "mosaic" or "blur". */
     defaultHider: string;
+    /** Whether the file manager offers "Open with Perora" on images. */
+    openFromExplorer: boolean;
     /** How long the small preview stays, in seconds; 0 for until something is done with it. */
     previewSeconds: number;
     previewCorner: string;
@@ -177,6 +179,8 @@ export function MainWindow() {
   const [view, changes] = useMain();
   const [page, setPage] = useState<Page | null>(null);
   const drawn = view !== null;
+  // An image dragged over the window: dropped, it opens in the editor.
+  const dropping = useDropping();
 
   useEffect(() => {
     if (!view) return;
@@ -195,6 +199,7 @@ export function MainWindow() {
 
   return (
     <div className="frame">
+      {dropping && <Dropping t={t} />}
       <UpdateBand view={view} t={t} />
       <div className="main">
         <nav className="sidebar" aria-label="Perora">
@@ -299,6 +304,15 @@ const set = (setting: string, value: boolean | string | number | string[] | Zone
   void invoke("main_set", { setting, value });
 
 /** Capturing, and nothing else: that is what Perora is for. */
+/** Over the whole window while an image is dragged over it: what dropping it does. */
+function Dropping({ t }: { t: Translate }) {
+  return (
+    <div className="dropping" aria-live="polite">
+      <p>{t("preview.drop")}</p>
+    </div>
+  );
+}
+
 function Home({ view, t }: { view: View; t: Translate }) {
   const { shortcut } = view;
   return (
@@ -312,6 +326,19 @@ function Home({ view, t }: { view: View; t: Translate }) {
             {ICONS.camera}
           </span>
           {t("main.home.capture")}
+        </button>
+      </section>
+      {/* The editor, for an image of the user's own: chosen or dropped there, or dropped on this
+          window (owner, 2026-11-02). */}
+      <section className="card hero">
+        <div>
+          <p className="hint">{t("main.home.openHint")}</p>
+        </div>
+        <button onClick={() => void invoke("main_open_editor")}>
+          <span className="icon" aria-hidden="true">
+            {ICONS.editor}
+          </span>
+          {t("main.home.openEditor")}
         </button>
       </section>
       {!shortcut.registered && (
@@ -568,6 +595,14 @@ function Editing({ view, t }: { view: View; t: Translate }) {
             </option>
           ))}
         </select>
+      </Setting>
+      <Section title={t("main.editor.section.open")} />
+      <Setting title={t("main.editor.openFromExplorer")} hint={t("main.editor.openFromExplorerHint")}>
+        <Switch
+          label={t("main.editor.openFromExplorer")}
+          on={settings.openFromExplorer}
+          onChange={(on) => set("openFromExplorer", on)}
+        />
       </Setting>
     </>
   );

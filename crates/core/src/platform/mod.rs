@@ -27,6 +27,16 @@ pub enum PlatformError {
 
 pub type Result<T> = std::result::Result<T, PlatformError>;
 
+/// Why an image file could not be opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageError {
+    /// The system cannot read it (not an image, a kind it has nothing to read with, damaged, or
+    /// gone), with what the system said, when it said something.
+    Unreadable(String),
+    /// More pixels than can be drawn on and leave.
+    TooLarge { width: u32, height: u32 },
+}
+
 /// A monitor as the operating system arranges it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Monitor {
@@ -231,6 +241,56 @@ pub fn started_at_sign_in(name: &str) -> Option<String> {
 #[cfg(windows)]
 pub fn start_at_sign_in(name: &str, command: Option<&str>) -> std::result::Result<(), String> {
     windows::startup::set_command(name, command)
+}
+
+/// Reads the image in a file, as it is to be seen: its first picture, turned as the camera said.
+/// Refused when the system cannot read it, or when it has more than `most` pixels or more than
+/// `longest` a side.
+#[cfg(windows)]
+pub fn read_image(
+    path: &std::path::Path,
+    most: u64,
+    longest: u32,
+) -> std::result::Result<Frame, ImageError> {
+    windows::imaging::read(path, most, longest)
+}
+
+/// What Perora is started with to open a file in its editor: the file follows.
+#[cfg(windows)]
+pub const OPEN_ARGUMENT: &str = windows::explorer::OPEN;
+
+/// The kinds of image file (as `.png`) that are surely read: what Perora is offered for among the
+/// programs to open a file with, and what a choice of file shows first.
+#[cfg(windows)]
+pub const IMAGE_KINDS: [&str; 16] = windows::explorer::KINDS;
+
+/// What the file manager runs to open an image with Perora ("Open with Perora" on it); `None` when
+/// it offers no such thing.
+#[cfg(windows)]
+pub fn opened_from_explorer() -> Option<String> {
+    windows::explorer::registered(windows::explorer::CLASSES)
+}
+
+/// What the file manager is to run for that, with this program.
+#[cfg(windows)]
+pub fn explorer_command(program: &str) -> String {
+    windows::explorer::command(program)
+}
+
+/// Whether the file manager's entry says that.
+#[cfg(windows)]
+pub fn explorer_labelled(label: &str) -> bool {
+    windows::explorer::labelled(windows::explorer::CLASSES, label)
+}
+
+/// Has the file manager offer "Open with Perora" (`label`) on images, opening them with `program`;
+/// or offer it no more (`None`). Refused with the reason when the system would not have it.
+#[cfg(windows)]
+pub fn open_from_explorer(program: &str, label: Option<&str>) -> std::result::Result<(), String> {
+    match label {
+        Some(label) => windows::explorer::register(windows::explorer::CLASSES, program, label),
+        None => windows::explorer::unregister(windows::explorer::CLASSES, program),
+    }
 }
 
 /// Tells the system's shell to leave the key combinations of the Windows key and that letter alone

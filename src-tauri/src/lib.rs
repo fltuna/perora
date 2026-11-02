@@ -10,6 +10,7 @@
 mod main_window;
 mod messages;
 mod notice;
+mod opening;
 mod preview;
 mod recovery;
 mod reveal;
@@ -30,7 +31,7 @@ use perora_core::shots;
 use tauri::http::{Request, Response, StatusCode};
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, UriSchemeContext, WindowEvent, Wry};
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, UriSchemeContext, WindowEvent, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
@@ -88,6 +89,51 @@ fn start_at_sign_in(how: Option<bool>) {
     if let Err(detail) = perora_core::platform::start_at_sign_in(STARTED_AS, command.as_deref()) {
         eprintln!("starting at sign-in could not be set: {detail}");
     }
+}
+
+/// Whether "Open with Perora" in the file manager opens with this very program.
+fn explorer_entry_is_ours(program: &str) -> bool {
+    perora_core::platform::opened_from_explorer().is_some_and(|there| {
+        there.eq_ignore_ascii_case(&perora_core::platform::explorer_command(program))
+    })
+}
+
+/// Has the file manager offer "Open with Perora" on images, with this very program and in the
+/// user's language, as the settings say; or not, when they say not. Written only where it is not
+/// already so: at every start (the program that is started may be another copy than the one that
+/// wrote it last, such as one that is worked on) and when the language changes.
+fn keep_explorer_entry(app: &AppHandle) {
+    let Some(program) = std::env::current_exe()
+        .ok()
+        .map(|program| program.display().to_string())
+    else {
+        return;
+    };
+    let perora = app.state::<Perora>();
+    let wanted = perora.setting(|settings| settings.open_from_explorer);
+    let label = perora.language().open_with_perora();
+    let ours = explorer_entry_is_ours(&program);
+    let done = if wanted {
+        ours && perora_core::platform::explorer_labelled(&label)
+    } else {
+        // (Off: what is there is taken away only when it is this program's. Another copy's is that
+        // copy's to keep or take.)
+        !ours
+    };
+    if done {
+        return;
+    }
+    if let Err(detail) =
+        perora_core::platform::open_from_explorer(&program, wanted.then_some(label.as_str()))
+    {
+        eprintln!("the file manager's entry could not be set: {detail}");
+    }
+}
+
+/// The user switched "Open with Perora" on or off.
+fn open_from_explorer(app: &AppHandle, on: bool) {
+    settings::update(app, |settings| settings.open_from_explorer = on);
+    keep_explorer_entry(app);
 }
 
 /// Started with this while it is running already, Perora captures, as the shortcut does.
@@ -197,6 +243,15 @@ fn uninstalling() {
     {
         eprintln!("the system's combination for snipping could not be given back: {detail}");
     }
+    // "Open with Perora" goes with it, when it is this program's: it opens nothing any more.
+    if let Ok(program) = std::env::current_exe() {
+        let program = program.display().to_string();
+        if explorer_entry_is_ours(&program)
+            && let Err(detail) = perora_core::platform::open_from_explorer(&program, None)
+        {
+            eprintln!("the file manager's entry could not be taken away: {detail}");
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -208,13 +263,18 @@ pub fn run() {
     tauri::Builder::default()
         // A second Perora would spend the first one's refresh token. Started again, it asks the one
         // that is running to capture (`--capture`) or to show its window.
-        .plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
-            if arguments.iter().any(|argument| argument == CAPTURE) {
-                capture(app);
-            } else if !arguments.iter().any(|argument| argument == START_IN_TRAY) {
-                main_window::open(app);
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(
+            |app, arguments, folder| {
+                // (Asked to open a file: that is all it is asked, its window is not shown for it.)
+                if let Some(file) = opening::file_in(&arguments, std::path::Path::new(&folder)) {
+                    opening::open(app, file);
+                } else if arguments.iter().any(|argument| argument == CAPTURE) {
+                    capture(app);
+                } else if !arguments.iter().any(|argument| argument == START_IN_TRAY) {
+                    main_window::open(app);
+                }
+            },
+        ))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -247,6 +307,8 @@ pub fn run() {
             main_window::main_cancel_sign_in,
             main_window::main_sign_out,
             main_window::main_capture,
+            opening::main_open_editor,
+            opening::preview_choose_file,
             reveal::main_edit_reveal_area,
             reveal::reveal_state,
             reveal::reveal_ready,
@@ -280,6 +342,14 @@ pub fn run() {
             update::main_update_install,
         ])
         .on_window_event(|window, event| {
+            // A file dropped on the main window or on the editor is opened in the editor: the
+            // first, of several (one image is drawn on at a time).
+            if let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event
+                && (window.label() == main_window::LABEL || window.label() == preview::LARGE)
+                && let Some(file) = paths.first()
+            {
+                opening::open(window.app_handle(), file.clone());
+            }
             // No window is ever destroyed by being closed: each is kept, hidden, for the next time.
             // What closing means depends on the window.
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -463,10 +533,20 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     claim_snipping(app);
     // Light or dark, as the user chose, should they have chosen: all the windows alike.
     preview::show_look(app, app.state::<Perora>().setting(|settings| settings.look));
-    let in_tray = std::env::args_os().any(|argument| argument == START_IN_TRAY);
+    // Started to open a file (from the file manager): the editor is what is shown, not the window.
+    let arguments: Vec<String> = std::env::args().collect();
+    let to_open = std::env::current_dir()
+        .ok()
+        .and_then(|folder| opening::file_in(&arguments, &folder));
+    let in_tray = to_open.is_some() || arguments.iter().any(|argument| argument == START_IN_TRAY);
     // (A new version the user installed from the window shows it, however the old one was started.)
     if window_shown_before.unwrap_or(!in_tray || update::installed_from_window()) {
         main_window::open(app);
+    }
+    // "Open with Perora" is this program's, in the user's language, as the settings say.
+    keep_explorer_entry(app);
+    if let Some(file) = to_open {
+        opening::open(app, file);
     }
 
     // Whether there is a newer version, a while from now and every few hours.
@@ -1109,6 +1189,8 @@ fn speak(app: &AppHandle, language: Language) {
     });
 
     relabel(app);
+    // (The file manager's entry says it in the user's language too.)
+    keep_explorer_entry(app);
     main_window::changed(app);
     preview::changed(app);
     notice::changed(app);

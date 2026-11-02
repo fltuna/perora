@@ -328,6 +328,48 @@ impl Language {
         self.text("save.keep", &[])
     }
 
+    /// The entry of the file manager's menu on an image.
+    pub fn open_with_perora(&self) -> String {
+        self.text("explorer.openWith", &[])
+    }
+
+    pub fn not_opened(&self, name: &str) -> String {
+        self.text("open.unreadable", &[("name", name)])
+    }
+
+    pub fn too_large_to_open(&self, name: &str, width: u32, height: u32) -> String {
+        self.text(
+            "open.tooLarge",
+            &[
+                ("name", name),
+                ("width", &width.to_string()),
+                ("height", &height.to_string()),
+            ],
+        )
+    }
+
+    /// Asked before an image opened takes the place of one that is drawn on.
+    pub fn open_over_drawing(&self, name: &str) -> String {
+        self.text("open.overDrawing", &[("name", name)])
+    }
+
+    pub fn open_anyway(&self) -> String {
+        self.text("open.anyway", &[])
+    }
+
+    pub fn keep_drawing(&self) -> String {
+        self.text("open.keepDrawing", &[])
+    }
+
+    /// What a choice of file shows first, and what else it can show.
+    pub fn images(&self) -> String {
+        self.text("open.images", &[])
+    }
+
+    pub fn all_files(&self) -> String {
+        self.text("open.allFiles", &[])
+    }
+
     pub fn uploaded(&self) -> String {
         self.text("notify.uploaded", &[])
     }
@@ -456,6 +498,14 @@ mod tests {
             english.there_already("n"),
             english.replace(),
             english.keep(),
+            english.open_with_perora(),
+            english.not_opened("n"),
+            english.too_large_to_open("n", 1, 2),
+            english.open_over_drawing("n"),
+            english.open_anyway(),
+            english.keep_drawing(),
+            english.images(),
+            english.all_files(),
             english.notices_here(),
             english.copied(),
             english.not_copied("d"),

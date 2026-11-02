@@ -219,6 +219,9 @@ pub struct Settings {
     /// Whether the system's own combination for snipping (Win+Shift+S) captures with Perora too:
     /// taken from the system's shell, which has to let go of it for that.
     pub take_snipping: bool,
+    /// Whether the file manager offers "Open with Perora" on images (owner, 2026-11-02: on unless
+    /// the user turns it off).
+    pub open_from_explorer: bool,
     /// What becomes of a capture once it is taken.
     pub after_capture: After,
     /// Which way of making a part unreadable the editor starts with.
@@ -398,6 +401,7 @@ impl Settings {
         // (Once a switch, for a preview or none: off, it was what is now "to the clipboard only".)
         let preview_enabled = flag("previewEnabled", true);
         let take_snipping = flag("takeSnipping", false);
+        let open_from_explorer = flag("openFromExplorer", true);
         let hide_own_windows = flag("hideOwnWindows", true);
         let show_crosshair = flag("showCrosshair", true);
         // (What is saved as it is taken, when that has kinds and a size of its own.)
@@ -543,6 +547,7 @@ impl Settings {
             as_taken_fit,
             shortcut,
             take_snipping,
+            open_from_explorer,
             notice_seconds,
             notice_corner,
             notice_sound,
@@ -632,6 +637,7 @@ impl Settings {
             file.insert("skippedVersion".into(), version.clone().into());
         }
         file.insert("takeSnipping".into(), self.take_snipping.into());
+        file.insert("openFromExplorer".into(), self.open_from_explorer.into());
         file.insert("noticeSeconds".into(), self.notice_seconds.into());
         file.insert("noticeCorner".into(), self.notice_corner.name().into());
         file.insert("noticeSound".into(), self.notice_sound.name().into());
@@ -785,6 +791,18 @@ mod tests {
         assert_eq!(Output::default().fit, None);
         assert!(!settings.take_snipping);
         assert!(parse(br#"{"takeSnipping": true}"#).unwrap().take_snipping);
+        // The file manager offers to open images with Perora unless the user said otherwise.
+        assert!(settings.open_from_explorer);
+        assert!(
+            !parse(br#"{"openFromExplorer": false}"#)
+                .unwrap()
+                .open_from_explorer
+        );
+        assert!(
+            parse(br#"{"openFromExplorer": "no"}"#)
+                .unwrap()
+                .open_from_explorer
+        );
         // Perora's own windows are out of the picture unless the user wants them in it.
         assert!(parse(b"{}").unwrap().hide_own_windows);
         assert!(

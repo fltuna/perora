@@ -106,6 +106,9 @@ pub struct State {
     /// was saved as it was taken, and that took a moment) is taken away again, as it would have been
     /// had it been there. (A few: another capture may have been taken and discarded meanwhile.)
     discarded: Mutex<Vec<u64>>,
+    /// Whether the large window is up with no image in it, for one to be dropped on it (or chosen):
+    /// the user asked for the editor from the main window with nothing to draw on yet.
+    awaiting: AtomicBool,
 }
 
 /// How many of the captures discarded last are kept in mind.
@@ -460,6 +463,8 @@ pub struct View {
     /// Which way of making a part unreadable the editor starts with: `last` (the one used last),
     /// `mosaic` or `blur`.
     default_hider: &'static str,
+    /// Whether the large window is up with no image, waiting for one to be dropped on it.
+    awaiting_file: bool,
 }
 
 #[derive(Serialize)]
@@ -847,6 +852,47 @@ fn leave_to_its_time(app: &AppHandle) {
 /// Shows a capture in the small window, in place of whatever was previewed before. Returns the id
 /// it is previewed by.
 pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) -> u64 {
+    present_as(app, frame, png, false)
+}
+
+/// Puts an image the user opened from a file in the large window, to be drawn on. As a capture is
+/// that is drawn on at once, but none of what becomes of a capture as it is taken: it is not put on
+/// the clipboard (nor saved, nor uploaded: see `deliver`). What it is copied, saved or uploaded as
+/// is what the user chooses there.
+pub fn present_opened(app: &AppHandle, frame: Frame, png: Vec<u8>) -> u64 {
+    present_as(app, frame, png, true)
+}
+
+/// Whether there is something drawn on the image being previewed, that a new one would take the
+/// place of (not while it is being uploaded: what was drawn is on its way then).
+pub fn drawn_on(app: &AppHandle) -> bool {
+    matches!(
+        &*app.state::<Perora>().preview.lock(),
+        Some(pending) if !pending.edits.is_empty() && !matches!(pending.progress, Progress::Uploading)
+    )
+}
+
+/// The editor, from the main window: the image being previewed, in the large window; or, when
+/// there is none, the large window with no image, for one to be dropped on it.
+pub fn open_editor(app: &AppHandle) {
+    let perora = app.state::<Perora>();
+    let shown = match perora.preview.lock().as_mut() {
+        Some(pending) if !matches!(pending.progress, Progress::Uploading) => {
+            pending.touched = true;
+            pending.large = true;
+            true
+        }
+        Some(_) => return,
+        None => false,
+    };
+    if !shown {
+        perora.preview.awaiting.store(true, Ordering::Relaxed);
+    }
+    changed(app);
+    show_large(app);
+}
+
+fn present_as(app: &AppHandle, frame: Frame, png: Vec<u8>, opened: bool) -> u64 {
     let perora = app.state::<Perora>();
     // A thumbnail that cannot be made is no reason to lose the capture: the whole image serves.
     let png = Arc::new(png);
@@ -859,8 +905,7 @@ pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) -> u64 {
     // To the clipboard first (unless the user would rather not): it is there to paste by the time the
     // preview is seen.
     let copied_as = Once::default().output(app, Leaves::Copy);
-    let copied = perora
-        .setting(|settings| settings.copy_to_clipboard)
+    let copied = (!opened && perora.setting(|settings| settings.copy_to_clipboard))
         .then(|| to_clipboard(app, &frame, copied_as));
     if let Some(Err(error)) = &copied {
         eprintln!("clipboard: the capture was not put there: {error}");
@@ -868,9 +913,11 @@ pub fn present(app: &AppHandle, frame: Frame, png: Vec<u8>) -> u64 {
 
     // (The small window is no longer there only to show where it appears.)
     perora.preview.sample.store(false, Ordering::Relaxed);
+    // (Nor is the large window waiting for an image any more: here is one.)
+    perora.preview.awaiting.store(false, Ordering::Relaxed);
     // As the user has captures shown: in the corner, or in the large window at once, where they
-    // are drawn on.
-    let large_at_once = perora.setting(|settings| settings.after_capture) == After::Edit;
+    // are drawn on. An image opened from a file is opened to be drawn on.
+    let large_at_once = opened || perora.setting(|settings| settings.after_capture) == After::Edit;
     let id = perora.preview.last_id.fetch_add(1, Ordering::Relaxed) + 1;
     *perora.preview.lock() = Some(Pending {
         id,
@@ -931,6 +978,14 @@ pub fn restore(app: &AppHandle) {
         show(app);
         changed(app);
         leave_to_its_time(app);
+    } else if app
+        .state::<Perora>()
+        .preview
+        .awaiting
+        .load(Ordering::Relaxed)
+    {
+        // (The editor that was waiting for an image, still waiting.)
+        show_large(app);
     }
 }
 
@@ -1312,6 +1367,8 @@ pub fn discard(app: &AppHandle, id: Option<u64>) {
             {
                 *pending = None;
             }
+            // The editor with no image in it, closed: nothing to throw away.
+            None if id.is_none() && perora.preview.awaiting.swap(false, Ordering::Relaxed) => {}
             _ => return,
         }
     }
@@ -1503,6 +1560,7 @@ pub fn preview_state(app: AppHandle) -> View {
         fits: FITS.to_vec(),
         tours_seen: perora.setting(|settings| settings.tours_seen()),
         default_hider: perora.setting(|settings| settings.default_hider.name()),
+        awaiting_file: perora.preview.awaiting.load(Ordering::Relaxed),
         leaves: Leaves::ALL
             .into_iter()
             .map(|leaves| {

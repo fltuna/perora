@@ -162,6 +162,8 @@ struct SettingsView {
     after_capture: &'static str,
     /// Which way of making a part unreadable the editor starts with: `last`, `mosaic` or `blur`.
     default_hider: &'static str,
+    /// Whether the file manager offers "Open with Perora" on images.
+    open_from_explorer: bool,
     /// How long the small preview stays, in seconds; 0 for until something is done with it.
     preview_seconds: f64,
     preview_corner: &'static str,
@@ -405,6 +407,7 @@ pub fn main_state(app: AppHandle) -> View {
             notice_corner: settings.notice_corner.name(),
             after_capture: settings.after_capture.name(),
             default_hider: settings.default_hider.name(),
+            open_from_explorer: settings.open_from_explorer,
             preview_seconds: settings.preview_seconds,
             preview_corner: settings.preview_corner.name(),
             capture_sound: settings.capture_sound.shown(),
@@ -488,6 +491,10 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
         }
         ("takeSnipping", Some(on)) => {
             crate::take_snipping(&app, on);
+            return changed(&app);
+        }
+        ("openFromExplorer", Some(on)) => {
+            crate::open_from_explorer(&app, on);
             return changed(&app);
         }
         ("startMinimized", Some(quietly)) => {
@@ -866,6 +873,7 @@ mod tests {
             notice_sound_file: None,
             after_capture: "edit",
             default_hider: "mosaic",
+            open_from_explorer: true,
             preview_seconds: 20.0,
             preview_corner: "topRight",
             capture_sound: "custom".into(),

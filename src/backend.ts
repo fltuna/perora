@@ -3,6 +3,7 @@
 // keeps a capture, a link or a token.
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 
@@ -105,6 +106,8 @@ export interface View {
   /** Which way of making a part unreadable the editor starts with: the one used last, or always
       the same. */
   defaultHider?: "last" | "mosaic" | "blur";
+  /** Whether the large window is up with no image, waiting for one to be dropped on it. */
+  awaitingFile?: boolean;
 }
 
 /** A way a capture leaves. */
@@ -143,6 +146,23 @@ export function useView(): View | null {
 
   return view;
 }
+
+/** Whether files are being dragged over this window: what is dropped on it is opened in the editor
+    (the application hears the drop itself). */
+export function useDropping(): boolean {
+  const [dropping, setDropping] = useState(false);
+  useEffect(() => {
+    const listening = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter") setDropping(payload.paths.length > 0);
+      else if (payload.type === "leave" || payload.type === "drop") setDropping(false);
+    });
+    return () => void listening.then((stop) => stop()).catch(() => {});
+  }, []);
+  return dropping;
+}
+
+/** The editor, with no image in it yet: a file is to be chosen for it. */
+export const chooseFile = () => invoke<void>("preview_choose_file");
 
 /** The address of the capture's image: the whole of it, or the small version for the corner. */
 export const imageUrl = (capture: Capture, which: "image" | "thumbnail") =>

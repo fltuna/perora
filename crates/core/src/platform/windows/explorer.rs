@@ -1,0 +1,189 @@
+//! Windows: "Open with Perora" on images in the file manager. In the user's own part of the registry
+//! (nothing here needs more rights than the user has): an entry of the menu an image is right-clicked
+//! for, on every kind of file the system counts as an image, and Perora among the programs the system
+//! offers to open such a file with.
+//!
+//! The entry is of the menu as it has long been: Windows 11 shows it under "Show more options"
+//! (or with Shift and a right click), not in its own shorter menu. That one takes a package signed
+//! with a certificate the system trusts (owner, 2026-11-02: 「証明書は無視でいいよROI悪い」).
+
+use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RegDeleteTreeW};
+use windows::core::PCWSTR;
+
+use super::startup::{command_in, set_command_in, text_in};
+
+/// Where what is said of kinds of files is kept, in the user's part of the registry.
+pub const CLASSES: &str = r"Software\Classes";
+
+/// The entry of the menu, under what the system says of every image.
+const VERB: &str = r"SystemFileAssociations\image\shell\Perora";
+
+/// What Perora is started with to open a file: the file follows.
+pub const OPEN: &str = "--open";
+
+/// The kinds of file Perora is offered for among the programs to open a file with. (What reads them
+/// is the system's: more kinds may open than these, when they come through the menu.)
+pub const KINDS: [&str; 16] = [
+    ".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".dib", ".tif", ".tiff", ".ico", ".webp",
+    ".heic", ".heif", ".avif", ".jxr", ".wdp",
+];
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+/// What the system runs to open a file with this program.
+pub fn command(program: &str) -> String {
+    format!("\"{program}\" {OPEN} \"%1\"")
+}
+
+/// The program's own key among those the system offers to open files with: by the name of its file.
+fn application(classes: &str, program: &str) -> String {
+    let name = std::path::Path::new(program)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "perora.exe".to_owned());
+    format!(r"{classes}\Applications\{name}")
+}
+
+/// What runs when "Open with Perora" is chosen on an image; `None` when there is no such entry.
+pub fn registered(classes: &str) -> Option<String> {
+    command_in(&format!(r"{classes}\{VERB}\command"), "")
+}
+
+/// Puts "Open with Perora" (`label`, in the user's language) on every image, opening it with
+/// `program`; and Perora among the programs to open images with. Whatever was there of Perora's
+/// before is replaced: another program (another copy of Perora) may have been there.
+pub fn register(classes: &str, program: &str, label: &str) -> Result<(), String> {
+    unregister(classes, program)?;
+    let opened = command(program);
+    let verb = format!(r"{classes}\{VERB}");
+    set_command_in(&verb, "", Some(label))?;
+    set_command_in(&verb, "Icon", Some(&format!("\"{program}\",0")))?;
+    // (Not on several files at once: one image is opened at a time.)
+    set_command_in(&verb, "MultiSelectModel", Some("Single"))?;
+    set_command_in(&format!(r"{verb}\command"), "", Some(&opened))?;
+
+    let application = application(classes, program);
+    set_command_in(&application, "FriendlyAppName", Some("Perora"))?;
+    set_command_in(
+        &format!(r"{application}\shell\open\command"),
+        "",
+        Some(&opened),
+    )?;
+    for kind in KINDS {
+        set_command_in(&format!(r"{application}\SupportedTypes"), kind, Some(""))?;
+    }
+    Ok(())
+}
+
+/// Takes all of that away again. What is not there is away already.
+pub fn unregister(classes: &str, program: &str) -> Result<(), String> {
+    remove_tree(&format!(r"{classes}\{VERB}"))?;
+    remove_tree(&application(classes, program))
+}
+
+/// Whether the label of the entry is that one: for telling whether it is to be written anew (the
+/// user's language changed).
+pub fn labelled(classes: &str, label: &str) -> bool {
+    text_in(&format!(r"{classes}\{VERB}"), "")
+        .ok()
+        .flatten()
+        .is_some_and(|there| there == label)
+}
+
+fn remove_tree(key: &str) -> Result<(), String> {
+    let key = wide(key);
+    let removed = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(key.as_ptr())) };
+    if removed == ERROR_FILE_NOT_FOUND || removed == ERROR_PATH_NOT_FOUND {
+        return Ok(());
+    }
+    // (The key itself, should what took its tree have left it.)
+    removed.ok().map_err(|error| error.message())?;
+    let removed = unsafe {
+        windows::Win32::System::Registry::RegDeleteKeyW(HKEY_CURRENT_USER, PCWSTR(key.as_ptr()))
+    };
+    if removed == ERROR_FILE_NOT_FOUND || removed == ERROR_PATH_NOT_FOUND {
+        return Ok(());
+    }
+    removed.ok().map_err(|error| error.message())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A place of this test's own for what would be kept with the kinds of files, gone when the test
+    /// is over: not what the system reads.
+    struct Scratch(String);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            Self(format!(
+                r"Software\Perora tests {}-{name}",
+                std::process::id()
+            ))
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = remove_tree(&self.0);
+        }
+    }
+
+    const PROGRAM: &str = r"C:\Users\someone\AppData\Local\Perora\perora.exe";
+
+    #[test]
+    fn the_command_opens_the_file_with_the_program() {
+        assert_eq!(
+            command(PROGRAM),
+            r#""C:\Users\someone\AppData\Local\Perora\perora.exe" --open "%1""#
+        );
+    }
+
+    #[test]
+    fn the_entry_is_written_read_back_and_taken_away() {
+        let classes = Scratch::new("explorer");
+        assert_eq!(registered(&classes.0), None);
+
+        register(&classes.0, PROGRAM, "Perora で開く").unwrap();
+        assert_eq!(registered(&classes.0), Some(command(PROGRAM)));
+        assert!(labelled(&classes.0, "Perora で開く"));
+        assert!(!labelled(&classes.0, "Open with Perora"));
+        let verb = format!(r"{}\{VERB}", classes.0);
+        assert_eq!(
+            command_in(&verb, "Icon").as_deref(),
+            Some(r#""C:\Users\someone\AppData\Local\Perora\perora.exe",0"#)
+        );
+        assert_eq!(
+            command_in(&verb, "MultiSelectModel").as_deref(),
+            Some("Single")
+        );
+        let application = format!(r"{}\Applications\perora.exe", classes.0);
+        assert_eq!(
+            command_in(&format!(r"{application}\shell\open\command"), ""),
+            Some(command(PROGRAM))
+        );
+        assert_eq!(
+            text_in(&format!(r"{application}\SupportedTypes"), ".webp"),
+            Ok(Some(String::new()))
+        );
+
+        // Another copy of Perora, elsewhere: it is that one that opens images now.
+        let elsewhere = r"D:\work\perora\target\debug\perora.exe";
+        register(&classes.0, elsewhere, "Open with Perora").unwrap();
+        assert_eq!(registered(&classes.0), Some(command(elsewhere)));
+        assert!(labelled(&classes.0, "Open with Perora"));
+
+        unregister(&classes.0, elsewhere).unwrap();
+        assert_eq!(registered(&classes.0), None);
+        assert_eq!(
+            command_in(&format!(r"{application}\shell\open\command"), ""),
+            None
+        );
+        // (Taken away where it is not: nothing to do, and nothing wrong.)
+        unregister(&classes.0, elsewhere).unwrap();
+    }
+}

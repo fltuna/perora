@@ -234,6 +234,43 @@ impl Frame {
             rgba,
         })
     }
+
+    /// The picture turned and mirrored as a camera says it is to be seen (EXIF orientation): 1 as
+    /// it is, 2 mirrored left to right, 3 turned half round, 4 mirrored top to bottom, 5 mirrored
+    /// across its diagonal, 6 turned a quarter clockwise, 7 mirrored across its other diagonal, 8
+    /// turned a quarter the other way. Anything else is taken as 1. Its area starts at (0, 0): the
+    /// picture of a file, not a part of the screen.
+    pub fn oriented(self, orientation: u16) -> Frame {
+        let (width, height) = (self.area.width as usize, self.area.height as usize);
+        // Where each pixel of the turned picture comes from, in the picture as it is.
+        let from: fn(usize, usize, usize, usize) -> (usize, usize) = match orientation {
+            2 => |x, y, w, _| (w - 1 - x, y),
+            3 => |x, y, w, h| (w - 1 - x, h - 1 - y),
+            4 => |x, y, _, h| (x, h - 1 - y),
+            5 => |x, y, _, _| (y, x),
+            6 => |x, y, _, h| (y, h - 1 - x),
+            7 => |x, y, w, h| (w - 1 - y, h - 1 - x),
+            8 => |x, y, w, _| (w - 1 - y, x),
+            _ => return self,
+        };
+        let (across, down) = if orientation >= 5 {
+            (height, width)
+        } else {
+            (width, height)
+        };
+        let mut rgba = Vec::with_capacity(self.rgba.len());
+        for y in 0..down {
+            for x in 0..across {
+                let (from_x, from_y) = from(x, y, width, height);
+                let index = (from_y * width + from_x) * 4;
+                rgba.extend_from_slice(&self.rgba[index..index + 4]);
+            }
+        }
+        Frame {
+            area: Rect::new(0, 0, across as u32, down as u32),
+            rgba,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +293,54 @@ mod tests {
             + (x - frame.area.x) as usize)
             * 4;
         frame.rgba[index..index + 4].try_into().unwrap()
+    }
+
+    /// The pixels of a frame, row by row, by the first byte of each (`frame` makes that the x).
+    fn rows(frame: &Frame) -> Vec<Vec<u8>> {
+        frame
+            .rgba
+            .chunks_exact(frame.area.width as usize * 4)
+            .map(|row| {
+                row.chunks_exact(4)
+                    .map(|pixel| pixel[0] * 10 + pixel[1])
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_picture_is_turned_as_its_camera_says() {
+        // Three across, two down: 0 10 20 over 1 11 21 (ten times x, and y).
+        let picture = frame(Rect::new(0, 0, 3, 2));
+        let turned = |orientation| {
+            let turned = picture.clone().oriented(orientation);
+            (turned.area, rows(&turned))
+        };
+        let wide = Rect::new(0, 0, 3, 2);
+        let tall = Rect::new(0, 0, 2, 3);
+        assert_eq!(turned(1), (wide, vec![vec![0, 10, 20], vec![1, 11, 21]]));
+        assert_eq!(turned(2), (wide, vec![vec![20, 10, 0], vec![21, 11, 1]]));
+        assert_eq!(turned(3), (wide, vec![vec![21, 11, 1], vec![20, 10, 0]]));
+        assert_eq!(turned(4), (wide, vec![vec![1, 11, 21], vec![0, 10, 20]]));
+        assert_eq!(
+            turned(5),
+            (tall, vec![vec![0, 1], vec![10, 11], vec![20, 21]])
+        );
+        // A quarter clockwise: what was the left column, from the bottom up, is the top row.
+        assert_eq!(
+            turned(6),
+            (tall, vec![vec![1, 0], vec![11, 10], vec![21, 20]])
+        );
+        assert_eq!(
+            turned(7),
+            (tall, vec![vec![21, 20], vec![11, 10], vec![1, 0]])
+        );
+        assert_eq!(
+            turned(8),
+            (tall, vec![vec![20, 21], vec![10, 11], vec![0, 1]])
+        );
+        assert_eq!(turned(0), turned(1));
+        assert_eq!(turned(9), turned(1));
     }
 
     #[test]

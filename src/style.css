@@ -2196,6 +2196,13 @@ button:focus-visible {
   filter: brightness(0.94);
 }
 
+/* A button of the home page with its icon beside its name, as the one that captures. */
+.card.hero button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .page button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -3172,4 +3179,88 @@ button:focus-visible {
   background: rgb(79 140 255 / 35%);
   border: 1px solid #4f8cff;
   pointer-events: none;
+}
+
+/* The editor with no image yet: one is dropped on it, or chosen. The well takes the whole window,
+   its border dashed, and lit up while an image is dragged over it. */
+.preview.large.awaiting {
+  display: flex;
+  padding: 16px;
+}
+
+.preview.awaiting .well {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--muted);
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-large);
+  transition: border-color 0.12s, background-color 0.12s;
+}
+
+.preview.awaiting.over .well {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.preview.awaiting .well > .icon {
+  font-size: 48px;
+}
+
+.preview.awaiting .well p {
+  margin: 0;
+  font-size: 16px;
+}
+
+.preview.awaiting .buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.preview.awaiting .buttons button {
+  height: 32px;
+  padding: 0 16px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.preview.awaiting .buttons button:hover {
+  border-color: var(--accent);
+}
+
+.preview.awaiting .buttons button.primary {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* An image dragged over the main window or the editor: what dropping it does, over all of it.
+   (It takes no pointer: the drop is the application's to hear.) */
+.dropping {
+  position: fixed;
+  inset: 8px;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  font-size: 18px;
+  background: color-mix(in srgb, var(--background) 82%, transparent);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-large);
+  pointer-events: none;
+}
+
+.dropping p {
+  margin: 0;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-radius: var(--radius-large);
 }
