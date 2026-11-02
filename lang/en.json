@@ -206,7 +206,7 @@
   "save.replace": "Replace",
   "save.keep": "Cancel",
   "explorer.openWith": "Open with Perora",
-  "open.unreadable": "{name} could not be opened. It is not an image, or Windows cannot read its format.",
+  "open.unreadable": "{name} could not be opened. Its format cannot be read.",
   "open.tooLarge": "{name} is too large to open ({width} × {height}).",
   "open.overDrawing": "Opening {name} discards what you drew on the current image. Open it?",
   "open.anyway": "Open",

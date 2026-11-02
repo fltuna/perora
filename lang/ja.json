@@ -206,7 +206,7 @@
   "save.replace": "置き換える",
   "save.keep": "キャンセル",
   "explorer.openWith": "Perora で開く",
-  "open.unreadable": "{name} を開けませんでした。画像ではないか、Windows が読めない形式です。",
+  "open.unreadable": "{name} を開けませんでした。読めない形式です。",
   "open.tooLarge": "{name} は大きすぎるため開けません ({width} × {height})。",
   "open.overDrawing": "{name} を開くと、今の画像に描いた内容は破棄されます。開きますか？",
   "open.anyway": "開く",
