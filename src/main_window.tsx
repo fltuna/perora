@@ -936,7 +936,12 @@ function RevealArea({
   const [shown, setShown] = useState(value);
   useEffect(() => setShown(value), [value.x, value.y, value.width, value.height]);
 
-  const room = () => box.current!.getBoundingClientRect();
+  // The inside of the small monitor, inside its border: where the part is drawn, and so measured.
+  const room = () => {
+    const monitor = box.current!;
+    const { left, top } = monitor.getBoundingClientRect();
+    return { left: left + monitor.clientLeft, top: top + monitor.clientTop, width: monitor.clientWidth, height: monitor.clientHeight };
+  };
   const clamp = (n: number) => Math.min(1, Math.max(0, n));
   const share = (event: React.PointerEvent): Spot => {
     const { left, top, width, height } = room();
@@ -949,13 +954,16 @@ function RevealArea({
     const [x1, y1] = [x0 + shown.width * width, y0 + shown.height * height];
     const across = px >= x0 - GRIP_NEAR && px <= x1 + GRIP_NEAR;
     const along = py >= y0 - GRIP_NEAR && py <= y1 + GRIP_NEAR;
-    // (Of a part thinner than two holds, the edge nearer the press.)
-    const nearer = (p: number, a: number, b: number): -1 | 0 | 1 =>
-      Math.abs(p - a) <= GRIP_NEAR && Math.abs(p - a) <= Math.abs(p - b) ? -1 : Math.abs(p - b) <= GRIP_NEAR ? 1 : 0;
-    const x = along ? nearer(px, x0, x1) : 0;
-    const y = across ? nearer(py, y0, y1) : 0;
+    // Which edge a press takes, along one side. Of a part too thin for holds inside it (the strip at
+    // the top is about 2px here), only from outside: a press inside moves it.
+    const edge = (p: number, a: number, b: number): -1 | 0 | 1 => {
+      if (b - a < GRIP_NEAR * 3) return p <= a && a - p <= GRIP_NEAR ? -1 : p >= b && p - b <= GRIP_NEAR ? 1 : 0;
+      return Math.abs(p - a) <= GRIP_NEAR ? -1 : Math.abs(p - b) <= GRIP_NEAR ? 1 : 0;
+    };
+    const x = along ? edge(px, x0, x1) : 0;
+    const y = across ? edge(py, y0, y1) : 0;
     if (x !== 0 || y !== 0) return { x, y };
-    return px > x0 && px < x1 && py > y0 && py < y1 ? "move" : "new";
+    return px >= x0 && px <= x1 && py >= y0 && py <= y1 ? "move" : "new";
   };
   const between = (a: Spot, b: Spot): Zone => ({
     x: Math.min(a.x, b.x),
@@ -988,35 +996,64 @@ function RevealArea({
     setGesture(null);
     setDraft(null);
   };
+  /** Sets what was made, when it is a part to reach and not what is set already. */
+  const take = (made: Zone | null) => {
+    const changed = made && (["x", "y", "width", "height"] as const).some((side) => Math.abs(made[side] - shown[side]) > 1e-6);
+    if (made && changed && made.width > 0.005 && made.height > 0.002) {
+      setShown(made);
+      onChange(made);
+    }
+  };
+  // From the keyboard too: the arrows move it, with Shift they make it larger or smaller (to the right
+  // and down), a hundredth of the monitor a press.
+  const onKey = (event: React.KeyboardEvent) => {
+    const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    const [dx, dy] = [step[0] * 0.01, step[1] * 0.01];
+    const was = shown;
+    take(
+      event.shiftKey
+        ? {
+            ...was,
+            width: Math.min(1 - was.x, Math.max(0.01, was.width + dx)),
+            height: Math.min(1 - was.y, Math.max(0.01, was.height + dy)),
+          }
+        : {
+            ...was,
+            x: Math.min(1 - was.width, Math.max(0, was.x + dx)),
+            y: Math.min(1 - was.height, Math.max(0, was.y + dy)),
+          },
+    );
+  };
+  const round = (n: number) => Math.round(n * 100);
 
   return (
     <div className="reveal-area">
       <div
         ref={box}
         className="monitor"
-        role="img"
-        aria-label={label}
+        role="group"
+        tabIndex={0}
+        aria-label={`${label}: ${round(zone.x)}%, ${round(zone.y)}%, ${round(zone.width)}% × ${round(zone.height)}%`}
         style={{ aspectRatio: `${ratio}`, cursor: gripCursor(gesture?.grip ?? hover) }}
+        onKeyDown={onKey}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
           event.currentTarget.setPointerCapture(event.pointerId);
           const grip = gripAt(event);
-          const from = share(event);
-          setGesture({ grip, from, was: shown });
-          setDraft(pulled(grip, shown, from, from));
+          setGesture({ grip, from: share(event), was: shown });
+          // (A new one is drawn from the first move: a click leaves the one there is in sight.)
         }}
         onPointerMove={(event) => {
           if (!gesture) return setHover(gripAt(event));
           setDraft(pulled(gesture.grip, gesture.was, gesture.from, share(event)));
         }}
-        onPointerUp={() => {
-          // (A click, a part too thin to reach, or one that did not change, sets nothing.)
-          const changed =
-            draft && (["x", "y", "width", "height"] as const).some((side) => Math.abs(draft[side] - shown[side]) > 1e-6);
-          if (draft && changed && draft.width > 0.005 && draft.height > 0.002) {
-            setShown(draft);
-            onChange(draft);
-          }
+        onPointerUp={(event) => {
+          if (event.button !== 0 || !gesture) return;
+          // (Where it was let go, not the last move drawn. A click, a part too thin to reach, or one
+          // that did not change, sets nothing.)
+          take(draft && pulled(gesture.grip, gesture.was, gesture.from, share(event)));
           end();
         }}
         onPointerCancel={end}

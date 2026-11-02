@@ -3093,6 +3093,11 @@ button:focus-visible {
   border-style: dashed;
 }
 
+.reveal-area .monitor:focus-visible {
+  outline: 2px solid #4f8cff;
+  outline-offset: 2px;
+}
+
 /* The holds, as the crop's: on its corners and the middles of its edges. */
 .reveal-area .monitor .hold {
   position: absolute;
