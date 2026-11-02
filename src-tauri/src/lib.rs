@@ -534,7 +534,11 @@ fn setup(app: &AppHandle) -> tauri::Result<()> {
     // Light or dark, as the user chose, should they have chosen: all the windows alike.
     preview::show_look(app, app.state::<Perora>().setting(|settings| settings.look));
     // Started to open a file (from the file manager): the editor is what is shown, not the window.
-    let arguments: Vec<String> = std::env::args().collect();
+    // (Read as they come: a file's name need not be one the system can say in Unicode. Such a name
+    // does not open, and nothing else is the worse for it.)
+    let arguments: Vec<String> = std::env::args_os()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
     let to_open = std::env::current_dir()
         .ok()
         .and_then(|folder| opening::file_in(&arguments, &folder));

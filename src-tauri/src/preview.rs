@@ -863,13 +863,17 @@ pub fn present_opened(app: &AppHandle, frame: Frame, png: Vec<u8>) -> u64 {
     present_as(app, frame, png, true)
 }
 
-/// Whether there is something drawn on the image being previewed, that a new one would take the
-/// place of (not while it is being uploaded: what was drawn is on its way then).
-pub fn drawn_on(app: &AppHandle) -> bool {
-    matches!(
-        &*app.state::<Perora>().preview.lock(),
-        Some(pending) if !pending.edits.is_empty() && !matches!(pending.progress, Progress::Uploading)
-    )
+/// The image being previewed, when something is drawn on it that a new one would take the place of
+/// (not while it is being uploaded: what was drawn is on its way then).
+pub fn drawn_on(app: &AppHandle) -> Option<u64> {
+    match &*app.state::<Perora>().preview.lock() {
+        Some(pending)
+            if !pending.edits.is_empty() && !matches!(pending.progress, Progress::Uploading) =>
+        {
+            Some(pending.id)
+        }
+        _ => None,
+    }
 }
 
 /// The editor, from the main window: the image being previewed, in the large window; or, when
@@ -983,8 +987,10 @@ pub fn restore(app: &AppHandle) {
         .preview
         .awaiting
         .load(Ordering::Relaxed)
+        && !app.state::<Perora>().selection.is_active()
     {
-        // (The editor that was waiting for an image, still waiting.)
+        // (The editor that was waiting for an image, still waiting. Not over a selection screen,
+        // as `show` has it: it would be in the way and in the picture.)
         show_large(app);
     }
 }

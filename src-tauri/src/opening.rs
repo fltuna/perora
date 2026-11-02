@@ -5,6 +5,7 @@
 //! 「いろんな画像タイプに対応したほうがいいだろうから、開いてから対応の有無だそう」).
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -17,6 +18,10 @@ use crate::preview;
 /// on is drawn on a canvas as large as the image, and the web view has no larger canvas.
 const MOST_PIXELS: u64 = 64 * 1024 * 1024;
 const LONGEST_SIDE: u32 = 16_384;
+
+/// One image is put in the editor at a time: what is asked about one (a drawing it would take the
+/// place of) is asked and answered before the next is looked at.
+static PUTTING_IN: Mutex<()> = Mutex::new(());
 
 /// The file Perora was started (or asked by a second start) to open: what follows `--open`. One
 /// that is not whole is taken from the folder it was started in.
@@ -73,8 +78,16 @@ fn open_now(app: &AppHandle, file: &Path) {
     };
     // What is drawn on the image in the editor now is lost when another takes its place: the user
     // says whether that is what they want. (Asked once the new one is read: what cannot be opened
-    // is not asked about.)
-    if preview::drawn_on(app) {
+    // is not asked about.) And asked again should another image, drawn on, be there by the time
+    // the answer comes (a capture came meanwhile).
+    let _one_at_a_time = PUTTING_IN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut agreed = None;
+    while let Some(drawn) = preview::drawn_on(app) {
+        if agreed == Some(drawn) {
+            break;
+        }
         let mut asked = app
             .dialog()
             .message(language.open_over_drawing(&name))
@@ -90,6 +103,7 @@ fn open_now(app: &AppHandle, file: &Path) {
         if !asked.blocking_show() {
             return;
         }
+        agreed = Some(drawn);
     }
     preview::present_opened(app, frame, png);
 }
