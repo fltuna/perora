@@ -10,6 +10,7 @@ import {
   appear,
   choose,
   chooseFile,
+  openClipboard,
   copy,
   discard,
   enlarge,
@@ -504,13 +505,19 @@ export function Preview() {
 }
 
 /** The large window with no image in it: the editor asked for from the main window. An image is
-    dropped on it, or chosen; Escape, or the button, closes it (as closing the window does). */
+    dropped on it, chosen, or taken from the clipboard; Escape, or the button, closes it (as closing
+    the window does). */
 function Awaiting({ dropping, t }: { dropping: boolean; t: Translate }) {
   useEffect(() => {
+    // Escape closes it; Ctrl+V opens what is on the clipboard.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      void getCurrentWindow().close();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void getCurrentWindow().close();
+      } else if (event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "v" && !event.repeat) {
+        event.preventDefault();
+        void openClipboard();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -525,6 +532,9 @@ function Awaiting({ dropping, t }: { dropping: boolean; t: Translate }) {
         <div className="buttons">
           <button className="primary" onClick={() => void chooseFile()}>
             {t("preview.awaiting.choose")}
+          </button>
+          <button title={`${t("preview.awaiting.clipboard")} (Ctrl+V)`} onClick={() => void openClipboard()}>
+            {t("preview.awaiting.clipboard")}
           </button>
           <button onClick={() => void getCurrentWindow().close()}>{t("preview.awaiting.close")}</button>
         </div>

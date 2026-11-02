@@ -161,8 +161,10 @@ export function useDropping(): boolean {
   return dropping;
 }
 
-/** The editor, with no image in it yet: a file is to be chosen for it. */
+/** The editor, with no image in it yet: a file is to be chosen for it, or what is on the clipboard
+    opened in it. */
 export const chooseFile = () => invoke<void>("preview_choose_file");
+export const openClipboard = () => invoke<void>("preview_open_clipboard");
 
 /** The address of the capture's image: the whole of it, or the small version for the corner. */
 export const imageUrl = (capture: Capture, which: "image" | "thumbnail") =>

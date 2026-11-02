@@ -334,12 +334,20 @@ function Home({ view, t }: { view: View; t: Translate }) {
         <div>
           <p className="hint">{t("main.home.openHint")}</p>
         </div>
-        <button onClick={() => void invoke("main_open_editor")}>
-          <span className="icon" aria-hidden="true">
-            {ICONS.editor}
-          </span>
-          {t("main.home.openEditor")}
-        </button>
+        <div className="buttons">
+          <button onClick={() => void invoke("main_open_clipboard")}>
+            <span className="icon" aria-hidden="true">
+              {"\uE77F"}
+            </span>
+            {t("main.home.openClipboard")}
+          </button>
+          <button onClick={() => void invoke("main_open_editor")}>
+            <span className="icon" aria-hidden="true">
+              {ICONS.editor}
+            </span>
+            {t("main.home.openEditor")}
+          </button>
+        </div>
       </section>
       {!shortcut.registered && (
         <p className="notice warning" role="status">

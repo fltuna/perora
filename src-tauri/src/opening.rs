@@ -7,6 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use perora_core::geometry::Rect;
+use perora_core::platform::Frame;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -44,6 +46,53 @@ pub fn open(app: &AppHandle, file: PathBuf) {
     std::thread::spawn(move || open_now(&app, &file));
 }
 
+/// Opens what is on the clipboard in the editor, in the background: the file copied in the file
+/// manager, when one was (as it is, its camera's turn too), otherwise the image (owner, 2026-11-02:
+/// 「クリップボードの画像を開くも用意しておきたいかもね」). Nothing to open there is said so.
+pub fn open_clipboard(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let language = app.state::<Perora>().language();
+        let Ok(mut clipboard) = arboard::Clipboard::new() else {
+            crate::notify(&app, Lasting::Long, language.nothing_on_clipboard());
+            return;
+        };
+        if let Some(file) = clipboard
+            .get()
+            .file_list()
+            .ok()
+            .and_then(|files| files.into_iter().next())
+        {
+            return open_now(&app, &file);
+        }
+        let Ok(image) = clipboard.get_image() else {
+            crate::notify(&app, Lasting::Long, language.nothing_on_clipboard());
+            return;
+        };
+        let (width, height) = (image.width as u32, image.height as u32);
+        if u64::from(width) * u64::from(height) > MOST_PIXELS
+            || width > LONGEST_SIDE
+            || height > LONGEST_SIDE
+        {
+            crate::notify(
+                &app,
+                Lasting::Long,
+                language.clipboard_too_large(width, height),
+            );
+            return;
+        }
+        let frame = Frame {
+            area: Rect::new(0, 0, width, height),
+            rgba: image.bytes.into_owned(),
+        };
+        if frame.rgba.len() != width as usize * height as usize * 4 {
+            crate::notify(&app, Lasting::Long, language.nothing_on_clipboard());
+            return;
+        }
+        put_in(&app, frame, &language.clipboard_image());
+    });
+}
+
 fn open_now(app: &AppHandle, file: &Path) {
     let perora = app.state::<Perora>();
     let language = perora.language();
@@ -67,12 +116,19 @@ fn open_now(app: &AppHandle, file: &Path) {
             return;
         }
     };
+    put_in(app, frame, &name);
+}
+
+/// Puts an image that was read (`name` is what it is called when the user is asked about it) in the
+/// editor.
+fn put_in(app: &AppHandle, frame: Frame, name: &str) {
+    let language = app.state::<Perora>().language();
     // (The window shows the image from a PNG of it.)
     let png = match frame.to_png() {
         Ok(png) => png,
         Err(error) => {
-            eprintln!("open: {} could not be made a PNG: {error}", file.display());
-            crate::notify(app, Lasting::Long, language.not_opened(&name));
+            eprintln!("open: {name} could not be made a PNG: {error}");
+            crate::notify(app, Lasting::Long, language.not_opened(name));
             return;
         }
     };
@@ -90,7 +146,7 @@ fn open_now(app: &AppHandle, file: &Path) {
         }
         let mut asked = app
             .dialog()
-            .message(language.open_over_drawing(&name))
+            .message(language.open_over_drawing(name))
             .title("Perora")
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
@@ -113,6 +169,18 @@ fn open_now(app: &AppHandle, file: &Path) {
 #[tauri::command]
 pub fn main_open_editor(app: AppHandle) {
     preview::open_editor(&app);
+}
+
+/// What is on the clipboard, in the editor: from the main window, or the editor that waits for an
+/// image.
+#[tauri::command]
+pub fn main_open_clipboard(app: AppHandle) {
+    open_clipboard(&app);
+}
+
+#[tauri::command]
+pub fn preview_open_clipboard(app: AppHandle) {
+    open_clipboard(&app);
 }
 
 /// Lets the user choose an image file in the editor that waits for one, and opens it.

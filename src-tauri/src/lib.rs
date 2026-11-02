@@ -308,6 +308,8 @@ pub fn run() {
             main_window::main_sign_out,
             main_window::main_capture,
             opening::main_open_editor,
+            opening::main_open_clipboard,
+            opening::preview_open_clipboard,
             opening::preview_choose_file,
             reveal::main_edit_reveal_area,
             reveal::reveal_state,

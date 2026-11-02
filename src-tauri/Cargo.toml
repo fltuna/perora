@@ -36,6 +36,9 @@ dirs = "7"
 # The versions Tauri itself uses: for a WebView2 setting it does not offer.
 webview2-com = "0.39"
 windows-core = "0.62"
+# What the clipboard plugin reads the clipboard with: for the files copied in the file manager, which
+# the plugin does not offer.
+arboard = "3"
 
 [features]
 # Serves the built user interface from inside the executable instead of the development server.

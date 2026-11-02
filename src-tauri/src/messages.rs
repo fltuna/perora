@@ -353,6 +353,25 @@ impl Language {
         self.text("open.overDrawing", &[("name", name)])
     }
 
+    /// The image on the clipboard, as the user is asked about it: what stands for a file's name.
+    pub fn clipboard_image(&self) -> String {
+        self.text("open.clipboardImage", &[])
+    }
+
+    pub fn nothing_on_clipboard(&self) -> String {
+        self.text("open.clipboardEmpty", &[])
+    }
+
+    pub fn clipboard_too_large(&self, width: u32, height: u32) -> String {
+        self.text(
+            "open.clipboardTooLarge",
+            &[
+                ("width", &width.to_string()),
+                ("height", &height.to_string()),
+            ],
+        )
+    }
+
     pub fn open_anyway(&self) -> String {
         self.text("open.anyway", &[])
     }
@@ -504,6 +523,9 @@ mod tests {
             english.open_over_drawing("n"),
             english.open_anyway(),
             english.keep_drawing(),
+            english.clipboard_image(),
+            english.nothing_on_clipboard(),
+            english.clipboard_too_large(1, 2),
             english.images(),
             english.all_files(),
             english.notices_here(),
