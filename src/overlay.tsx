@@ -156,7 +156,8 @@ export function Overlay() {
 
   return (
     <div
-      className={`overlay mode-${selection.mode}`}
+      // (With the + drawn, the system's pointer is not: both would show, the + a frame behind.)
+      className={`overlay mode-${selection.mode}${selection.crosshair ? " with-plus" : ""}`}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         // The press belongs to this window until it ends, wherever the pointer goes (another monitor).

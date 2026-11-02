@@ -1744,6 +1744,12 @@ button:focus-visible {
   cursor: default;
 }
 
+/* The + is the pointer over the screen (owner, 2026-11-02: two were seen with a mouse). The bar and
+   the list keep their own pointers. */
+.overlay.with-plus {
+  cursor: none;
+}
+
 .overlay .still {
   position: absolute;
   inset: 0;
