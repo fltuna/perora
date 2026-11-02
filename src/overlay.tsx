@@ -219,6 +219,14 @@ export function Overlay() {
 function captureSteps(selection: Selection, local: (rect: Area) => Box, t: ReturnType<typeof translator>): Step[] {
   const [wide, high] = [window.innerWidth, window.innerHeight];
   const shown = example(selection);
+  // (The part that brings the bar back, here: a strip of a few pixels at the top is shown as one.)
+  const zone = selection.barRevealArea;
+  const reveal = {
+    left: Math.round(zone.x * wide),
+    top: Math.round(zone.y * high),
+    width: Math.round(zone.width * wide),
+    height: Math.max(4, Math.round(zone.height * high)),
+  };
   const frame = shown
     ? local(shown)
     : { left: Math.round(wide * 0.28), top: Math.round(high * 0.3), width: Math.round(wide * 0.44), height: Math.round(high * 0.44) };
@@ -230,6 +238,18 @@ function captureSteps(selection: Selection, local: (rect: Area) => Box, t: Retur
   };
   return [
     { at: "modes", text: t("tour.capture.modes") },
+    // The bar slides away (when it does), and comes back with the pointer in the part set for that:
+    // the part is shown, and where to change both (owner, 2026-11-02: 「チュートリアルに自動で隠れる
+    // けど上に行けば出せるよーってのと同時に枠だそう。で、設定からいじれるよーってのも解説しておこ」).
+    ...(selection.barHideSeconds > 0
+      ? [
+          {
+            at: reveal,
+            text: t("tour.capture.barHide", { seconds: selection.barHideSeconds }),
+            art: <span className="reveal-zone" style={reveal} />,
+          },
+        ]
+      : []),
     {
       at: frame,
       text: t("tour.capture.window"),

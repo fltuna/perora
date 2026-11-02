@@ -328,8 +328,8 @@ pub fn seconds_to_set(seconds: f64) -> Option<f64> {
 }
 
 /// How long the mode bar stays at first, in seconds (owner: 「3~5秒ほど」, then 「デフォルトの消える
-/// 秒数を2秒ぐらいにしておこ」).
-pub const DEFAULT_BAR_HIDE_SECONDS: f64 = 2.0;
+/// 秒数を2秒ぐらいにしておこ」, then 「0.75sがデフォルトの速度にしておいて」).
+pub const DEFAULT_BAR_HIDE_SECONDS: f64 = 0.75;
 
 /// A part of a monitor, as shares of its width and height (0 to 1), from its top left corner: the
 /// same on a monitor of any size.
@@ -792,13 +792,13 @@ mod tests {
                 .unwrap()
                 .hide_own_windows
         );
-        // The mode bar slides away after 2 seconds, or never; the + is drawn unless switched off.
-        assert_eq!(settings.bar_hide_seconds, 2.0);
+        // The mode bar slides away after 0.75 seconds, or never; the + is drawn unless switched off.
+        assert_eq!(settings.bar_hide_seconds, 0.75);
         let hide = |file: &[u8]| parse(file).unwrap().bar_hide_seconds;
         assert_eq!(hide(br#"{"barHideSeconds": 0}"#), 0.0);
         assert_eq!(hide(br#"{"barHideSeconds": 10}"#), 10.0);
         assert_eq!(hide(br#"{"barHideSeconds": 1.5}"#), 1.5);
-        assert_eq!(hide(br#"{"barHideSeconds": -1}"#), 2.0);
+        assert_eq!(hide(br#"{"barHideSeconds": -1}"#), 0.75);
         // It comes back with the pointer in a part of the monitor: a strip at the top, or one drawn.
         assert_eq!(settings.bar_reveal_area, Zone::BAR_REVEAL);
         let drawn = parse(br#"{"barRevealArea": {"x": 0.1, "y": 0, "width": 0.8, "height": 0.2}}"#)
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(written["enableUpload"], false);
         assert_eq!(written["startMode"], "monitor");
         assert_eq!(written["hideOwnWindows"], true);
-        assert_eq!(written["barHideSeconds"], 2.0);
+        assert_eq!(written["barHideSeconds"], 0.75);
         assert_eq!(written["barRevealArea"]["width"], 0.4);
         assert_eq!(written["showCrosshair"], true);
         assert_eq!(written["saveOnCapture"], false);

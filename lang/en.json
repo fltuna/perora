@@ -302,6 +302,7 @@
   "tour.count": "{at} / {of}",
   "tour.again": "You can watch this tour again from here at any time.",
   "tour.capture.modes": "Choose how to capture. The number keys 1 to 5 switch too.",
+  "tour.capture.barHide": "This bar slides up out of the way after {seconds} seconds. Move the mouse into the blue frame to bring it back. How long it stays and where the frame is can be changed in the settings, under Capture, Selection screen.",
   "tour.capture.window": "In Smart mode, point at a window and click to capture that window.",
   "tour.capture.drag": "Drag to capture an area.",
   "tour.capture.cancel": "Press Esc or Cancel to stop capturing.",

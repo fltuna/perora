@@ -3164,3 +3164,12 @@ button:focus-visible {
   background: rgb(0 0 0 / 70%);
   border-radius: 10px;
 }
+
+/* The tour of the selection screen: the part that brings the mode bar back, as the settings show it. */
+.overlay .tour .reveal-zone {
+  position: absolute;
+  box-sizing: border-box;
+  background: rgb(79 140 255 / 35%);
+  border: 1px solid #4f8cff;
+  pointer-events: none;
+}
