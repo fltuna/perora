@@ -49,6 +49,9 @@ const QUIT_PATIENCE: Duration = Duration::from_secs(3);
 /// How long a window that was just hidden may still be on screen.
 const SETTLE: Duration = Duration::from_millis(60);
 
+/// How long a question that was just answered may still be on screen, fading out.
+const ASKED_GONE: Duration = Duration::from_millis(300);
+
 /// Started with this, Perora goes to the notification area without showing its window: for being
 /// started with the system, and for being restarted while it is worked on.
 const START_IN_TRAY: &str = "--tray";
@@ -906,7 +909,12 @@ fn capture(app: &AppHandle) {
         // drawn on that, the user says first whether that is what they want (owner, 2026-11-02:
         // 「撮影入る前に出そうか」). Not when the capture goes elsewhere (only copied, or uploaded
         // at once): the image stays then.
-        if goes_to_preview(&perora) && preview::drawn_on(&app).is_some() {
+        // (Not asked again while the selection screen is up, to take the screen anew: that was
+        // agreed to already, and the question would be behind the selection screen, unseen.)
+        if goes_to_preview(&perora)
+            && !perora.selection.is_active()
+            && preview::drawn_on(&app).is_some()
+        {
             if !opening::ask_over_drawing(
                 &app,
                 &perora.language().capture_over_drawing(),
@@ -914,8 +922,9 @@ fn capture(app: &AppHandle) {
             ) {
                 return;
             }
-            // (The question is gone from the screen before the screen is taken.)
-            std::thread::sleep(SETTLE);
+            // (The question is gone from the screen before the screen is taken: it fades out as it
+            // closes, as windows do.)
+            std::thread::sleep(ASKED_GONE);
         }
         // The main window is not what is to be captured (unless the user wants Perora's windows in
         // the picture), nor is a notice: gone at once (the window is back when this is over). A
