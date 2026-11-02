@@ -567,8 +567,9 @@ function Crosshair({ selection }: { selection: Selection }) {
   }, [id, area.x, area.y, area.width, area.height, scale]);
 
   if (!at || !on(area, at)) return null;
-  // Four arms around the point, white in black: seen on anything. The point itself is left clear.
-  const arms = "M15.5 0v11M15.5 20v11M0 15.5h11M20 15.5h11";
+  // Two lines that cross on the point, white in black: seen on anything. A whole +, the point
+  // included (owner, 2026-11-02: 「真ん中開けずにちゃんとした + であってほしい」).
+  const arms = "M15.5 0v31M0 15.5h31";
   return (
     <svg
       className="crosshair"
