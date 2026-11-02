@@ -20,7 +20,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::notice::{Corner, Lasting, MOST_SECONDS, Occasion, Sound};
+use crate::notice::{Corner, Lasting, Occasion, Sound};
 use crate::settings::{After, Hider, Leaves, Look};
 use crate::{Perora, preview, recovery, settings};
 
@@ -115,7 +115,7 @@ struct SettingsView {
     enable_upload: bool,
     start_mode: &'static str,
     /// How long the selection screen's mode bar stays, in seconds; 0 for for good.
-    bar_hide_seconds: u32,
+    bar_hide_seconds: f64,
     /// Where on its monitor the pointer brings the bar back.
     bar_reveal_area: settings::Zone,
     /// Whether the selection screen draws a + where the pointer is.
@@ -156,14 +156,14 @@ struct SettingsView {
     /// start at sign-in at all.)
     start_minimized: bool,
     /// How long a notice stays, in seconds; 0 for until it is clicked.
-    notice_seconds: u32,
+    notice_seconds: f64,
     notice_corner: &'static str,
     /// What becomes of a capture once it is taken: `preview`, `edit` or `copy`.
     after_capture: &'static str,
     /// Which way of making a part unreadable the editor starts with: `last`, `mosaic` or `blur`.
     default_hider: &'static str,
     /// How long the small preview stays, in seconds; 0 for until something is done with it.
-    preview_seconds: u32,
+    preview_seconds: f64,
     preview_corner: &'static str,
     /// Each of the sounds: `none`, `custom`, or `system:` and the name of one of the system's.
     capture_sound: String,
@@ -585,10 +585,7 @@ pub fn main_set(app: AppHandle, setting: String, value: serde_json::Value) {
     // that are numbers: of seconds, no more than can be chosen. They count from the next one that
     // appears.)
     if let "noticeSeconds" | "previewSeconds" | "barHideSeconds" = setting.as_str() {
-        let seconds = value
-            .as_u64()
-            .and_then(|seconds| u32::try_from(seconds).ok())
-            .filter(|seconds| *seconds <= MOST_SECONDS);
+        let seconds = value.as_f64().and_then(settings::seconds_to_set);
         if let Some(seconds) = seconds {
             settings::update(&app, |settings| match setting.as_str() {
                 "noticeSeconds" => settings.notice_seconds = seconds,
@@ -838,7 +835,7 @@ mod tests {
             upload_immediately: true,
             enable_upload: true,
             start_mode: "smart",
-            bar_hide_seconds: 5,
+            bar_hide_seconds: 1.5,
             bar_reveal_area: settings::Zone::BAR_REVEAL,
             show_crosshair: true,
             hide_own_windows: true,
@@ -863,13 +860,13 @@ mod tests {
             quality: "high",
             start_at_sign_in: true,
             start_minimized: true,
-            notice_seconds: 12,
+            notice_seconds: 12.0,
             notice_corner: "topLeft",
             notice_sound: "none".into(),
             notice_sound_file: None,
             after_capture: "edit",
             default_hider: "mosaic",
-            preview_seconds: 20,
+            preview_seconds: 20.0,
             preview_corner: "topRight",
             capture_sound: "custom".into(),
             capture_sound_file: None,
@@ -894,7 +891,7 @@ mod tests {
             assert_eq!(view[name], true, "{name}");
         }
         assert_eq!(view["startMode"], "smart");
-        assert_eq!(view["barHideSeconds"], 5);
+        assert_eq!(view["barHideSeconds"], 1.5);
         assert_eq!(view["barRevealArea"]["height"], 0.01);
         assert_eq!(view["afterCapture"], "edit");
         assert_eq!(view["defaultHider"], "mosaic");
@@ -906,10 +903,10 @@ mod tests {
         assert_eq!(view["copyFit"], 0);
         assert_eq!(view["quality"], "high");
         assert_eq!(view["theme"], "dark");
-        assert_eq!(view["noticeSeconds"], 12);
+        assert_eq!(view["noticeSeconds"], 12.0);
         assert_eq!(view["noticeCorner"], "topLeft");
         assert_eq!(view["noticeSound"], "none");
-        assert_eq!(view["previewSeconds"], 20);
+        assert_eq!(view["previewSeconds"], 20.0);
         assert_eq!(view["previewCorner"], "topRight");
         assert_eq!(view["captureSound"], "custom");
         assert!(view["captureSoundFile"].is_null());

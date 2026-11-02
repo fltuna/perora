@@ -187,7 +187,7 @@ pub struct Settings {
     pub start_mode: Mode,
     /// How long the selection screen's mode bar stays before it slides up out of the way, in
     /// seconds; 0 for for good. It comes back while the pointer is up there.
-    pub bar_hide_seconds: u32,
+    pub bar_hide_seconds: f64,
     /// Where on its monitor the pointer brings the slid-away bar back.
     pub bar_reveal_area: Zone,
     /// Whether the selection screen draws a + where the pointer is (seen where the system's pointer
@@ -225,7 +225,7 @@ pub struct Settings {
     pub default_hider: Hider,
     /// How long the small preview stays before the capture is given up, in seconds; 0 for until
     /// something is done with it.
-    pub preview_seconds: u32,
+    pub preview_seconds: f64,
     /// The corner of the screen the small preview appears in.
     pub preview_corner: Corner,
     /// The sound a capture comes with, and the file of the user's own that is that sound when it
@@ -234,7 +234,7 @@ pub struct Settings {
     pub capture_sound_file: Option<PathBuf>,
     /// How long a notice that says how something ended stays, in seconds; 0 for until it is
     /// clicked.
-    pub notice_seconds: u32,
+    pub notice_seconds: f64,
     /// The corner of the screen Perora's notices appear in.
     pub notice_corner: Corner,
     /// The sound a notice comes with.
@@ -320,9 +320,15 @@ impl Settings {
     }
 }
 
+/// A number of seconds as it can be set: from 0 to as many as can be chosen, to the thousandth.
+pub fn seconds_to_set(seconds: f64) -> Option<f64> {
+    (seconds.is_finite() && (0.0..=MOST_SECONDS).contains(&seconds))
+        .then(|| (seconds * 1000.0).round() / 1000.0)
+}
+
 /// How long the mode bar stays at first, in seconds (owner: 「3~5秒ほど」, then 「デフォルトの消える
 /// 秒数を2秒ぐらいにしておこ」).
-pub const DEFAULT_BAR_HIDE_SECONDS: u32 = 2;
+pub const DEFAULT_BAR_HIDE_SECONDS: f64 = 2.0;
 
 /// A part of a monitor, as shares of its width and height (0 to 1), from its top left corner: the
 /// same on a monitor of any size.
@@ -490,16 +496,14 @@ impl Settings {
             None => vec![formats[Leaves::Save as usize]],
         };
 
-        // (A whole number of seconds, no more than can be chosen.)
+        // (Seconds, in parts of one too (owner, 2026-11-02: 「1.5秒とか絶妙な時間設定できるといい気がする」),
+        // none below 0 or more than can be chosen.)
         let mut seconds = |key: &str| match file.remove(key) {
-            Some(Value::Number(seconds)) => seconds
-                .as_u64()
-                .and_then(|seconds| u32::try_from(seconds).ok())
-                .filter(|seconds| *seconds <= MOST_SECONDS),
+            Some(Value::Number(seconds)) => seconds.as_f64().and_then(seconds_to_set),
             _ => None,
         };
         let notice_seconds = seconds("noticeSeconds").unwrap_or(DEFAULT_SECONDS);
-        let preview_seconds = seconds("previewSeconds").unwrap_or(0);
+        let preview_seconds = seconds("previewSeconds").unwrap_or(0.0);
         let bar_hide_seconds = seconds("barHideSeconds").unwrap_or(DEFAULT_BAR_HIDE_SECONDS);
         let bar_reveal_area = file
             .remove("barRevealArea")
@@ -788,23 +792,12 @@ mod tests {
                 .hide_own_windows
         );
         // The mode bar slides away after 2 seconds, or never; the + is drawn unless switched off.
-        assert_eq!(settings.bar_hide_seconds, 2);
-        assert_eq!(
-            parse(br#"{"barHideSeconds": 0}"#).unwrap().bar_hide_seconds,
-            0
-        );
-        assert_eq!(
-            parse(br#"{"barHideSeconds": 10}"#)
-                .unwrap()
-                .bar_hide_seconds,
-            10
-        );
-        assert_eq!(
-            parse(br#"{"barHideSeconds": -1}"#)
-                .unwrap()
-                .bar_hide_seconds,
-            2
-        );
+        assert_eq!(settings.bar_hide_seconds, 2.0);
+        let hide = |file: &[u8]| parse(file).unwrap().bar_hide_seconds;
+        assert_eq!(hide(br#"{"barHideSeconds": 0}"#), 0.0);
+        assert_eq!(hide(br#"{"barHideSeconds": 10}"#), 10.0);
+        assert_eq!(hide(br#"{"barHideSeconds": 1.5}"#), 1.5);
+        assert_eq!(hide(br#"{"barHideSeconds": -1}"#), 2.0);
         // It comes back with the pointer in a part of the monitor: a strip at the top, or one drawn.
         assert_eq!(settings.bar_reveal_area, Zone::BAR_REVEAL);
         let drawn = parse(br#"{"barRevealArea": {"x": 0.1, "y": 0, "width": 0.8, "height": 0.2}}"#)
@@ -863,7 +856,7 @@ mod tests {
         assert_eq!(own.as_taken_formats, [Format::Png, Format::WebP]);
         own.save_as_taken_as(&[Format::Jpeg]);
         assert_eq!(own.as_taken_formats, [Format::Jpeg]);
-        assert_eq!(settings.notice_seconds, 7);
+        assert_eq!(settings.notice_seconds, 7.0);
         assert_eq!(settings.notice_corner, Corner::BottomRight);
         assert_eq!(
             settings.notice_sound,
@@ -889,7 +882,7 @@ mod tests {
                 .default_hider,
             Hider::Last
         );
-        assert_eq!(settings.preview_seconds, 0);
+        assert_eq!(settings.preview_seconds, 0.0);
         assert_eq!(settings.preview_corner, Corner::BottomRight);
         assert_eq!(settings.capture_sound, Sound::default());
         assert_eq!(settings.capture_sound_file, None);
@@ -941,11 +934,11 @@ mod tests {
         // (Notices could once be switched off: a file that says so is read as any other, and
         // what it says of that is not written back.)
         let notices = parse(br#"{"noticeEnabled": false, "noticeSeconds": 0}"#).unwrap();
-        assert_eq!(notices.notice_seconds, 0);
+        assert_eq!(notices.notice_seconds, 0.0);
         assert!(!notices.to_file().contains_key("noticeEnabled"));
         assert_eq!(
             parse(br#"{"noticeSeconds": 45}"#).unwrap().notice_seconds,
-            45
+            45.0
         );
         let leaving = parse(
             br#"{"copyFormat": "jpg", "uploadFormat": "webp", "uploadFit": 2048, "saveFit": 1280,
@@ -994,7 +987,7 @@ mod tests {
         // (What was once "no preview" is "to the clipboard only", until something else is chosen.)
         let previews = parse(br#"{"previewEnabled": false, "previewSeconds": 20}"#).unwrap();
         assert_eq!(previews.after_capture, After::Copy);
-        assert_eq!(previews.preview_seconds, 20);
+        assert_eq!(previews.preview_seconds, 20.0);
         assert!(!previews.to_file().contains_key("previewEnabled"));
         let edits = parse(br#"{"previewEnabled": false, "afterCapture": "edit"}"#).unwrap();
         assert_eq!(edits.after_capture, After::Edit);
@@ -1008,11 +1001,16 @@ mod tests {
             parse(br#"{"previewSeconds": 3601, "previewEnabled": 0}"#).unwrap(),
             Settings::default()
         );
-        // (Seconds that are not a whole number of them, or more than can be chosen, are none.)
-        for seconds in ["\"5\"", "-1", "2.5", "3601", "true"] {
+        // (Parts of a second are seconds too; what is not a number of them, below 0, or more than can
+        // be chosen, is none.)
+        assert_eq!(
+            parse(br#"{"noticeSeconds": 2.5}"#).unwrap().notice_seconds,
+            2.5
+        );
+        for seconds in ["\"5\"", "-1", "-0.5", "3600.5", "true"] {
             let file = format!(r#"{{"noticeSeconds": {seconds}}}"#);
             let odd = parse(file.as_bytes()).unwrap();
-            assert_eq!(odd.notice_seconds, 7, "{seconds}");
+            assert_eq!(odd.notice_seconds, 7.0, "{seconds}");
         }
 
         // A value of the wrong kind, or one that means nothing, costs that setting, not the others.
@@ -1085,7 +1083,7 @@ mod tests {
         assert_eq!(written["enableUpload"], false);
         assert_eq!(written["startMode"], "monitor");
         assert_eq!(written["hideOwnWindows"], true);
-        assert_eq!(written["barHideSeconds"], 2);
+        assert_eq!(written["barHideSeconds"], 2.0);
         assert_eq!(written["barRevealArea"]["width"], 0.4);
         assert_eq!(written["showCrosshair"], true);
         assert_eq!(written["saveOnCapture"], false);
@@ -1093,13 +1091,13 @@ mod tests {
         assert_eq!(written["saveOnCaptureCustom"], false);
         assert_eq!(written["saveOnCaptureFormats"], serde_json::json!(["png"]));
         assert_eq!(written["saveOnCaptureFit"], 0);
-        assert_eq!(written["noticeSeconds"], 7);
+        assert_eq!(written["noticeSeconds"], 7.0);
         assert_eq!(written["uploadFormat"], "png");
         assert_eq!(written["uploadFit"], 0);
         assert_eq!(written["quality"], "high");
         assert_eq!(written["afterCapture"], "preview");
         assert_eq!(written["defaultHider"], "last");
-        assert_eq!(written["previewSeconds"], 0);
+        assert_eq!(written["previewSeconds"], 0.0);
         assert_eq!(written["toursSeen"], serde_json::json!(["capture"]));
         assert_eq!(written["somethingNew"]["a"], 1);
         assert!(!path.with_extension("json.new").exists());

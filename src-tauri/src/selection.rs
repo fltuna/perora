@@ -119,7 +119,7 @@ struct SelectionView {
     /// The windows that can be chosen, front to back: for the list of them.
     windows: Vec<WindowView>,
     /// How long the mode bar stays before it slides up out of the way, in seconds; 0 for for good.
-    bar_hide_seconds: u32,
+    bar_hide_seconds: f64,
     /// Where on this monitor the pointer brings it back.
     bar_reveal_area: crate::settings::Zone,
     /// Whether a + is drawn where the pointer is.

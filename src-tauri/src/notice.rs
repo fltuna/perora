@@ -167,8 +167,8 @@ pub fn sound(app: &AppHandle, occasion: Occasion) {
 
 /// How long a notice that says how something ended is on screen, in seconds, until the user
 /// chooses otherwise; and the longest they can choose. (With 0, it stays until it is clicked.)
-pub const DEFAULT_SECONDS: u32 = 7;
-pub const MOST_SECONDS: u32 = 3600;
+pub const DEFAULT_SECONDS: f64 = 7.0;
+pub const MOST_SECONDS: f64 = 3600.0;
 
 /// How long a notice is on screen, which depends on what it says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,10 +185,10 @@ pub enum Lasting {
 impl Lasting {
     /// What says how something ended stays as long as the user chose (`seconds`), whichever way
     /// it ended; with 0, for good: `None`, and it leaves when it is clicked or another is said.
-    fn time(self, seconds: u32) -> Option<Duration> {
+    fn time(self, seconds: f64) -> Option<Duration> {
         match self {
             Lasting::Brief | Lasting::Long => {
-                (seconds > 0).then(|| Duration::from_secs(seconds.into()))
+                (seconds > 0.0).then(|| Duration::from_secs_f64(seconds))
             }
             Lasting::UntilTheNext => Some(Duration::from_secs(90)),
         }

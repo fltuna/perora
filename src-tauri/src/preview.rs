@@ -769,7 +769,7 @@ fn leave_to_its_time(app: &AppHandle) {
     let perora = app.state::<Perora>();
     // (For as long as the settings say now: not changed under it afterwards.)
     let seconds = perora.setting(|settings| settings.preview_seconds);
-    if seconds == 0 {
+    if seconds <= 0.0 {
         return;
     }
     let Some((id, timer)) = perora
@@ -787,7 +787,7 @@ fn leave_to_its_time(app: &AppHandle) {
 
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(seconds.into()));
+        std::thread::sleep(Duration::from_secs_f64(seconds));
         loop {
             let perora = app.state::<Perora>();
             let still = matches!(

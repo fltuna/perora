@@ -894,8 +894,8 @@ function RevealArea({ view, t }: { view: View; t: Translate }) {
   );
 }
 
-/** A number of seconds, typed: set as soon as what is typed is one (a whole number, not more than
-    can be chosen). What is not one is not set, and is gone when the field is left. */
+/** A number of seconds, typed: set as soon as what is typed is one (parts of a second too, as 1.5;
+    not more than can be chosen). What is not one is not set, and is gone when the field is left. */
 function Seconds({
   label,
   unit,
@@ -923,16 +923,16 @@ function Seconds({
       <input
         ref={field}
         type="number"
-        inputMode="numeric"
+        inputMode="decimal"
         min={0}
         max={MOST_SECONDS}
-        step={1}
+        step={0.1}
         aria-label={label}
         value={typed}
         onChange={(event) => {
           const now = event.target.value;
           setTyped(now);
-          if (!/^\d+$/.test(now) || Number(now) > MOST_SECONDS || Number(now) === set.current) return;
+          if (!/^\d+(\.\d+)?$/.test(now) || Number(now) > MOST_SECONDS || Number(now) === set.current) return;
           set.current = Number(now);
           onChange(set.current);
         }}
