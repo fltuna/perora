@@ -12,9 +12,12 @@
 //! held. Not over a selection screen: it is put away as a capture starts, and back (with its time
 //! anew) when that comes to nothing.
 //!
-//! P3 of docs/gpui-rewrite.md. Not yet: the large window, where a capture is drawn on (P4: a click on
-//! the picture does nothing more than keep the capture); uploading (P5: never on offer until then);
-//! asking where to save (P5: saved where the settings say); the tour (P6).
+//! A click on the picture takes the capture to the large window (`large`), where it is drawn on; a
+//! capture the user has drawn on at once goes there instead of the corner. Saving and copying are the
+//! same from either window: from the large one, with what is drawn on the capture (`burn`).
+//!
+//! P3 of docs/gpui-rewrite.md, and P4 for the large window. Not yet: uploading (P5: never on offer
+//! until then); asking where to save (P5: saved where the settings say); the tour (P6).
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -39,7 +42,7 @@ use perora_ui::{Theme, Tip};
 
 use crate::notice::{self, Lasting};
 use crate::state::Perora;
-use crate::{capture, corner, display, gpu, hwnd, motion};
+use crate::{burn, capture, corner, display, gpu, hwnd, large, motion};
 
 /// How often a preview whose time is over looks whether the pointer has left it.
 const POINTED_AT: Duration = Duration::from_millis(250);
@@ -61,9 +64,13 @@ pub struct Shown {
     pub copied_as: Output,
     /// The picture the window shows.
     pub picture: Option<Arc<RenderImage>>,
-    /// Something is done about it from the start: the user has captures drawn on at once (P4: shown
-    /// in the small window until the large one is there). It is not given up on its own.
+    /// Something is done about it from the start: the user has captures drawn on at once. It is
+    /// not given up on its own.
     pub touched: bool,
+    /// It is shown in the large window at once, to be drawn on; with the picture the editor shows,
+    /// made on the way.
+    pub large: bool,
+    pub editor_picture: Option<perora_editor::Picture>,
 }
 
 #[derive(Default)]
@@ -80,6 +87,10 @@ struct Previews {
     asked: u64,
     presented: u64,
     window: Option<WindowHandle<Small>>,
+    /// The capture is in the large window (and stays there until it is gone); the picture the
+    /// editor is to show it with, when it was made on the way.
+    large: bool,
+    editor_picture: Option<perora_editor::Picture>,
     /// Which showing of the window is the last: one that comes into its corner stops where a later
     /// showing put it.
     placing: u64,
@@ -140,6 +151,12 @@ pub fn present(shown: Shown, cx: &mut App) {
     previews.save_failure = None;
     previews.copy_failure = None;
     previews.busy = None;
+    previews.large = shown.large;
+    previews.editor_picture = shown.editor_picture;
+    // (In the corner, it takes the place of the one the large window was showing.)
+    if !shown.large {
+        large::close(cx);
+    }
     show(cx);
     leave_to_its_time(cx);
 }
@@ -163,16 +180,21 @@ pub fn put_away(cx: &mut App) -> bool {
     if let Some(pending) = previews.pending.as_mut() {
         pending.timer += 1;
     }
-    close(cx)
+    let small = close(cx);
+    let large = large::hide(cx);
+    small || large
 }
 
-/// The small window, when it is on screen: Perora's own, in the picture when the user wants that.
-pub fn on_screen_now(cx: &mut App) -> Option<platform::WindowId> {
-    let window = cx.default_global::<Previews>().window?;
-    window
-        .update(cx, |_, window, _| hwnd::of(window))
-        .ok()
-        .flatten()
+/// The small window and the large one, those on screen: Perora's own, in the picture when the user
+/// wants that.
+pub fn on_screen_now(cx: &mut App) -> Vec<platform::WindowId> {
+    let small = cx.default_global::<Previews>().window.and_then(|window| {
+        window
+            .update(cx, |_, window, _| hwnd::of(window))
+            .ok()
+            .flatten()
+    });
+    small.into_iter().chain(large::on_screen_now(cx)).collect()
 }
 
 /// How tall the small window is (physical pixels) while it is on screen with a capture, in the
@@ -216,8 +238,21 @@ fn show(cx: &mut App) {
     if capture::busy(cx) {
         return;
     }
-    let Some((width, height)) = cx
-        .default_global::<Previews>()
+    let previews = cx.default_global::<Previews>();
+    if previews.large {
+        let picture = previews.editor_picture.take();
+        let Some((id, frame)) = previews
+            .pending
+            .as_ref()
+            .map(|pending| (pending.id, pending.frame.clone()))
+        else {
+            return;
+        };
+        close(cx);
+        large::show(id, frame, picture, cx);
+        return;
+    }
+    let Some((width, height)) = previews
         .pending
         .as_ref()
         .map(|pending| (pending.frame.width(), pending.frame.height()))
@@ -306,11 +341,67 @@ fn close(cx: &mut App) -> bool {
     true
 }
 
-/// Tells the window that what it shows changed.
+/// Tells the windows that what they show changed.
 fn changed(cx: &mut App) {
     if let Some(window) = cx.default_global::<Previews>().window {
         let _ = window.update(cx, |_, _, cx| cx.notify());
     }
+    large::changed(cx);
+}
+
+/// What the large window says of the capture.
+pub struct Said {
+    pub width: u32,
+    pub height: u32,
+    /// The clipboard holds this capture as copying would put it there (if not with what is drawn
+    /// now); and with what is drawn now.
+    pub on_clipboard: bool,
+    pub copied: bool,
+    pub failure: Option<String>,
+    /// What it is saved and copied as, as its buttons' tooltips say.
+    pub save_as: String,
+    pub copy_as: String,
+}
+
+pub fn said_of(id: u64, edits: &[perora_core::edit::Edit], cx: &mut App) -> Option<Said> {
+    let settings = Perora::get(cx).settings();
+    let language = Perora::get(cx).language();
+    let previews = cx.default_global::<Previews>();
+    let pending = previews
+        .pending
+        .as_ref()
+        .filter(|pending| pending.id == id)?;
+    let now = platform::clipboard_sequence();
+    let failure = previews
+        .save_failure
+        .as_ref()
+        .map(|detail| language.text("preview.saveFailed", &[("detail", detail)]))
+        .or_else(|| {
+            previews
+                .copy_failure
+                .as_deref()
+                .or(pending.copy_failure())
+                .map(|detail| language.text("preview.copyFailed", &[("detail", detail)]))
+        });
+    Some(Said {
+        width: pending.frame.width(),
+        height: pending.frame.height(),
+        on_clipboard: pending.on_clipboard(now) && pending.copied_as_asked(&settings),
+        copied: pending.copied_now(now, &settings, edits),
+        failure,
+        save_as: leaves_as_said(
+            &language,
+            &settings,
+            pending.once.of(Leaves::Save),
+            Leaves::Save,
+        ),
+        copy_as: leaves_as_said(
+            &language,
+            &settings,
+            pending.once.of(Leaves::Copy),
+            Leaves::Copy,
+        ),
+    })
 }
 
 /// The preview is on screen (anew, or again): from now it has as long as the user chose, and the
@@ -387,13 +478,16 @@ fn discard(id: Option<u64>, cx: &mut App) {
     previews.pending = None;
     previews.picture = None;
     previews.busy = None;
+    previews.large = false;
+    previews.editor_picture = None;
     close(cx);
+    large::close(cx);
 }
 
 /// Discarding as the user does it (the bin, closing the window): when they asked for that, the image
 /// is taken off the clipboard as well (only the image: whatever came to the clipboard after it
 /// stays), and what was saved of it as it was taken is taken away.
-fn discard_by_user(id: Option<u64>, cx: &mut App) {
+pub fn discard_by_user(id: Option<u64>, cx: &mut App) {
     let settings = Perora::get(cx).settings();
     let previews = cx.default_global::<Previews>();
     let Some(pending) = previews
@@ -440,10 +534,12 @@ fn to_do(id: u64, cx: &mut App) -> Option<&mut Pending> {
 
 /// Saves the capture as a file (or several, of each kind the user saves as) in the folder for
 /// saving, named after the moment, and closes the preview; a notice says where it went, and a click
-/// on that shows the file. The preview stays, with the reason, when it could not be written.
-fn save(id: u64, cx: &mut App) {
+/// on that shows the file. The preview stays, with the reason, when it could not be written. From the
+/// large window, what is drawn on it is in the file, and the window is out of sight at once.
+pub fn save(id: u64, cx: &mut App) {
     let settings = Perora::get(cx).settings();
     let language = Perora::get(cx).language();
+    let edits = large::drawing_of(id, cx).unwrap_or_default();
     let Some(pending) = to_do(id, cx) else {
         return;
     };
@@ -454,48 +550,69 @@ fn save(id: u64, cx: &mut App) {
     previews.busy = Some(id);
     previews.save_failure = None;
     changed(cx);
+    let drawn = !edits.is_empty();
+    if drawn {
+        large::leaving(id, true, cx);
+    }
 
     // As the user has captures saved, or asked for this once: the kinds of file (one of each, all
     // by one name), and how large at most.
     let how = once.output(&settings, Leaves::Save);
     let kinds = once.saved_as(&settings);
-    let saving = cx.background_executor().spawn(async move {
-        let leaving = Pending::new(0, frame, png, None, how);
-        let directory = saving::save_directory(&settings).ok_or("no folder to save to")?;
-        // Every kind is made before any is written: one that cannot be made leaves no file.
-        let files = kinds
-            .iter()
-            .map(|kind| {
-                Ok((
-                    kind.name(),
-                    leaving.file(Output {
-                        format: *kind,
-                        ..how
-                    })?,
-                ))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        let files: Vec<_> = files
-            .iter()
-            .map(|(kind, file)| (*kind, file.as_slice()))
-            .collect();
-        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-        let name = format!("Perora {}", platform::local_timestamp());
-        saving::write_each(&directory, &name, &files, false)
-            .map(|first| (first, kinds.len()))
-            .map_err(|not_all| match not_all.first {
-                // Some of them are there: a notice says which, and the window why the rest is not.
-                Some(first) => {
-                    let kind = not_all.kind.to_uppercase();
-                    let name = first.file_name().unwrap_or_default().to_string_lossy();
-                    let said = language.saved_but_not(&first.display().to_string(), &kind);
-                    let refused = language.not_all_saved(&kind, &not_all.error.to_string(), &name);
-                    format!("{refused}\u{0}{said}\u{0}{}", first.display())
-                }
-                None => not_all.error.to_string(),
-            })
-    });
     cx.spawn(async move |cx| {
+        let (frame, png) = if drawn {
+            match burn::burn(frame, edits, cx).await {
+                Ok(burned) => (Arc::new(burned), None),
+                Err(detail) => {
+                    eprintln!("save: the drawing could not be made into an image: {detail}");
+                    cx.update(|cx| {
+                        let unmade = Perora::get(cx).language().text("editor.unmade", &[]);
+                        not_left(id, |previews| previews.save_failure = Some(unmade), cx);
+                    });
+                    return;
+                }
+            }
+        } else {
+            (frame, png)
+        };
+        let saving = cx.background_executor().spawn(async move {
+            let leaving = Pending::new(0, frame, png, None, how);
+            let directory = saving::save_directory(&settings).ok_or("no folder to save to")?;
+            // Every kind is made before any is written: one that cannot be made leaves no file.
+            let files = kinds
+                .iter()
+                .map(|kind| {
+                    Ok((
+                        kind.name(),
+                        leaving.file(Output {
+                            format: *kind,
+                            ..how
+                        })?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let files: Vec<_> = files
+                .iter()
+                .map(|(kind, file)| (*kind, file.as_slice()))
+                .collect();
+            std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+            let name = format!("Perora {}", platform::local_timestamp());
+            saving::write_each(&directory, &name, &files, false)
+                .map(|first| (first, kinds.len()))
+                .map_err(|not_all| match not_all.first {
+                    // Some of them are there: a notice says which, and the window why the rest is
+                    // not.
+                    Some(first) => {
+                        let kind = not_all.kind.to_uppercase();
+                        let name = first.file_name().unwrap_or_default().to_string_lossy();
+                        let said = language.saved_but_not(&first.display().to_string(), &kind);
+                        let refused =
+                            language.not_all_saved(&kind, &not_all.error.to_string(), &name);
+                        format!("{refused}\u{0}{said}\u{0}{}", first.display())
+                    }
+                    None => not_all.error.to_string(),
+                })
+        });
         let saved = saving.await;
         cx.update(|cx| {
             let previews = cx.default_global::<Previews>();
@@ -519,15 +636,7 @@ fn save(id: u64, cx: &mut App) {
                     if let (Some(said), Some(first)) = (parts.next(), parts.next()) {
                         notice::say_of_file(said.to_owned(), Lasting::Long, first.into(), cx);
                     }
-                    let previews = cx.default_global::<Previews>();
-                    if previews
-                        .pending
-                        .as_ref()
-                        .is_some_and(|pending| pending.id == id)
-                    {
-                        previews.save_failure = Some(refused);
-                    }
-                    changed(cx);
+                    not_left(id, |previews| previews.save_failure = Some(refused), cx);
                 }
             }
         });
@@ -535,11 +644,30 @@ fn save(id: u64, cx: &mut App) {
     .detach();
 }
 
+/// The capture did not leave: nothing is being done with it now, the window says why, and the large
+/// one is in sight and drawn on again.
+fn not_left(id: u64, why: impl FnOnce(&mut Previews), cx: &mut App) {
+    let previews = cx.default_global::<Previews>();
+    if previews.busy == Some(id) {
+        previews.busy = None;
+    }
+    if previews
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.id == id)
+    {
+        why(previews);
+    }
+    large::stays(id, cx);
+    changed(cx);
+}
+
 /// Puts the capture on the clipboard again, as it is asked for now, and keeps the preview: after
 /// something else was copied, or to have it as another kind of file. Nothing is done when the
-/// clipboard holds just that already.
-fn copy(id: u64, cx: &mut App) {
+/// clipboard holds just that already. From the large window, with what is drawn on it.
+pub fn copy(id: u64, cx: &mut App) {
     let settings = Perora::get(cx).settings();
+    let edits = large::drawing_of(id, cx).unwrap_or_default();
     let Some(pending) = to_do(id, cx) else {
         return;
     };
@@ -550,7 +678,8 @@ fn copy(id: u64, cx: &mut App) {
         .output(&settings, Leaves::Copy);
     let there = pending.on_clipboard(platform::clipboard_sequence())
         && pending.copied_as.format == copy_as.format
-        && pending.copied_as.fit == copy_as.fit;
+        && pending.copied_as.fit == copy_as.fit
+        && pending.copied_edits == edits;
     let frame = pending.frame.clone();
     let previews = cx.default_global::<Previews>();
     previews.copy_failure = None;
@@ -559,12 +688,31 @@ fn copy(id: u64, cx: &mut App) {
         return;
     }
     previews.busy = Some(id);
+    let drawn = !edits.is_empty();
+    if drawn {
+        large::leaving(id, false, cx);
+    }
     let turn = copying::turn();
-    let copying = cx
-        .background_executor()
-        .spawn(async move { copying::to_clipboard(&frame, copy_as, turn) });
     cx.spawn(async move |cx| {
-        let copied = copying.await;
+        let frame = if drawn {
+            match burn::burn(frame, edits.clone(), cx).await {
+                Ok(burned) => Arc::new(burned),
+                Err(detail) => {
+                    eprintln!("copy: the drawing could not be made into an image: {detail}");
+                    cx.update(|cx| {
+                        let unmade = Perora::get(cx).language().text("editor.unmade", &[]);
+                        not_left(id, |previews| previews.copy_failure = Some(unmade), cx);
+                    });
+                    return;
+                }
+            }
+        } else {
+            frame
+        };
+        let copied = cx
+            .background_executor()
+            .spawn(async move { copying::to_clipboard(&frame, copy_as, turn) })
+            .await;
         cx.update(|cx| {
             let previews = cx.default_global::<Previews>();
             if previews.busy == Some(id) {
@@ -578,7 +726,9 @@ fn copy(id: u64, cx: &mut App) {
                     pending.copied =
                         Some(Ok((!copied.passed).then_some(copied.sequence).flatten()));
                     pending.copied_as = copy_as;
-                    if pending.png.is_none() {
+                    pending.copied_edits = edits;
+                    // (Only the PNG of the capture as it was taken is saved as it is.)
+                    if pending.png.is_none() && !drawn {
                         pending.png = copied.png.map(Arc::new);
                     }
                     if let Some(window) = previews.window {
@@ -587,11 +737,12 @@ fn copy(id: u64, cx: &mut App) {
                             cx.notify();
                         });
                     }
+                    large::stays(id, cx);
+                    changed(cx);
                 }
                 (Some(_), Err(detail)) => {
                     eprintln!("clipboard: the capture was not put there: {detail}");
-                    previews.copy_failure = Some(detail);
-                    changed(cx);
+                    not_left(id, |previews| previews.copy_failure = Some(detail), cx);
                 }
                 // Gone in the moment it was written: it is not left on the clipboard.
                 (None, Ok(copied)) => {
@@ -636,11 +787,15 @@ fn touch(id: u64, cx: &mut App) {
     }
 }
 
-/// The picture was clicked: the capture in the large window, to be drawn on. (P4: there is none
-/// yet; the capture is kept, as one that something was done about.)
+/// The picture was clicked: the capture in the large window, to be drawn on (and there it stays).
 fn enlarge(id: u64, cx: &mut App) {
-    touch(id, cx);
-    eprintln!("preview {id}: the large window is not there yet (P4)");
+    let previews = cx.default_global::<Previews>();
+    let Some(pending) = previews.pending.as_mut().filter(|pending| pending.id == id) else {
+        return;
+    };
+    pending.touched = true;
+    previews.large = true;
+    show(cx);
 }
 
 /// What the window shows, read in one go.
@@ -787,8 +942,7 @@ impl Small {
             width: pending.frame.width(),
             height: pending.frame.height(),
             picture: previews.picture.clone(),
-            copied: pending.on_clipboard(platform::clipboard_sequence())
-                && pending.copied_as_asked(settings),
+            copied: pending.copied_now(platform::clipboard_sequence(), settings, &[]),
             failure,
             once: pending.once.clone(),
         })
@@ -820,6 +974,22 @@ fn icon(glyph: &'static str, size: f32) -> gpui::Div {
         .text_size(px(size))
         .line_height(px(size))
         .child(glyph)
+}
+
+/// What the capture leaves as one way, as a tooltip says it: the kinds of file, and how large at most.
+fn leaves_as_said(language: &Language, settings: &Settings, once: &Once, leaves: Leaves) -> String {
+    let (_, kinds, fit) = leaves_as(settings, once, leaves);
+    let kinds = kinds
+        .iter()
+        .map(|kind| language.text(&format!("main.output.format.{}", kind.name()), &[]))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    if fit == 0 {
+        kinds
+    } else {
+        let within = language.text("main.output.fit.within", &[("side", &fit.to_string())]);
+        format!("{kinds}, {within}")
+    }
 }
 
 /// What the capture leaves as, one way: what was chosen this once, or what the settings say. (The
@@ -1195,23 +1365,7 @@ impl Small {
     /// What the capture leaves as, one way, in words: the kinds of file (all of them, for saving),
     /// and how large at most when it is made smaller.
     fn leaves_as_said(&self, settings: &Settings, once: &Once, leaves: Leaves) -> String {
-        let (_, kinds, fit) = leaves_as(settings, once, leaves);
-        let kinds = kinds
-            .iter()
-            .map(|kind| {
-                self.language
-                    .text(&format!("main.output.format.{}", kind.name()), &[])
-            })
-            .collect::<Vec<_>>()
-            .join(" + ");
-        if fit == 0 {
-            kinds
-        } else {
-            let within = self
-                .language
-                .text("main.output.fit.within", &[("side", &fit.to_string())]);
-            format!("{kinds}, {within}")
-        }
+        leaves_as_said(&self.language, settings, once, leaves)
     }
 
     /// The small arrow beside a way to leave: it opens (or puts away) the choice of what the capture

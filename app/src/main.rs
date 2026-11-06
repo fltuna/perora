@@ -10,6 +10,7 @@
 
 mod arguments;
 mod bar;
+mod burn;
 mod capture;
 mod corner;
 mod cursor;
@@ -17,6 +18,7 @@ mod display;
 mod gpu;
 mod hwnd;
 mod instance;
+mod large;
 mod main_window;
 mod motion;
 mod notice;

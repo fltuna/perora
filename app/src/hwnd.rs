@@ -95,3 +95,27 @@ pub fn place(window: WindowId, area: Rect) {
         );
     }
 }
+
+/// Shows the window behind every other at that size (physical pixels), without making it the active
+/// one: so that the system gives it its size and it has something to draw into. Its inside, as large
+/// as the system let it be (it keeps a window within about the size of a monitor).
+pub fn behind_everything(window: WindowId, area: Rect) -> (u32, u32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, HWND_BOTTOM, SWP_SHOWWINDOW};
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd(window),
+            Some(HWND_BOTTOM),
+            area.x,
+            area.y,
+            area.width as i32,
+            area.height as i32,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        let mut inside = RECT::default();
+        let _ = GetClientRect(hwnd(window), &mut inside);
+        (
+            (inside.right - inside.left).max(1) as u32,
+            (inside.bottom - inside.top).max(1) as u32,
+        )
+    }
+}

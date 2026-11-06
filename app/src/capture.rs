@@ -314,7 +314,12 @@ fn to_preview(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) 
             }
         };
         let copying_took = started.elapsed();
-        let picture = preview::picture_of(&frame, scale);
+        // (Drawn on at once: the picture of the large window, not of the corner.)
+        let (picture, editor_picture) = if touched {
+            (None, perora_editor::Picture::new(&frame))
+        } else {
+            (preview::picture_of(&frame, scale), None)
+        };
         eprintln!(
             "deliver: {}x{} copied in {:.0} ms, its picture made in {:.0} ms more",
             frame.width(),
@@ -330,6 +335,8 @@ fn to_preview(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) 
             copied_as: how,
             picture,
             touched,
+            large: touched,
+            editor_picture,
         })
     });
     cx.spawn(async move |cx| {

@@ -2852,6 +2852,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd0578bdecb7d6d88987b8b2b1e3a4e2f81df9d0ece1078623324a567904e7b7"
 dependencies = [
  "lyon_algorithms",
+ "lyon_extra",
  "lyon_tessellation",
 ]
 
@@ -2863,6 +2864,16 @@ checksum = "f3a6b9d4e8b48acd531fbf1241ad9b270df6e60b6b92bdea1469f4f40899d805"
 dependencies = [
  "lyon_path",
  "num-traits",
+]
+
+[[package]]
+name = "lyon_extra"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7755f08423275157ad1680aaecc9ccb7e0cc633da3240fea2d1522935cc15c72"
+dependencies = [
+ "lyon_path",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3728,6 +3739,7 @@ dependencies = [
  "gpui_platform",
  "image",
  "perora-core",
+ "perora-editor",
  "perora-ui",
  "raw-window-handle",
  "tray-icon",
@@ -3758,6 +3770,8 @@ name = "perora-editor"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "image",
+ "lyon",
  "perora-core",
  "perora-ui",
 ]

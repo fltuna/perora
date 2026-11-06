@@ -22,6 +22,7 @@ gpui_platform = { workspace = true }
 image = { version = "0.25", default-features = false }
 raw-window-handle = "0.6"
 perora-core = { path = "../crates/core" }
+perora-editor = { path = "../crates/editor" }
 perora-ui = { path = "../crates/ui" }
 # Without its defaults: they bring GTK for Linux (libappindicator), which Windows does not use and
 # whose pins clash with GPUI's build tools in the lock file.

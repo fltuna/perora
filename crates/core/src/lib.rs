@@ -6,6 +6,7 @@ pub mod account;
 pub mod config;
 #[cfg(windows)]
 pub mod copying;
+pub mod drawing;
 pub mod edit;
 pub mod frame;
 pub mod geometry;

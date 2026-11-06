@@ -1,2 +1,14 @@
-//! Perora's editor on GPUI. Filled in at P4 of `docs/gpui-rewrite.md`: one part per tool, the same
-//! drawing code for the screen and for the picture that leaves.
+//! Perora's editor on GPUI (P4 of `docs/gpui-rewrite.md`): one part per kind of mark (`marks`) and
+//! per tool (`tools`), the same drawing code for the screen and for the picture that leaves
+//! (`paint`), and the editor that puts them together (`editor`).
+
+pub mod editor;
+pub mod icons;
+pub mod marks;
+pub mod paint;
+pub mod picture;
+pub mod tools;
+pub mod view;
+
+pub use editor::{Capture, Editor, Event, Leave};
+pub use picture::Picture;

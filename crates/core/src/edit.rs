@@ -11,19 +11,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A drawing is no longer than this: so many things drawn, so many places in all. The window lets
-/// no more be drawn (`MOST` in `src/editor.tsx`: keep the two in step).
-const MOST_EDITS: usize = 2_000;
-const MOST_POINTS: usize = 200_000;
-
-/// No more parts than this are made unreadable in one drawing. (The window lets no more be made:
-/// `MOST.hidden` in `src/editor.tsx`.)
-const MOST_HIDDEN: usize = 64;
-
-/// All that is written in one drawing is no longer than this, in bytes. (`MOST.written` in
-/// `src/editor.tsx`, which counts letters: no more of those than a third of this.)
-const LONGEST_TEXT: usize = 60_000;
-
 /// Wholly solid: what the inside of letters is when nothing else is said.
 fn solid() -> f32 {
     1.0
@@ -192,33 +179,11 @@ pub enum Edit {
 
 /// Whether a list of edits is one a window could have made: not longer than a drawing gets.
 pub fn is_a_drawing(edits: &[Edit]) -> bool {
-    let points: usize = edits
-        .iter()
-        .map(|edit| match edit {
-            Edit::Pen { points, .. } | Edit::Marker { points, .. } => points.len(),
-            _ => 2,
-        })
-        .sum();
-    let hidden = edits
-        .iter()
-        .filter(|edit| matches!(edit, Edit::Blur { .. } | Edit::Mosaic { .. }))
-        .count();
-    let written: usize = edits
-        .iter()
-        .map(|edit| match edit {
-            Edit::Text { text, .. } => text.len(),
-            _ => 0,
-        })
-        .sum();
     let named = edits.iter().all(|edit| match edit {
         Edit::Text { font, .. } => font.len() <= LONGEST_FONT,
         _ => true,
     });
-    edits.len() <= MOST_EDITS
-        && points <= MOST_POINTS
-        && hidden <= MOST_HIDDEN
-        && written <= LONGEST_TEXT
-        && named
+    crate::drawing::fits(edits) && named
 }
 
 /// How large the image is after the edits: as it was, or what the last crop among them leaves.
@@ -416,6 +381,7 @@ mod tests {
 
     #[test]
     fn a_drawing_is_not_longer_than_drawings_get() {
+        use crate::drawing::{MOST_EDITS, MOST_HIDDEN, MOST_LETTERS, MOST_POINTS};
         let line = Edit::Line {
             from: [0.0, 0.0],
             to: [1.0, 1.0],
@@ -452,8 +418,8 @@ mod tests {
             italic: false,
             strike: false,
         };
-        assert!(is_a_drawing(&[written(LONGEST_TEXT)]));
-        assert!(!is_a_drawing(&[written(LONGEST_TEXT), written(1)]));
+        assert!(is_a_drawing(&[written(MOST_LETTERS)]));
+        assert!(!is_a_drawing(&[written(MOST_LETTERS), written(1)]));
 
         let named = |length: usize| Edit::Text {
             from: [0.0, 0.0],

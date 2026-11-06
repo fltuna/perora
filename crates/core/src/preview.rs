@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::edit::Edit;
 use crate::geometry::Rect;
 use crate::output::{Format, Output};
 use crate::platform::Frame;
@@ -118,6 +119,8 @@ pub struct Pending {
     pub copied: Option<Result<Option<u32>, String>>,
     /// What it was made into as it went there: the kind of file, how large at most.
     pub copied_as: Output,
+    /// What was drawn on it when it last went there (nothing: it went as it was taken).
+    pub copied_edits: Vec<Edit>,
     /// What the user chose for this capture alone.
     pub once: Chosen,
     /// Whether anything was done about the capture: shown large, asked to leave (whatever came of
@@ -144,6 +147,7 @@ impl Pending {
             png,
             copied,
             copied_as,
+            copied_edits: Vec::new(),
             once: Chosen::default(),
             touched: false,
             saved: Vec::new(),
@@ -167,6 +171,13 @@ impl Pending {
     pub fn copied_as_asked(&self, settings: &Settings) -> bool {
         let asked = self.once.of(Leaves::Copy).output(settings, Leaves::Copy);
         self.copied_as.format == asked.format && self.copied_as.fit == asked.fit
+    }
+
+    /// Whether the clipboard holds the capture as copying it would put it there now (`now` is the
+    /// clipboard's count of changes): as large, the same kind of file, and with what is drawn on it
+    /// now (`edits`).
+    pub fn copied_now(&self, now: Option<u32>, settings: &Settings, edits: &[Edit]) -> bool {
+        self.on_clipboard(now) && self.copied_as_asked(settings) && self.copied_edits == edits
     }
 
     /// Why it could not be put on the clipboard as the preview appeared, if it could not.
