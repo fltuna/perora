@@ -59,9 +59,13 @@ pub fn set(cx: &mut App, change: impl FnOnce(&mut Settings)) {
 /// Has every window of Perora's draw itself again: what the settings say, how they look, the
 /// language. (The small preview offers what the settings say now, as the large window does.)
 pub fn changed(cx: &mut App) {
-    for window in cx.windows() {
-        let _ = window.update(cx, |_, window, _| window.refresh());
-    }
+    // (Once what is being done is done: a window cannot be told while it is the one telling, as
+    // the main window is when one of its controls changes a setting.)
+    cx.defer(|cx| {
+        for window in cx.windows() {
+            let _ = window.update(cx, |_, window, _| window.refresh());
+        }
+    });
 }
 
 /// The windows' look: every one of them changes at once.

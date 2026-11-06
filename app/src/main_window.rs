@@ -351,10 +351,11 @@ impl Render for MainWindow {
             .children(content);
 
         // An image dragged over the window: dropped, it opens in the editor.
-        let dropping = cx.has_active_drag();
-        if !dropping {
+        // (Files dragged over another of Perora's windows are that window's.)
+        if !cx.has_active_drag() {
             self.dragged = None;
         }
+        let dropping = self.dragged.is_some();
         // (Let go of anywhere over the window, whatever is under it and whatever was pressed last:
         // GPUI's own dropping asks whether the pointer is over what it is dropped on, which it
         // takes not to be after a key was pressed.)
