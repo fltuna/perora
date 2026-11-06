@@ -672,6 +672,10 @@ impl Actions {
                 inset: false,
             }])
             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                // (Opened by the tour, it is the tour's to put away.)
+                if this.by_tour {
+                    return;
+                }
                 this.choosing = None;
                 cx.notify();
             }))

@@ -1292,7 +1292,7 @@ impl Render for Small {
         root.child(picture)
             .child(status)
             .child(actions)
-            .children(tour)
+            .children(tour.map(|tour| gpui::deferred(tour).with_priority(3)))
     }
 }
 

@@ -288,7 +288,14 @@ impl Editor {
 
     /// The editor as it was.
     fn back_to(&mut self, was: Was, cx: &mut Context<Self>) {
-        if let Some(tool) = self.tool_mut() {
+        // (Every tool: the select tool's play draws with the shapes' one.)
+        for tool in [
+            &mut self.pen as &mut dyn crate::tools::Tool,
+            &mut self.marker,
+            &mut self.figures,
+            &mut self.stamps,
+            &mut self.hiders,
+        ] {
             tool.give_up();
         }
         self.drawing = was.drawing;
@@ -311,7 +318,7 @@ impl Editor {
 
     /// A tool in hand for the tour: as `hold` takes it, but not remembered as the user's choice
     /// (the way to make a part unreadable the editor starts with stays as it was).
-    fn tour_hold(&mut self, kind: Kind, cx: &mut Context<Self>) {
+    pub(super) fn tour_hold(&mut self, kind: Kind, cx: &mut Context<Self>) {
         self.crop_held(kind);
         self.tool = kind;
         self.pointing = None;
@@ -328,6 +335,15 @@ impl Editor {
         self.asked = None;
         self.by_button = None;
         cx.notify();
+    }
+
+    /// The drawing as it was when the step began, while a play draws on it: what the window is told
+    /// of (what the tour draws is not the user's).
+    pub(super) fn drawing_before_play(&self) -> Option<&[Edit]> {
+        self.play
+            .as_ref()
+            .and_then(|play| play.was.as_ref())
+            .map(|was| was.drawing.edits())
     }
 
     /// What the step shows, set going.
@@ -496,7 +512,8 @@ impl Editor {
                         self.turned(&event, cx);
                     }
                     if let Some(play) = self.play.as_mut() {
-                        play.done = turns;
+                        // (One turn a beat: a late beat does not skip one of the way.)
+                        play.done += 1;
                         play.hand = Some(HandNow {
                             at,
                             held: Some(Held::Right),

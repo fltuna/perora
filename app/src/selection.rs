@@ -706,6 +706,10 @@ impl Overlay {
             cx.stop_propagation();
             return;
         }
+        // (Nor does any other key do anything meanwhile: Alt with Esc does not give up.)
+        if self.selection.read(cx).touring.is_some() {
+            return;
+        }
         if event.is_held {
             return;
         }
@@ -870,8 +874,8 @@ impl Render for Overlay {
                     );
                 }
             }
-            // (While the tour is on, it is what dims the screen.)
-            None if touring => {}
+            // (While the tour is on, it is what dims the screen it is on.)
+            None if touring && home => {}
             None => root = root.child(div().absolute().size_full().bg(shade)),
         }
 

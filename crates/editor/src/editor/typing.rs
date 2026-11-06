@@ -910,7 +910,8 @@ impl EntityInputHandler for Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.frozen {
+        // (Nor is anything typed under the tour: its keys are its own.)
+        if self.frozen || self.touring.is_some() {
             return;
         }
         let Some(typing) = self.typing.as_mut() else {
@@ -938,7 +939,8 @@ impl EntityInputHandler for Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.frozen {
+        // (Nor is anything typed under the tour: its keys are its own.)
+        if self.frozen || self.touring.is_some() {
             return;
         }
         let Some(typing) = self.typing.as_mut() else {

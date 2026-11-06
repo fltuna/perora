@@ -338,12 +338,17 @@ impl Editor {
             .view(&marks, &words, theme, window, move |button, _, cx| {
                 let _ = this.update(cx, |editor, cx| editor.tour_button(button, cx));
             });
+        // (Over what is drawn over the rest, the panels and the choice: nothing of them is pressed
+        // while the tour is on.)
         Some(
-            div()
-                .absolute()
-                .inset_0()
-                .child(view)
-                .when_some(hand, |layer, hand| layer.child(hand)),
+            gpui::deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(view)
+                    .when_some(hand, |layer, hand| layer.child(hand)),
+            )
+            .with_priority(3),
         )
     }
 }

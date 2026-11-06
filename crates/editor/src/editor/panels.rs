@@ -1155,7 +1155,8 @@ impl Editor {
                             .borrow()
                             .get(&opener)
                             .is_some_and(|bounds| bounds.contains(&event.position));
-                        if !on_opener && this.asked == Some(panel) {
+                        // (What the tour opened is the tour's to put away.)
+                        if !on_opener && this.asked == Some(panel) && this.touring.is_none() {
                             this.asked = None;
                             if this.offered().is_none() {
                                 this.afloat = None;

@@ -171,7 +171,12 @@ impl Editor {
         if *next != self.tool {
             self.by_button = None;
             self.afloat = None;
-            self.hold(*next, cx);
+            // (The tour's turns are not the user's choice of tool.)
+            if self.touring.is_some() {
+                self.tour_hold(*next, cx);
+            } else {
+                self.hold(*next, cx);
+            }
         }
         true
     }

@@ -317,8 +317,10 @@ impl Editor {
     /// undone, the tool, the look).
     pub fn show(&mut self, capture: Capture, cx: &mut Context<Self>) {
         // (What a step of the tour was doing was about the capture before: not given back to this
-        // one.)
-        self.play = None;
+        // one. The other button it held is let go of.)
+        if self.play.take().is_some() {
+            self.turning = Default::default();
+        }
         if let Some(old) = self.capture.take() {
             self.retired.push(old.picture);
         }
@@ -367,7 +369,8 @@ impl Editor {
     }
 
     pub fn edits(&self) -> &[Edit] {
-        self.drawing.edits()
+        self.drawing_before_play()
+            .unwrap_or_else(|| self.drawing.edits())
     }
 
     /// Whether the last change was refused for a drawing that holds no more.
@@ -729,6 +732,10 @@ impl Editor {
     }
 
     fn moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // (Under the tour, the mouse is the tour's.)
+        if self.touring.is_some() {
+            return;
+        }
         self.turning_moved(event.position, event.pressed_button, cx);
         // The button was let go where the window did not hear it (another window took the mouse):
         // what it was doing ends there.
@@ -840,6 +847,9 @@ impl Editor {
     }
 
     fn up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.touring.is_some() {
+            return;
+        }
         if event.button == MouseButton::Right {
             self.right_let_go(cx);
         }
