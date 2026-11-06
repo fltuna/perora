@@ -31,11 +31,11 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
         if event.is_held {
             return;
         }
+        let key = super::letter_of(&event.keystroke.key);
         if key == "escape" && !modifiers.modified() {
             cx.stop_propagation();
             cx.emit(Event::Discard);

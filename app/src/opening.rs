@@ -16,7 +16,10 @@ use perora_editor::Picture;
 
 use crate::notice::{self, Lasting};
 use crate::state::Perora;
-use crate::{large, preview};
+use crate::{capture, large, preview};
+
+/// How often an image waiting for a capture to be over looks again.
+const WAITS_FOR_CAPTURE: Duration = Duration::from_millis(100);
 
 /// No image is opened that has more pixels than this, or is longer than this a side (as in the
 /// Tauri version: the GPU takes no picture longer than this a side, and the editor holds the image
@@ -28,8 +31,10 @@ const LONGEST_SIDE: u32 = 16_384;
 const CLIPBOARD_ASKED: u32 = 5;
 const CLIPBOARD_ASKED_EVERY: Duration = Duration::from_millis(100);
 
-/// An image read, ready for the editor: what it is called when the user is asked about it.
+/// An image read, ready for the editor: what it is called when the user is asked about it, and
+/// what it is previewed by (asked for as it began to be opened).
 struct Ready {
+    id: u64,
     frame: Frame,
     picture: Picture,
     name: String,
@@ -41,6 +46,8 @@ struct Ready {
 struct Opening {
     asking: bool,
     next: VecDeque<Ready>,
+    /// The system's window to choose a file is up: not another.
+    choosing: bool,
 }
 
 impl Global for Opening {}
@@ -55,6 +62,7 @@ pub fn open_editor(cx: &mut App) {
 /// is, its camera's turn too), otherwise the image (owner, 2026-11-02: 「クリップボードの画像を開くも
 /// 用意しておきたいかもね」). Nothing to open there is said so.
 pub fn open_clipboard(cx: &mut App) {
+    let id = preview::ask(cx);
     let executor = cx.background_executor().clone();
     let reading = cx.background_executor().spawn(async move {
         // (A file that is no longer there, or a folder, is passed over: the image, if there is one.)
@@ -105,6 +113,7 @@ pub fn open_clipboard(cx: &mut App) {
                 OnClipboard::File(file) => open_file(file, cx),
                 OnClipboard::Image(frame, picture) => put_in(
                     Ready {
+                        id,
                         frame,
                         picture,
                         name: language.clipboard_image(),
@@ -136,6 +145,12 @@ enum OnClipboard {
 /// An image file the user chooses, in the editor: the system's window for that, over the editor
 /// (which waits for an image). Closed without a choice, nothing happens.
 pub fn choose_file(cx: &mut App) {
+    // (Pressed twice: one window.)
+    let opening = cx.default_global::<Opening>();
+    if opening.choosing {
+        return;
+    }
+    opening.choosing = true;
     let owner = large::handle(cx);
     let language = Perora::get(cx).language();
     let (images, all) = (language.images(), language.all_files());
@@ -144,10 +159,16 @@ pub fn choose_file(cx: &mut App) {
     std::thread::spawn(move || {
         let _ = sender.send_blocking(platform::choose_image(owner, &images, &all));
     });
-    cx.spawn(async move |cx| match receiver.recv().await {
-        Ok(Ok(Some(file))) => cx.update(|cx| open_file(file, cx)),
-        Ok(Ok(None)) | Err(_) => {}
-        Ok(Err(detail)) => eprintln!("open: no file could be chosen: {detail}"),
+    cx.spawn(async move |cx| {
+        let chosen = receiver.recv().await;
+        cx.update(|cx| {
+            cx.default_global::<Opening>().choosing = false;
+            match chosen {
+                Ok(Ok(Some(file))) => open_file(file, cx),
+                Ok(Ok(None)) | Err(_) => {}
+                Ok(Err(detail)) => eprintln!("open: no file could be chosen: {detail}"),
+            }
+        });
     })
     .detach();
 }
@@ -156,6 +177,7 @@ pub fn choose_file(cx: &mut App) {
 /// beside the windows (reading takes a moment). One that cannot be opened is said so; one that is to
 /// take the place of a drawing is asked about first.
 pub fn open_file(path: PathBuf, cx: &mut App) {
+    let id = preview::ask(cx);
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -174,6 +196,7 @@ pub fn open_file(path: PathBuf, cx: &mut App) {
         cx.update(|cx| match read {
             Ok((frame, picture)) => put_in(
                 Ready {
+                    id,
                     frame,
                     picture,
                     name,
@@ -216,6 +239,11 @@ fn put_in(ready: Ready, cx: &mut App) {
     }
     opening.asking = true;
     cx.spawn(async move |cx| {
+        // (Not while a capture is being taken, or asked about: what is in the editor then may be
+        // about to change, and the question would be behind the screen.)
+        while cx.update(capture::busy) {
+            cx.background_executor().timer(WAITS_FOR_CAPTURE).await;
+        }
         let mut agreed = None;
         let mut go = true;
         loop {
@@ -243,7 +271,7 @@ fn put_in(ready: Ready, cx: &mut App) {
         }
         cx.update(|cx| {
             if go {
-                preview::present_opened(ready.frame, ready.picture, cx);
+                preview::present_opened(ready.id, ready.frame, ready.picture, cx);
             }
             let opening = cx.default_global::<Opening>();
             opening.asking = false;

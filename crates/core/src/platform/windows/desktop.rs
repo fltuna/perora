@@ -211,6 +211,15 @@ pub fn set_transitions(window: WindowId, enabled: bool) {
 
 /// Whether the user has the system animate what is in its windows (the "animation effects" of the
 /// accessibility settings). Taken to be so when the system does not say.
+/// The letter key (A to Z) held down now, by its place on the keyboard (as the US layout names it),
+/// when one is: what a key with Ctrl means, whatever letter the user's layout has there.
+pub fn letter_held() -> Option<char> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
+    (b'A'..=b'Z')
+        .find(|&key| unsafe { GetKeyState(i32::from(key)) } < 0)
+        .map(|key| char::from(key.to_ascii_lowercase()))
+}
+
 pub fn animations_enabled() -> bool {
     let mut enabled = BOOL::from(true);
     let asked = unsafe {

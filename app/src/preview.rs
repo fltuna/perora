@@ -182,9 +182,9 @@ pub fn restore(cx: &mut App) {
 /// Puts an image the user opened (a file, the clipboard) in the large window, to be drawn on: as a
 /// capture is that is drawn on at once, but with none of what becomes of a capture as it is taken
 /// (not copied, saved or uploaded: what it leaves as is what the user chooses there). `picture` is
-/// the editor's, made on the way.
-pub fn present_opened(frame: Frame, picture: perora_editor::Picture, cx: &mut App) {
-    let id = ask(cx);
+/// the editor's, made on the way; `id`, what it was asked for by as it began to be opened (a capture
+/// asked for later takes its place).
+pub fn present_opened(id: u64, frame: Frame, picture: perora_editor::Picture, cx: &mut App) {
     let copied_as = Perora::get(cx).settings().output(Leaves::Copy);
     present(
         Shown {

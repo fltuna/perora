@@ -146,7 +146,10 @@ fn open(capture: Option<Capture>, cx: &mut App) {
                 editor.offer_tour(cx);
             }
             if let Some(handle) = hwnd::of(window) {
-                fade_in(handle, cx);
+                // (Faded in as it comes back; on screen already, it stays as it is.)
+                if !hwnd::on_screen(handle) {
+                    fade_in(handle, cx);
+                }
                 platform::set_cloaked(handle, false);
                 hwnd::show(handle);
             }

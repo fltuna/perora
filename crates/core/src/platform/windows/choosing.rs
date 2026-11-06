@@ -1,6 +1,8 @@
 //! The system's window to choose a file to open: here, an image (its kinds listed first, every file
 //! after them, as the Tauri version's choice had it).
 
+use std::ffi::OsString;
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use windows::Win32::Foundation::{ERROR_CANCELLED, HWND};
@@ -75,7 +77,8 @@ fn choose(
         }
         let item = dialog.GetResult()?;
         let path = item.GetDisplayName(SIGDN_FILESYSPATH)?;
-        let chosen = path.to_string().map(PathBuf::from).ok();
+        // (As the system has the name: also one that is not whole Unicode.)
+        let chosen = Some(PathBuf::from(OsString::from_wide(path.as_wide())));
         windows::Win32::System::Com::CoTaskMemFree(Some(path.0 as *const _));
         Ok(chosen)
     }

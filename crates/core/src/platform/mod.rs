@@ -340,6 +340,13 @@ pub fn restart_shell() -> std::result::Result<(), String> {
     windows::hotkeys::restart_shell()
 }
 
+/// The letter key (A to Z) held down now, by its place on the keyboard (as the US layout names it),
+/// when one is: what a key with Ctrl means, whatever letter the user's layout has there.
+#[cfg(windows)]
+pub fn letter_held() -> Option<char> {
+    windows::desktop::letter_held()
+}
+
 /// Whether the user has the system animate what is in its windows; without that, nothing of
 /// Perora's moves into its place either.
 #[cfg(windows)]

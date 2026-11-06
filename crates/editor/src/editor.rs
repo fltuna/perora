@@ -1254,7 +1254,8 @@ impl Editor {
             return;
         }
         if modifiers.control && !modifiers.alt && !modifiers.platform {
-            match key {
+            let key = letter_of(key);
+            match key.as_str() {
                 "z" if !modifiers.shift => self.undo(cx),
                 "z" | "y" => self.redo(cx),
                 // What is selected: copied, taken out, put back, or made once more beside itself.
@@ -1313,6 +1314,19 @@ impl Editor {
             _ => None,
         }
     }
+}
+
+/// A key pressed with Ctrl, as the US layout names it: a letter of another alphabet is the letter
+/// whose place it has on the keyboard (Ctrl+V is Ctrl+V on a Russian layout too).
+fn letter_of(key: &str) -> String {
+    let mut letters = key.chars();
+    if let (Some(letter), None) = (letters.next(), letters.next())
+        && !letter.is_ascii()
+        && let Some(held) = perora_core::platform::letter_held()
+    {
+        return held.to_string();
+    }
+    key.to_string()
 }
 
 /// The tool that draws an edit of this kind.
