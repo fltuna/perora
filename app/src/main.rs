@@ -21,6 +21,7 @@ mod instance;
 mod large;
 mod main_window;
 mod notice;
+mod opening;
 mod preview;
 mod selection;
 mod shortcut;
@@ -169,8 +170,7 @@ fn act(signal: Signal, cx: &mut App) {
         Signal::Asked(Asked::Main) => main_window::open(cx),
         Signal::Asked(Asked::Tray) => {}
         Signal::Asked(Asked::Capture) => act(Signal::Capture, cx),
-        // P5: opening an image in the editor.
-        Signal::Asked(Asked::Open(file)) => eprintln!("open {}: not yet (P5)", file.display()),
+        Signal::Asked(Asked::Open(file)) => opening::open_file(file, cx),
         Signal::Quit => {
             // The icon, the shortcut and the claim to be the one Perora go before the application
             // does.
