@@ -3,8 +3,9 @@
 //! drawing (`perora_core::drawing`). What leaves (saving, copying) is the window's: the editor tells
 //! it what was asked (`Event`), and the window makes the image with the same drawing (`paint`).
 //!
-//! P4 of docs/gpui-rewrite.md, first part: the picture, looking closer and moving it, the pen, undo
-//! and redo. The other tools, the selection, the second bar and its panels come next.
+//! P4 of docs/gpui-rewrite.md: the picture, looking closer and moving it, undo and redo, the pen,
+//! selecting what is drawn and moving it (`selecting`). The other tools, the second bar and its
+//! panels come next.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -23,9 +24,10 @@ use perora_core::language::Language;
 use perora_ui::{Theme, Tip};
 
 use crate::icons;
-use crate::marks;
+use crate::marks::{self, Hold, mark_of};
 use crate::paint::{self, Painter};
 use crate::picture::Picture;
+use crate::selecting::{self, Pressed};
 use crate::tools::{self, Kind, Press, Tool};
 use crate::view::{self, Area, Looking};
 
@@ -55,6 +57,26 @@ pub enum Event {
 enum Gesture {
     /// The tool in hand is drawing (with the left button).
     Draw,
+    /// These are moved, by as far as the pointer went from where it took hold (pixels of the image).
+    Move {
+        indices: Vec<usize>,
+        from: Place,
+        by: Place,
+    },
+    /// The one selected is pulled by a hold: as it was taken hold of, and as it is now.
+    Resize {
+        index: usize,
+        hold: Hold,
+        from: Place,
+        was: Edit,
+        now: Edit,
+    },
+    /// A part is marked out: what is wholly in it is selected, along with `with`.
+    Marking {
+        from: Place,
+        to: Place,
+        with: Vec<usize>,
+    },
     /// The picture is held and moved, with that button: the place that was in the middle when it
     /// was taken hold of, and where the pointer was (logical pixels in the place).
     Pan {
@@ -67,8 +89,8 @@ enum Gesture {
 impl Gesture {
     fn button(&self) -> MouseButton {
         match self {
-            Gesture::Draw => MouseButton::Left,
             Gesture::Pan { button, .. } => *button,
+            _ => MouseButton::Left,
         }
     }
 }
@@ -87,6 +109,10 @@ pub struct Editor {
     gesture: Option<Gesture>,
     /// Space is held: the pointer takes hold of the picture, not of a tool.
     grabbing: bool,
+    /// What is selected (by its place in the list): one, several together, or nothing.
+    selected: Vec<usize>,
+    /// The pointer over a hold of the one selected: the way it is pulled there.
+    pointing: Option<CursorStyle>,
     /// The last change was refused: the drawing holds no more (said until something is drawn).
     full: bool,
     /// While the capture leaves: nothing is drawn, no key does anything.
@@ -130,6 +156,8 @@ impl Editor {
             stage: Rc::new(Cell::new(None)),
             gesture: None,
             grabbing: false,
+            selected: Vec::new(),
+            pointing: None,
             full: false,
             frozen: false,
             focus: cx.focus_handle(),
@@ -154,6 +182,8 @@ impl Editor {
         self.looking = Looking::default();
         self.gesture = None;
         self.grabbing = false;
+        self.selected.clear();
+        self.pointing = None;
         self.full = false;
         self.frozen = false;
         cx.notify();
@@ -280,15 +310,81 @@ impl Editor {
         let Some(press) = self.press(event.position, event.modifiers, window) else {
             return;
         };
+        if self.tool == Kind::Select {
+            self.select(&press, event.modifiers.control, cx);
+            return;
+        }
         let begins_beside = self.tool.begins_beside();
         let on_picture = self.view().is_some_and(|view| view.contains(press.at));
         if !on_picture && !begins_beside {
             return;
         }
+        self.selected.clear();
         if let Some(tool) = self.tool_mut()
             && tool.begin(&press)
         {
             self.gesture = Some(Gesture::Draw);
+            cx.notify();
+        }
+    }
+
+    /// A press with the select tool: a click is a thing, a drag from nothing a part; on what is
+    /// selected, or a hold of it, it is taken hold of.
+    fn select(&mut self, press: &Press, ctrl: bool, cx: &mut Context<Self>) {
+        let Some(view) = self.view() else {
+            return;
+        };
+        let edits = self.drawing.edits();
+        let at = press.at;
+        match selecting::press(edits, &self.selected, at, press.scale, &view, ctrl) {
+            Pressed::Selection(those) => self.selected = those,
+            Pressed::Marking { with } => {
+                if !ctrl {
+                    self.selected.clear();
+                }
+                self.gesture = Some(Gesture::Marking {
+                    from: at,
+                    to: at,
+                    with,
+                });
+            }
+            Pressed::Moving(indices) => {
+                if !indices.iter().all(|index| self.selected.contains(index)) {
+                    self.selected = indices.clone();
+                }
+                self.gesture = Some(Gesture::Move {
+                    indices,
+                    from: at,
+                    by: [0.0, 0.0],
+                });
+            }
+            Pressed::Resizing(index, hold) => {
+                let was = edits[index].clone();
+                self.gesture = Some(Gesture::Resize {
+                    index,
+                    hold,
+                    from: at,
+                    now: was.clone(),
+                    was,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Over a hold of the one selected, the pointer says which way it is pulled there.
+    fn hover(&mut self, at: Place, scale: f32, cx: &mut Context<Self>) {
+        let pointing = match (self.tool, self.selected.as_slice()) {
+            (Kind::Select, [index]) => self
+                .drawing
+                .edits()
+                .get(*index)
+                .and_then(|edit| selecting::hold_at(edit, at, scale))
+                .map(|(hold, _)| pointer_of(hold)),
+            _ => None,
+        };
+        if pointing != self.pointing {
+            self.pointing = pointing;
             cx.notify();
         }
     }
@@ -300,41 +396,66 @@ impl Editor {
             self.finish(event.position, event.modifiers, window, cx);
             return;
         }
-        match &self.gesture {
-            None => {}
-            Some(Gesture::Pan { from, was, button }) => {
-                let (from, was, button) = (*from, *was, *button);
-                if let (Some((stage, look)), Some(view)) = (self.look(window), self.view()) {
-                    let to = Self::local(stage, event.position);
-                    let moved = view::moved(self.looking, was, from, to, look.scale);
-                    // As far as its middle can go, and held there: back from past that, it comes
-                    // along at once, not once the pointer is back where it stopped.
-                    let asked = moved.middle.unwrap_or(look.middle);
-                    let middle = [
-                        asked[0].clamp(view.x, view.right()),
-                        asked[1].clamp(view.y, view.bottom()),
-                    ];
-                    if middle != asked {
-                        self.gesture = Some(Gesture::Pan {
-                            from: to,
-                            was: middle,
-                            button,
-                        });
-                    }
-                    self.looking = Looking {
-                        times: look.times,
-                        middle: Some(middle),
-                    };
-                    cx.notify();
+        if let Some(Gesture::Pan { from, was, button }) = &self.gesture {
+            let (from, was, button) = (*from, *was, *button);
+            if let (Some((stage, look)), Some(view)) = (self.look(window), self.view()) {
+                let to = Self::local(stage, event.position);
+                let moved = view::moved(self.looking, was, from, to, look.scale);
+                // As far as its middle can go, and held there: back from past that, it comes
+                // along at once, not once the pointer is back where it stopped.
+                let asked = moved.middle.unwrap_or(look.middle);
+                let middle = [
+                    asked[0].clamp(view.x, view.right()),
+                    asked[1].clamp(view.y, view.bottom()),
+                ];
+                if middle != asked {
+                    self.gesture = Some(Gesture::Pan {
+                        from: to,
+                        was: middle,
+                        button,
+                    });
                 }
+                self.looking = Looking {
+                    times: look.times,
+                    middle: Some(middle),
+                };
+                cx.notify();
             }
+            return;
+        }
+        let Some(press) = self.press(event.position, event.modifiers, window) else {
+            return;
+        };
+        let unit = self.unit();
+        match &mut self.gesture {
+            None => self.hover(press.at, press.scale, cx),
+            Some(Gesture::Pan { .. }) => {}
             Some(Gesture::Draw) => {
-                if let Some(press) = self.press(event.position, event.modifiers, window)
-                    && let Some(tool) = self.tool_mut()
-                {
+                if let Some(tool) = self.tool_mut() {
                     tool.go_on(&press);
                     cx.notify();
                 }
+            }
+            Some(Gesture::Move { from, by, .. }) => {
+                *by = [press.at[0] - from[0], press.at[1] - from[1]];
+                cx.notify();
+            }
+            Some(Gesture::Resize {
+                hold,
+                from,
+                was,
+                now,
+                ..
+            }) => {
+                if let Some(mark) = mark_of(was) {
+                    let by = [press.at[0] - from[0], press.at[1] - from[1]];
+                    *now = mark.resized(was, *hold, by, press.shift, unit);
+                }
+                cx.notify();
+            }
+            Some(Gesture::Marking { to, .. }) => {
+                *to = press.at;
+                cx.notify();
             }
         }
     }
@@ -361,6 +482,46 @@ impl Editor {
         match self.gesture.take() {
             None => {}
             Some(Gesture::Pan { .. }) => cx.notify(),
+            Some(Gesture::Move { indices, by, .. }) => {
+                // (Not a move that leaves them where they were.)
+                let edits = moved_in(self.drawing.edits(), &indices, by);
+                if edits != self.drawing.edits() {
+                    self.change(edits, cx);
+                }
+                cx.notify();
+            }
+            Some(Gesture::Resize {
+                index, was, now, ..
+            }) => {
+                // (Only what it was when it was taken hold of is made larger.)
+                if self.drawing.edits().get(index) == Some(&was) && now != was {
+                    let mut edits = self.drawing.edits().to_vec();
+                    edits[index] = now;
+                    self.change(edits, cx);
+                }
+                cx.notify();
+            }
+            Some(Gesture::Marking { from, to, with }) => {
+                // What is wholly in the part marked out, and in sight, is selected (along with what
+                // was, with Ctrl). A part too small to have been meant was a press.
+                if let (Some((_, look)), Some(view)) = (self.look(window), self.view())
+                    && (to[0] - from[0]).hypot(to[1] - from[1]) * look.scale
+                        >= selecting::LEAST_MARKED
+                {
+                    let part = look.part;
+                    let in_sight = |area: &Area| {
+                        area.x < part.right().min(view.right())
+                            && area.right() > part.x.max(view.x)
+                            && area.y < part.bottom().min(view.bottom())
+                            && area.bottom() > part.y.max(view.y)
+                    };
+                    let those = selecting::marked(self.drawing.edits(), from, to, &with, in_sight);
+                    if !those.is_empty() {
+                        self.selected = those;
+                    }
+                }
+                cx.notify();
+            }
             Some(Gesture::Draw) => {
                 let press = self.press(position, modifiers, window);
                 let drawn = match (press, self.tool_mut()) {
@@ -373,7 +534,7 @@ impl Editor {
                 };
                 // What was drawn wholly beside the picture is not kept: it is not on it.
                 if let (Some(edit), Some(view)) = (drawn, self.view())
-                    && marks::mark_of(&edit).is_some_and(|mark| mark.area(&edit).meets(&view))
+                    && marks::area_of(&edit).meets(&view)
                 {
                     let mut edits = self.drawing.edits().to_vec();
                     edits.push(edit);
@@ -436,30 +597,63 @@ impl Editor {
     fn undo(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_none() && self.drawing.undo() {
             self.full = false;
+            self.selected.clear();
             self.drawn(cx);
         }
     }
 
     fn redo(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_none() && self.drawing.redo() {
+            self.selected.clear();
             self.drawn(cx);
         }
     }
 
-    /// Takes up a tool (by its button or its key).
+    /// What is selected is taken away.
+    fn remove(&mut self, cx: &mut Context<Self>) {
+        if self.gesture.is_some() || self.selected.is_empty() {
+            return;
+        }
+        let edits = self
+            .drawing
+            .edits()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !self.selected.contains(index))
+            .map(|(_, edit)| edit.clone())
+            .collect();
+        self.selected.clear();
+        self.pointing = None;
+        self.change(edits, cx);
+    }
+
+    /// Takes up a tool (by its button or its key). The one in hand again does nothing (P4 later:
+    /// its second bar), unless something is selected; another than the select tool lets go of what
+    /// is selected.
     fn take(&mut self, kind: Kind, cx: &mut Context<Self>) {
-        if self.gesture.is_some() || kind == self.tool {
+        if self.gesture.is_some() || (kind == self.tool && self.selected.is_empty()) {
             return;
         }
         self.tool = kind;
+        self.pointing = None;
+        if kind != Kind::Select {
+            self.selected.clear();
+        }
         cx.notify();
     }
 
-    /// Esc lets go of one thing at a time: what is being drawn, then the tool. With nothing drawn,
-    /// it throws the capture away; with something drawn, it does not (that is the bin's).
+    /// Esc lets go of one thing at a time: what the pointer is doing, what is selected, then the
+    /// tool. With nothing drawn, it throws the capture away; with something drawn, it does not (that
+    /// is the bin's).
     fn escape(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_some() {
             self.give_up_gesture();
+            cx.notify();
+            return;
+        }
+        if !self.selected.is_empty() {
+            self.selected.clear();
+            self.pointing = None;
             cx.notify();
             return;
         }
@@ -515,6 +709,7 @@ impl Editor {
                 self.looking = Looking::default();
                 cx.notify();
             }
+            "delete" | "backspace" => self.remove(cx),
             _ if !event.is_held => {
                 if let Some(kind) = Kind::ALL.into_iter().find(|kind| kind.key() == key) {
                     self.take(kind, cx);
@@ -529,6 +724,45 @@ impl Editor {
             self.grabbing = false;
             cx.notify();
         }
+    }
+}
+
+impl Editor {
+    /// While a hold is pulled, the pointer stays the one it was taken hold of with.
+    fn held_pointer(&self) -> Option<CursorStyle> {
+        match &self.gesture {
+            Some(Gesture::Resize { hold, .. }) => Some(pointer_of(*hold)),
+            _ => None,
+        }
+    }
+}
+
+/// The list with those at `indices` moved by `by`.
+fn moved_in(edits: &[Edit], indices: &[usize], by: Place) -> Vec<Edit> {
+    edits
+        .iter()
+        .enumerate()
+        .map(|(index, edit)| match mark_of(edit) {
+            Some(mark) if indices.contains(&index) => mark.moved(edit, by),
+            _ => edit.clone(),
+        })
+        .collect()
+}
+
+/// The pointer over a hold: the arrows of the way it is pulled. (An end of a line goes any way: the
+/// Tauri version showed the four arrows of moving, which GPUI does not have on Windows.)
+fn pointer_of(hold: Hold) -> CursorStyle {
+    match hold {
+        Hold::Side { x, y } if x != 0 && y != 0 => {
+            if x == y {
+                CursorStyle::ResizeUpLeftDownRight
+            } else {
+                CursorStyle::ResizeUpRightDownLeft
+            }
+        }
+        Hold::Side { x, .. } if x != 0 => CursorStyle::ResizeLeftRight,
+        Hold::Side { .. } => CursorStyle::ResizeUpDown,
+        Hold::From | Hold::To => CursorStyle::Arrow,
     }
 }
 
@@ -596,6 +830,7 @@ impl Editor {
             self.drawing.can_undo() && !typing,
             self.drawing.can_redo() && !typing,
         );
+        let can_delete = !self.selected.is_empty() && !typing;
         bar.child(div().w(px(1.0)).h(px(20.0)).mx(px(6.0)).bg(theme.border))
             .child(
                 button("undo".into(), false, can_undo)
@@ -614,9 +849,11 @@ impl Editor {
                     .child(glyph(REDO, 16.0)),
             )
             .child(
-                // (P4 later: what is selected.)
-                button("delete".into(), false, false)
+                button("delete".into(), false, can_delete)
                     .tooltip(tip(format!("{} (Delete)", t("editor.delete"))))
+                    .when(can_delete, |button| {
+                        button.on_click(cx.listener(|this, _, _, cx| this.remove(cx)))
+                    })
                     .child(glyph(DELETE, 16.0)),
             )
     }
@@ -627,11 +864,30 @@ impl Editor {
         let picture = self.capture.as_ref().map(|capture| capture.picture.clone());
         let view = self.view();
         let looking = self.looking;
-        let edits = self.shown.clone();
+        let edits = match &self.gesture {
+            Some(Gesture::Move { indices, by, .. }) => {
+                Rc::new(moved_in(self.drawing.edits(), indices, *by))
+            }
+            Some(Gesture::Resize { index, now, .. }) => {
+                let mut edits = self.drawing.edits().to_vec();
+                if let Some(edit) = edits.get_mut(*index) {
+                    *edit = now.clone();
+                }
+                Rc::new(edits)
+            }
+            _ => self.shown.clone(),
+        };
+        let selected = self.selected.clone();
+        let marking = match &self.gesture {
+            Some(Gesture::Marking { from, to, .. }) => Some((*from, *to)),
+            _ => None,
+        };
         let shaping = self.tool_ref().and_then(|tool| tool.shaping());
         let retired = std::mem::take(&mut self.retired);
         let cursor = if self.grabbing || matches!(self.gesture, Some(Gesture::Pan { .. })) {
             CursorStyle::OpenHand
+        } else if let Some(pointing) = self.held_pointer().or(self.pointing) {
+            pointing
         } else if self.tool.begins_beside() {
             CursorStyle::Crosshair
         } else {
@@ -675,6 +931,30 @@ impl Editor {
                                 std::slice::from_ref(shaping),
                                 None,
                             );
+                        }
+                        // What is selected, framed (not cut to the picture: it may reach beside
+                        // it). One alone has its holds; several together only their frames.
+                        for index in &selected {
+                            let Some(edit) = edits.get(*index) else {
+                                continue;
+                            };
+                            let margin = marks::frame_around(edit, look.scale);
+                            paint::frame(window, &painter, marks::box_of(edit), margin);
+                            if selected.len() == 1
+                                && let Some(mark) = mark_of(edit)
+                            {
+                                for (hold, at) in mark.holds(edit, margin) {
+                                    paint::grip(
+                                        window,
+                                        &painter,
+                                        at,
+                                        !matches!(hold, Hold::Side { .. }),
+                                    );
+                                }
+                            }
+                        }
+                        if let Some((from, to)) = marking {
+                            paint::marked(window, &painter, from, to);
                         }
                     });
                 }

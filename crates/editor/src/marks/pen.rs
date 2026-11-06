@@ -1,13 +1,12 @@
 //! A stroke of the pen: a line through the places the pointer went through, round at its ends and
-//! where it turns; a dot where it did not move.
+//! where it turns; a dot where it did not move. It is moved, not made larger.
 
 use gpui::Window;
 use perora_core::drawing::held;
-use perora_core::edit::Edit;
+use perora_core::edit::{Edit, Place};
 
-use super::{Mark, around};
+use super::{Mark, on_line};
 use crate::paint::{self, Painter};
-use crate::view::Area;
 
 pub struct Pen;
 
@@ -24,10 +23,17 @@ impl Mark for Pen {
         paint::stroke_through(window, painter, points, held(*width), paint::colour(*color));
     }
 
-    fn area(&self, edit: &Edit) -> Area {
-        let Edit::Pen { points, width, .. } = edit else {
-            return Area::new(0.0, 0.0, 0.0, 0.0);
+    fn reach(&self, edit: &Edit) -> f32 {
+        match edit {
+            Edit::Pen { width, .. } => held(*width),
+            _ => 0.0,
+        }
+    }
+
+    fn is_at(&self, edit: &Edit, at: Place, near: f32) -> bool {
+        let Edit::Pen { points, .. } = edit else {
+            return false;
         };
-        around(points, held(*width))
+        on_line(points, at, self.reach(edit) / 2.0 + near)
     }
 }

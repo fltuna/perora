@@ -145,3 +145,88 @@ pub fn disc(window: &mut Window, painter: &Painter, middle: Place, radius: f32, 
     };
     window.paint_quad(fill(bounds, colour).corner_radii(radius));
 }
+
+// What shows what is selected: drawn over the picture, not cut to it (`editor.tsx`'s frames, holds
+// and the part being marked out, in pixels of the screen whatever the look).
+
+/// The dashed frame around what is selected: `area` in the image, `margin` around it.
+pub fn frame(window: &mut Window, painter: &Painter, area: Area, margin: f32) {
+    let around = Area::new(
+        area.x - margin,
+        area.y - margin,
+        area.width + 2.0 * margin,
+        area.height + 2.0 * margin,
+    );
+    let bounds = painter.bounds(around);
+    // White dashes on black: as the Tauri version's white dashes with black ones between.
+    rectangle_line(window, bounds, 1.5, None, gpui::black());
+    rectangle_line(window, bounds, 1.5, Some((5.0, 4.0)), gpui::white());
+}
+
+/// Where the one selected can be taken hold of: a white square on its frame, or a disc on an end of
+/// a line.
+pub fn grip(window: &mut Window, painter: &Painter, at: Place, round: bool) {
+    let middle = painter.at(at);
+    let side = px(9.0);
+    let bounds = Bounds {
+        origin: point(middle.x - side / 2.0, middle.y - side / 2.0),
+        size: size(side, side),
+    };
+    let quad = fill(bounds, gpui::white())
+        .border_widths(px(1.0))
+        .border_color(Hsla {
+            a: 0.7,
+            ..gpui::black()
+        });
+    window.paint_quad(if round {
+        quad.corner_radii(side / 2.0)
+    } else {
+        quad
+    });
+}
+
+/// The part being marked out: a pale blue inside, a white line and blue dashes around it.
+pub fn marked(window: &mut Window, painter: &Painter, from: Place, to: Place) {
+    let area = Area::new(
+        from[0].min(to[0]),
+        from[1].min(to[1]),
+        (to[0] - from[0]).abs(),
+        (to[1] - from[1]).abs(),
+    );
+    let bounds = painter.bounds(area);
+    window.paint_quad(fill(
+        bounds,
+        gpui::Rgba {
+            r: 79.0 / 255.0,
+            g: 140.0 / 255.0,
+            b: 1.0,
+            a: 0.14,
+        },
+    ));
+    rectangle_line(window, bounds, 1.0, None, gpui::white());
+    rectangle_line(window, bounds, 1.0, Some((4.0, 3.0)), rgb(0x2f6fe0).into());
+}
+
+/// A line around a box of the screen, `width` logical pixels, dashed when `dashes` says how.
+fn rectangle_line(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    width: f32,
+    dashes: Option<(f32, f32)>,
+    colour: Hsla,
+) {
+    let mut path = PathBuilder::stroke(px(width));
+    if let Some((on, off)) = dashes {
+        path = path.dash_array(&[px(on), px(off)]);
+    }
+    let (left, top) = (bounds.origin.x, bounds.origin.y);
+    let (right, bottom) = (left + bounds.size.width, top + bounds.size.height);
+    path.move_to(point(left, top));
+    path.line_to(point(right, top));
+    path.line_to(point(right, bottom));
+    path.line_to(point(left, bottom));
+    path.close();
+    if let Ok(path) = path.build() {
+        window.paint_path(path, colour);
+    }
+}

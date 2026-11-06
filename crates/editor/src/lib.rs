@@ -7,6 +7,7 @@ pub mod icons;
 pub mod marks;
 pub mod paint;
 pub mod picture;
+pub mod selecting;
 pub mod tools;
 pub mod view;
 
