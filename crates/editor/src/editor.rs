@@ -263,8 +263,10 @@ impl Editor {
     ) -> Option<Press> {
         let (stage, look) = self.look(window)?;
         let (x, y) = Self::local(stage, position);
+        // (To a tenth of a pixel, as the Tauri version had it: what is drawn is kept at that, and a
+        // click that moves nothing changes nothing.)
         Some(Press {
-            at: look.in_image(x, y),
+            at: look.in_image(x, y).map(marks::tenth),
             scale: look.scale,
             unit: self.unit(),
             shift: modifiers.shift,
@@ -349,9 +351,7 @@ impl Editor {
                 });
             }
             Pressed::Moving(indices) => {
-                if !indices.iter().all(|index| self.selected.contains(index)) {
-                    self.selected = indices.clone();
-                }
+                self.selected = indices.clone();
                 self.gesture = Some(Gesture::Move {
                     indices,
                     from: at,
@@ -598,6 +598,7 @@ impl Editor {
         if self.gesture.is_none() && self.drawing.undo() {
             self.full = false;
             self.selected.clear();
+            self.pointing = None;
             self.drawn(cx);
         }
     }
@@ -605,6 +606,7 @@ impl Editor {
     fn redo(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_none() && self.drawing.redo() {
             self.selected.clear();
+            self.pointing = None;
             self.drawn(cx);
         }
     }
