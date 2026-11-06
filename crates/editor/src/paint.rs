@@ -135,6 +135,72 @@ pub fn stroke_through(
     }
 }
 
+/// The inside of a polygon (places of the image), in one colour (as solid as it says).
+pub fn fill_polygon(window: &mut Window, painter: &Painter, places: &[Place], colour: Hsla) {
+    let [first, rest @ ..] = places else {
+        return;
+    };
+    let mut path = PathBuilder::fill();
+    path.move_to(painter.at(*first));
+    for place in rest {
+        path.line_to(painter.at(*place));
+    }
+    path.close();
+    if let Ok(path) = path.build() {
+        window.paint_path(path, colour);
+    }
+}
+
+/// The line around a polygon (places of the image), as wide as `width` (pixels of the image): with
+/// sharp corners (`sharp`, a rectangle's) or round ones.
+pub fn outline(
+    window: &mut Window,
+    painter: &Painter,
+    places: &[Place],
+    width: f32,
+    sharp: bool,
+    colour: Hsla,
+) {
+    let [first, rest @ ..] = places else {
+        return;
+    };
+    let width = painter.length(width);
+    let options = StrokeOptions::default()
+        .with_line_width(width.as_f32())
+        .with_line_join(if sharp {
+            LineJoin::Miter
+        } else {
+            LineJoin::Round
+        });
+    let mut path = PathBuilder::stroke(width).with_style(PathStyle::Stroke(options));
+    path.move_to(painter.at(*first));
+    for place in rest {
+        path.line_to(painter.at(*place));
+    }
+    path.close();
+    if let Ok(path) = path.build() {
+        window.paint_path(path, colour);
+    }
+}
+
+/// The places around the ellipse that fits in a box of the image: as many as it takes to look round
+/// at the size it is shown (a place every two or three pixels of the screen).
+pub fn ellipse_places(painter: &Painter, area: Area) -> Vec<Place> {
+    let (across, down) = (area.width / 2.0, area.height / 2.0);
+    let middle = [area.x + across, area.y + down];
+    let around = std::f32::consts::TAU * (across.max(down)) * painter.scale;
+    let count = ((around / 2.5).ceil() as usize).clamp(24, 2048);
+    (0..count)
+        .map(|step| {
+            let angle = step as f32 / count as f32 * std::f32::consts::TAU;
+            [
+                middle[0] + across * angle.cos(),
+                middle[1] + down * angle.sin(),
+            ]
+        })
+        .collect()
+}
+
 /// A round dot, `radius` pixels of the image.
 pub fn disc(window: &mut Window, painter: &Painter, middle: Place, radius: f32, colour: Hsla) {
     let radius = painter.length(radius);

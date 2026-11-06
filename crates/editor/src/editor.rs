@@ -102,6 +102,10 @@ pub struct Editor {
     shown: Rc<Vec<Edit>>,
     tool: Kind,
     pen: tools::pen::Pen,
+    figures: tools::figure::Figures,
+    /// The last thing in the list was just drawn, with the tool still in hand: a shape is taken
+    /// hold of there to be put right (owner: 「図形は描画直後は直前のやつを描画モードでも掴めるように」).
+    just_drawn: bool,
     looking: Looking,
     /// Where the picture is shown, as last laid out (logical pixels of the window; its corner on a
     /// whole pixel of the screen).
@@ -152,6 +156,8 @@ impl Editor {
             shown: Rc::new(Vec::new()),
             tool: Kind::Select,
             pen: tools::pen::Pen::default(),
+            figures: tools::figure::Figures::default(),
+            just_drawn: false,
             looking: Looking::default(),
             stage: Rc::new(Cell::new(None)),
             gesture: None,
@@ -179,6 +185,8 @@ impl Editor {
         self.shown = Rc::new(Vec::new());
         self.tool = Kind::Select;
         self.pen = tools::pen::Pen::default();
+        self.figures = tools::figure::Figures::default();
+        self.just_drawn = false;
         self.looking = Looking::default();
         self.gesture = None;
         self.grabbing = false;
@@ -221,8 +229,10 @@ impl Editor {
     }
 
     fn give_up_gesture(&mut self) {
-        if let Some(Gesture::Draw) = self.gesture.take() {
-            self.pen.give_up();
+        if let Some(Gesture::Draw) = self.gesture.take()
+            && let Some(tool) = self.tool_mut()
+        {
+            tool.give_up();
         }
     }
 
@@ -277,6 +287,7 @@ impl Editor {
         match self.tool {
             Kind::Select => None,
             Kind::Pen => Some(&mut self.pen),
+            Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&mut self.figures),
         }
     }
 
@@ -284,7 +295,31 @@ impl Editor {
         match self.tool {
             Kind::Select => None,
             Kind::Pen => Some(&self.pen),
+            Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&self.figures),
         }
+    }
+
+    /// Whether a press at `at` takes hold of the shape just drawn, its tool still in hand: on it as a
+    /// press means it (inside a shape with no inside, the next one is drawn), and not at an end of a
+    /// line (the next line is begun there, as often as not). Not a stroke of the pen: the next one
+    /// is begun on the one before all the time.
+    fn takes_last(&self, at: Place, scale: f32) -> bool {
+        let (Some(last), Some(view)) = (self.drawing.edits().last(), self.view()) else {
+            return false;
+        };
+        let near = selecting::NEAR / scale;
+        let ends = match last {
+            Edit::Line { from, to, .. } | Edit::Arrow { from, to, .. } => vec![*from, *to],
+            _ => Vec::new(),
+        };
+        self.selected.is_empty()
+            && self.just_drawn
+            && kind_of(last) == Some(self.tool)
+            && self.tool.is_figure()
+            && selecting::seen_at(last, at, near, &view)
+            && !ends
+                .iter()
+                .any(|end| (at[0] - end[0]).hypot(at[1] - end[1]) <= near * 2.0)
     }
 
     fn down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -319,6 +354,16 @@ impl Editor {
         let begins_beside = self.tool.begins_beside();
         let on_picture = self.view().is_some_and(|view| view.contains(press.at));
         if !on_picture && !begins_beside {
+            return;
+        }
+        if self.takes_last(press.at, press.scale) {
+            let last = self.drawing.edits().len() - 1;
+            self.gesture = Some(Gesture::Move {
+                indices: vec![last],
+                from: press.at,
+                by: [0.0, 0.0],
+            });
+            cx.notify();
             return;
         }
         self.selected.clear();
@@ -372,7 +417,9 @@ impl Editor {
         cx.notify();
     }
 
-    /// Over a hold of the one selected, the pointer says which way it is pulled there.
+    /// Over a hold of the one selected, the pointer says which way it is pulled there; over the
+    /// shape just drawn, that it is taken hold of there (the arrow: GPUI has no pointer of moving on
+    /// Windows, owner: 「カーソルの移動はまあそのままでもいいんじゃね？」).
     fn hover(&mut self, at: Place, scale: f32, cx: &mut Context<Self>) {
         let pointing = match (self.tool, self.selected.as_slice()) {
             (Kind::Select, [index]) => self
@@ -381,6 +428,7 @@ impl Editor {
                 .get(*index)
                 .and_then(|edit| selecting::hold_at(edit, at, scale))
                 .map(|(hold, _)| pointer_of(hold)),
+            _ if self.takes_last(at, scale) => Some(CursorStyle::Arrow),
             _ => None,
         };
         if pointing != self.pointing {
@@ -539,6 +587,7 @@ impl Editor {
                     let mut edits = self.drawing.edits().to_vec();
                     edits.push(edit);
                     self.change(edits, cx);
+                    self.just_drawn = !self.full;
                 }
                 cx.notify();
             }
@@ -597,6 +646,7 @@ impl Editor {
     fn undo(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_none() && self.drawing.undo() {
             self.full = false;
+            self.just_drawn = false;
             self.selected.clear();
             self.pointing = None;
             self.drawn(cx);
@@ -605,6 +655,7 @@ impl Editor {
 
     fn redo(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_none() && self.drawing.redo() {
+            self.just_drawn = false;
             self.selected.clear();
             self.pointing = None;
             self.drawn(cx);
@@ -638,6 +689,10 @@ impl Editor {
         }
         self.tool = kind;
         self.pointing = None;
+        self.just_drawn = false;
+        if kind.is_figure() {
+            self.figures.figure = kind;
+        }
         if kind != Kind::Select {
             self.selected.clear();
         }
@@ -739,6 +794,18 @@ impl Editor {
     }
 }
 
+/// The tool that draws an edit of this kind.
+fn kind_of(edit: &Edit) -> Option<Kind> {
+    match edit {
+        Edit::Pen { .. } => Some(Kind::Pen),
+        Edit::Rectangle { .. } => Some(Kind::Rectangle),
+        Edit::Ellipse { .. } => Some(Kind::Ellipse),
+        Edit::Line { .. } => Some(Kind::Line),
+        Edit::Arrow { .. } => Some(Kind::Arrow),
+        _ => None,
+    }
+}
+
 /// The list with those at `indices` moved by `by`.
 fn moved_in(edits: &[Edit], indices: &[usize], by: Place) -> Vec<Edit> {
     edits
@@ -814,11 +881,8 @@ impl Editor {
                 })
         };
         let mut bar = div().flex().items_center().gap(px(2.0));
-        for kind in Kind::ALL {
-            let colour = match kind {
-                Kind::Pen => Some(paint::colour(self.pen.colour)),
-                Kind::Select => None,
-            };
+        for kind in [Kind::Select, Kind::Pen] {
+            let colour = (kind == Kind::Pen).then(|| paint::colour(self.pen.colour));
             let named = format!("{} ({})", t(kind.name()), kind.key().to_uppercase());
             bar = bar.child(
                 button(kind.name().into(), self.tool == kind, true)
@@ -827,6 +891,22 @@ impl Editor {
                     .child(icons::icon(icons::of_tool(kind, colour), 16.0, theme.text)),
             );
         }
+        // The shapes and lines: one button, which takes up the last of them taken; drawn in their
+        // outline colour, with their inside.
+        let figures = &self.figures;
+        let inside =
+            (figures.fill > 0.0).then(|| (paint::colour(figures.fill_colour), figures.fill));
+        let last = figures.figure;
+        bar = bar.child(
+            button("figures".into(), self.tool.is_figure(), true)
+                .tooltip(tip(t("editor.tool.shapes")))
+                .on_click(cx.listener(move |this, _, _, cx| this.take(last, cx)))
+                .child(icons::icon(
+                    icons::shapes(paint::colour(figures.colour), inside),
+                    16.0,
+                    theme.text,
+                )),
+        );
         let typing = false;
         let (can_undo, can_redo) = (
             self.drawing.can_undo() && !typing,

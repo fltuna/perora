@@ -11,7 +11,11 @@ use perora_core::edit::{Edit, Place};
 use crate::paint::Painter;
 use crate::view::Area;
 
+mod line;
 mod pen;
+mod shape;
+
+pub use line::head;
 
 /// Where something selected can be taken hold of to change its size: an end of a line; a corner or a
 /// side of the frame around a shape (-1 the left or top one, 1 the right or bottom one).
@@ -60,6 +64,8 @@ pub trait Mark: Sync {
 pub fn mark_of(edit: &Edit) -> Option<&'static dyn Mark> {
     match edit {
         Edit::Pen { .. } => Some(&pen::Pen),
+        Edit::Rectangle { .. } | Edit::Ellipse { .. } => Some(&shape::Shape),
+        Edit::Line { .. } | Edit::Arrow { .. } => Some(&line::Line),
         _ => None,
     }
 }
@@ -67,6 +73,23 @@ pub fn mark_of(edit: &Edit) -> Option<&'static dyn Mark> {
 /// A value to a tenth: what is moved is kept at that.
 pub fn tenth(value: f32) -> f32 {
     (value * 10.0).round() / 10.0
+}
+
+/// With Shift: a line along one of eight directions; a box (`boxed`) as wide as it is tall.
+pub fn straightened(boxed: bool, from: Place, to: Place) -> Place {
+    let (across, down) = (to[0] - from[0], to[1] - from[1]);
+    if boxed {
+        let side = across.abs().max(down.abs());
+        let sign = |value: f32| if value < 0.0 { -1.0 } else { 1.0 };
+        return [from[0] + sign(across) * side, from[1] + sign(down) * side];
+    }
+    let eighth = std::f32::consts::FRAC_PI_4;
+    let angle = (down.atan2(across) / eighth).round() * eighth;
+    let length = across.hypot(down);
+    [
+        from[0] + angle.cos() * length,
+        from[1] + angle.sin() * length,
+    ]
 }
 
 /// The places an edit is drawn through: the points of a stroke, the two corners of the rest.
@@ -210,6 +233,94 @@ mod tests {
         let stroke = pen(&[[1.0, 2.0], [3.0, 4.0]]);
         let moved = mark_of(&stroke).unwrap().moved(&stroke, [0.333, -0.666]);
         assert_eq!(places_of(&moved), vec![[1.3, 1.3], [3.3, 3.3]]);
+    }
+
+    const RED: Colour = Colour {
+        red: 255,
+        green: 0,
+        blue: 0,
+    };
+
+    fn rectangle(fill: f32) -> Edit {
+        Edit::Rectangle {
+            from: [100.0, 100.0],
+            to: [300.0, 200.0],
+            color: RED,
+            width: 4.0,
+            fill,
+            fill_color: None,
+        }
+    }
+
+    #[test]
+    fn a_shape_with_no_inside_is_its_outline_alone() {
+        let empty = rectangle(0.0);
+        let mark = mark_of(&empty).unwrap();
+        assert!(!mark.is_at(&empty, [200.0, 150.0], 6.0));
+        assert!(mark.is_at(&empty, [200.0, 104.0], 6.0));
+        let filled = rectangle(0.5);
+        assert!(mark.is_at(&filled, [200.0, 150.0], 6.0));
+        // A small one is taken hold of whole.
+        let small = Edit::Rectangle {
+            from: [0.0, 0.0],
+            to: [10.0, 10.0],
+            color: RED,
+            width: 1.0,
+            fill: 0.0,
+            fill_color: None,
+        };
+        assert!(mark.is_at(&small, [5.0, 5.0], 6.0));
+        let ellipse = Edit::Ellipse {
+            from: [100.0, 100.0],
+            to: [300.0, 200.0],
+            color: RED,
+            width: 4.0,
+            fill: 0.0,
+            fill_color: None,
+        };
+        assert!(!mark.is_at(&ellipse, [200.0, 150.0], 6.0));
+        assert!(mark.is_at(&ellipse, [200.0, 101.0], 6.0));
+        // (The corner of its box is not on an ellipse.)
+        assert!(!mark.is_at(&ellipse, [102.0, 102.0], 6.0));
+    }
+
+    #[test]
+    fn a_corner_pulled_with_shift_keeps_the_proportions() {
+        let shape = rectangle(0.0);
+        let mark = mark_of(&shape).unwrap();
+        let pulled = mark.resized(&shape, Hold::Side { x: 1, y: 1 }, [100.0, 0.0], true, 1.0);
+        assert_eq!(box_of(&pulled), Area::new(100.0, 100.0, 300.0, 150.0));
+        // A side onto the one opposite: a pixel is left.
+        let flat = mark.resized(&shape, Hold::Side { x: 0, y: 1 }, [0.0, -100.0], false, 1.0);
+        assert_eq!(box_of(&flat).height, 1.0);
+        assert_eq!(mark.holds(&shape, 4.0).len(), 8);
+    }
+
+    #[test]
+    fn a_line_is_pulled_by_its_ends_and_with_shift_along_eight_directions() {
+        let line = Edit::Line {
+            from: [0.0, 0.0],
+            to: [100.0, 0.0],
+            color: RED,
+            width: 2.0,
+        };
+        let mark = mark_of(&line).unwrap();
+        let pulled = mark.resized(&line, Hold::To, [0.0, 90.0], true, 1.0);
+        let Edit::Line { to, .. } = pulled else {
+            panic!("a line");
+        };
+        assert!((to[0] - to[1]).abs() < 0.11, "{to:?}");
+        assert_eq!(straightened(true, [0.0, 0.0], [-5.0, 3.0]), [-5.0, 5.0]);
+    }
+
+    #[test]
+    fn an_arrow_head_is_as_long_as_the_line_allows() {
+        let (base, shaft, _, _) = head([0.0, 0.0], [100.0, 0.0], 4.0).unwrap();
+        assert_eq!(base, [82.0, 0.0]);
+        assert!(shaft);
+        let (_, shaft, _, _) = head([0.0, 0.0], [5.0, 0.0], 4.0).unwrap();
+        assert!(!shaft);
+        assert!(head([0.0, 0.0], [0.2, 0.0], 4.0).is_none());
     }
 
     #[test]

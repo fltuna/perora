@@ -75,6 +75,18 @@ const PEN_PLACED: (f32, f32, f32) = (1.5, 0.0, 0.82);
 pub fn of_tool(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
     match kind {
         Kind::Select => vec![Part::solid("M4 2.5v10.2l2.9-2.6 1.9 4.1 1.6-.7-1.9-4h3.8z")],
+        Kind::Line => vec![tinted(Part::line("M3 13L13 3"), colour)],
+        Kind::Arrow => vec![tinted(Part::line("M3 13L12.5 3.5M7 3.2h5.8V9"), colour)],
+        Kind::Rectangle => vec![tinted(
+            Part::line(
+                "M3 3.5h10a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z",
+            ),
+            colour,
+        )],
+        Kind::Ellipse => vec![tinted(
+            Part::line("M2.5 8a5.5 4.5 0 1 0 11 0a5.5 4.5 0 1 0-11 0z"),
+            colour,
+        )],
         Kind::Pen => {
             let mut parts = vec![
                 Part::line(
@@ -93,6 +105,36 @@ pub fn of_tool(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             parts
         }
     }
+}
+
+/// A part in the colour the tool draws in, when there is one.
+fn tinted(part: Part, colour: Option<Hsla>) -> Part {
+    match colour {
+        Some(colour) => part.in_colour(colour),
+        None => part,
+    }
+}
+
+/// The shapes and lines, as one button of the first bar (`ShapesIcon`): a circle and a square, in
+/// their outline colour, with their inside (its colour and how solid it is) when they have one.
+pub fn shapes(outline: Hsla, inside: Option<(Hsla, f32)>) -> Vec<Part> {
+    const CIRCLE: &str = "M2.3 6.2a3.9 3.9 0 1 0 7.8 0a3.9 3.9 0 1 0-7.8 0z";
+    const SQUARE: &str =
+        "M8.2 7.2h4.6a1 1 0 0 1 1 1v4.6a1 1 0 0 1-1 1H8.2a1 1 0 0 1-1-1V8.2a1 1 0 0 1 1-1z";
+    let mut parts = Vec::new();
+    for d in [CIRCLE, SQUARE] {
+        if let Some((colour, solid)) = inside {
+            parts.push(Part {
+                solid,
+                ..Part::solid(d).in_colour(colour)
+            });
+        }
+        parts.push(Part {
+            ink: Ink::Line(1.5),
+            ..Part::line(d).in_colour(outline)
+        });
+    }
+    parts
 }
 
 /// The line under a tool, in the colour it draws in.

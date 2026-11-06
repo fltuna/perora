@@ -4,6 +4,7 @@
 
 use perora_core::edit::{Edit, Place};
 
+pub mod figure;
 pub mod pen;
 
 /// A press, a move or a letting go, as a tool is told of it.
@@ -31,21 +32,37 @@ pub trait Tool {
     fn give_up(&mut self);
 }
 
-/// The tools on the first bar, in its order.
+/// The tools, as the keys take them up. (The first bar has one button for the four shapes and
+/// lines: the last of them taken.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Select,
     Pen,
+    Rectangle,
+    Ellipse,
+    Line,
+    Arrow,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 2] = [Kind::Select, Kind::Pen];
+    pub const ALL: [Kind; 6] = [
+        Kind::Select,
+        Kind::Pen,
+        Kind::Rectangle,
+        Kind::Ellipse,
+        Kind::Line,
+        Kind::Arrow,
+    ];
 
     /// The key that takes it up.
     pub fn key(self) -> &'static str {
         match self {
             Kind::Select => "v",
             Kind::Pen => "p",
+            Kind::Rectangle => "r",
+            Kind::Ellipse => "e",
+            Kind::Line => "l",
+            Kind::Arrow => "a",
         }
     }
 
@@ -54,7 +71,19 @@ impl Kind {
         match self {
             Kind::Select => "editor.tool.select",
             Kind::Pen => "editor.tool.pen",
+            Kind::Rectangle => "editor.tool.rectangle",
+            Kind::Ellipse => "editor.tool.ellipse",
+            Kind::Line => "editor.tool.line",
+            Kind::Arrow => "editor.tool.arrow",
         }
+    }
+
+    /// One of the shapes and lines (one button on the first bar, one bar of their own).
+    pub fn is_figure(self) -> bool {
+        matches!(
+            self,
+            Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow
+        )
     }
 
     /// Whether a drag may begin beside the picture with it (and the pointer is a cross there too).
