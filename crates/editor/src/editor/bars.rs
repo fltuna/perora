@@ -34,6 +34,8 @@ pub(super) enum Panel {
     Stroke,
     Fill,
     Outline,
+    /// The shapes the frame the image is cut down to can be held to.
+    Ratio,
     /// What opens from the box by what is written: its inside, the line around it, its font.
     LetterFill,
     LetterOutline,
@@ -64,6 +66,8 @@ pub(super) enum Offered {
     /// alone (of the one selected).
     Hiding,
     Hidden,
+    /// The frame the image is cut down to: its shape, its size, cut, all of it, never mind.
+    Crop,
 }
 
 /// A setting, as a panel changes it.
@@ -210,6 +214,7 @@ impl Editor {
             None if self.tool.is_figure() => Some(Offered::Figures),
             None if self.tool == Kind::Stamp => Some(Offered::Stamps),
             None if self.tool.is_hider() => Some(Offered::Hiding),
+            None if self.tool == Kind::Crop => Some(Offered::Crop),
             None => None,
         }
     }
@@ -242,6 +247,7 @@ impl Editor {
             ),
             Panel::Stamps => second == Some(Offered::Stamps),
             Panel::LetterFill | Panel::LetterOutline | Panel::Fonts => self.lettering_shown,
+            Panel::Ratio => second == Some(Offered::Crop),
         };
         open.then_some(self.asked?)
     }

@@ -37,6 +37,9 @@ use crate::tools::Kind;
 use crate::tools::pen::RED;
 use crate::writing::{EDGES, first_edge};
 
+/// How wide a short list is.
+const NARROW: f32 = 132.0;
+
 /// How a bar or a panel comes down, and how it goes back up (`come-down`, `go-up` in style.css).
 const COMING: Duration = Duration::from_millis(220);
 const COMES: Curve = Curve(0.1, 0.9, 0.2, 1.0);
@@ -63,6 +66,9 @@ pub(super) struct BarLook {
     stamps: Colour,
     /// How strongly a part is made unreadable.
     strength: u32,
+    /// The frame the image is cut down to: the name of its shape, and its size.
+    ratio: &'static str,
+    frame: (u32, u32),
     open: Option<Panel>,
 }
 
@@ -196,6 +202,7 @@ impl Editor {
             Panel::Stroke => (palette(), Some(self.stroke_now(false).0), RED),
             Panel::Outline => (palette(), Some(self.outline_now().0), RED),
             Panel::Stamps => (palette(), Some(self.stamps_now().0), RED),
+            Panel::Ratio => (Vec::new(), None, RED),
             Panel::LetterFill | Panel::LetterOutline | Panel::Fonts => {
                 let now = self.letters_now();
                 let offered = std::iter::once(None)
@@ -385,6 +392,14 @@ impl Editor {
             stroke: self.stroke_now(self.chosen_is_marker()).0,
             stamps: self.stamps_now().0,
             strength: self.strength_now(),
+            ratio: super::cropping::RATIOS
+                .iter()
+                .find(|(_, ratio)| *ratio == self.ratio)
+                .map_or("free", |(name, _)| *name),
+            frame: self
+                .frame
+                .or_else(|| self.whole())
+                .map_or((0, 0), |frame| (frame.width as u32, frame.height as u32)),
             open: self.panel(),
         }
     }
@@ -458,6 +473,88 @@ impl Editor {
             bar = bar.child(rule(theme));
         }
         match look.offered {
+            Offered::Crop => {
+                let named = |name: &str| -> SharedString {
+                    if name == "free" {
+                        t("editor.crop.free")
+                    } else {
+                        name.to_string().into()
+                    }
+                };
+                let open = look.open == Some(Panel::Ratio);
+                let glyph = |glyph: &'static str| {
+                    div()
+                        .font_family("Segoe Fluent Icons")
+                        .text_size(px(16.0))
+                        .line_height(px(16.0))
+                        .child(glyph)
+                };
+                bar = bar
+                    .child(
+                        div()
+                            .id("ratio")
+                            .relative()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap(px(8.0))
+                            .h(px(34.0))
+                            .pl(px(10.0))
+                            .pr(px(10.0))
+                            .rounded(theme.radius_small)
+                            .when(open, |button| button.bg(theme.surface_hover))
+                            .hover(|style| style.bg(theme.surface_hover))
+                            .tooltip(tip(t("editor.crop.ratio")))
+                            .when(!leaving, |button| {
+                                button.on_click(
+                                    cx.listener(|this, _, _, cx| this.open(Panel::Ratio, cx)),
+                                )
+                            })
+                            .child(named(look.ratio))
+                            .child(icons::caret(theme.text))
+                            .when(!leaving, |button| {
+                                button.child(recorded(&self.openers, Panel::Ratio))
+                            }),
+                    )
+                    .child(rule(theme))
+                    .child(
+                        div()
+                            .px(px(6.0))
+                            .text_color(theme.muted)
+                            .whitespace_nowrap()
+                            .child(format!("{} × {}", look.frame.0, look.frame.1)),
+                    )
+                    .child(rule(theme))
+                    .child(
+                        button("crop-apply", false, true, theme)
+                            .bg(theme.accent)
+                            .text_color(theme.accent_text)
+                            .tooltip(tip(format!("{} (Enter)", t("editor.crop.apply"))))
+                            .when(!leaving, |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| this.cut(cx)))
+                            })
+                            .child(glyph("\u{E73E}")),
+                    )
+                    .child(
+                        button("crop-whole", false, true, theme)
+                            .tooltip(tip(t("editor.crop.whole")))
+                            .when(!leaving, |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| this.crop_whole(cx)))
+                            })
+                            .child(glyph("\u{E72C}")),
+                    )
+                    .child(
+                        button("crop-cancel", false, true, theme)
+                            .tooltip(tip(format!("{} (Esc)", t("editor.crop.cancel"))))
+                            .when(!leaving, |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| {
+                                    this.by_button = None;
+                                    this.hold(Kind::Select, cx)
+                                }))
+                            })
+                            .child(glyph("\u{E711}")),
+                    );
+            }
             Offered::Hiding | Offered::Hidden => {
                 // The two ways (each a word beside its icon), then how strongly.
                 if look.offered == Offered::Hiding {
@@ -662,7 +759,11 @@ impl Editor {
             Panel::Pen | Panel::Marker | Panel::Stroke => self.stroke_now(marker).1,
             Panel::Outline => self.outline_now().1,
             Panel::Stamps => self.stamps_now().1,
-            Panel::Fill | Panel::LetterFill | Panel::LetterOutline | Panel::Fonts => 0,
+            Panel::Fill
+            | Panel::LetterFill
+            | Panel::LetterOutline
+            | Panel::Fonts
+            | Panel::Ratio => 0,
         };
         let letters = self.letters_now();
         let (at, up, wide) = if panel.of_letters() {
@@ -688,10 +789,12 @@ impl Editor {
             };
             (at, up, under.size.width.as_f32() + 2.0)
         } else {
+            // (A short list to choose one of: no wider than it needs.)
+            let wide = if panel == Panel::Ratio { NARROW } else { PANEL };
             (
-                point(under.center().x - px(PANEL / 2.0), under.bottom() + px(8.0)),
+                point(under.center().x - px(wide / 2.0), under.bottom() + px(8.0)),
                 false,
-                PANEL,
+                wide,
             )
         };
         Some(PanelLook {
@@ -754,7 +857,7 @@ impl Editor {
         let share = along(since, leaving, window);
         let t = |key: &str| SharedString::from(self.language.text(key, &[]));
         let panel = look.panel;
-        let mut settings: Vec<AnyElement> = if panel == Panel::Fonts {
+        let mut settings: Vec<AnyElement> = if matches!(panel, Panel::Fonts | Panel::Ratio) {
             Vec::new()
         } else {
             vec![
@@ -763,6 +866,40 @@ impl Editor {
             ]
         };
         match panel {
+            Panel::Ratio => {
+                let now = self.ratio;
+                for (name, ratio) in super::cropping::RATIOS {
+                    let named: SharedString = if name == "free" {
+                        t("editor.crop.free")
+                    } else {
+                        name.into()
+                    };
+                    settings.push(
+                        div()
+                            .id(SharedString::from(format!("ratio-{name}")))
+                            .h(px(30.0))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .rounded(theme.radius_small)
+                            .border_1()
+                            .border_color(if ratio == now {
+                                theme.accent
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .when(ratio == now, |row| row.bg(theme.background))
+                            .hover(|style| style.bg(theme.surface_hover))
+                            .when(!leaving, |row| {
+                                row.on_click(
+                                    cx.listener(move |this, _, _, cx| this.crop_ratio(ratio, cx)),
+                                )
+                            })
+                            .child(named)
+                            .into_any_element(),
+                    );
+                }
+            }
             Panel::Fonts => settings.push(
                 self.fonts_list(&look.font, leaving, theme, cx)
                     .into_any_element(),
@@ -979,6 +1116,8 @@ impl Editor {
                 if letters {
                     // (As the box's drops are: a little room around, the colours as under the bars.)
                     content.gap(px(10.0)).p(px(8.0))
+                } else if panel == Panel::Ratio {
+                    content.gap(px(2.0)).p(px(6.0))
                 } else {
                     content.gap(px(16.0)).pt(px(14.0)).px(px(16.0)).pb(px(16.0))
                 }

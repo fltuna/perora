@@ -8,6 +8,7 @@
 //! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
 mod bars;
+mod cropping;
 mod hiding;
 mod lettering;
 mod panels;
@@ -40,6 +41,8 @@ use crate::view::{self, Area, Looking};
 use bars::{Openers, Panel, Set};
 use panels::{Mixing, Motions};
 use typing::Typing;
+
+pub use cropping::kept_of;
 
 /// A capture to draw on.
 pub struct Capture {
@@ -87,6 +90,12 @@ enum Gesture {
         to: Place,
         with: Vec<usize>,
     },
+    /// The frame the image is cut down to is pulled (or moved, or drawn anew) from `from`, as it was.
+    Crop {
+        grip: cropping::Grip,
+        from: Place,
+        was: Area,
+    },
     /// The picture is held and moved, with that button: the place that was in the middle when it
     /// was taken hold of, and where the pointer was (logical pixels in the place).
     Pan {
@@ -129,6 +138,10 @@ pub struct Editor {
     selected: Vec<usize>,
     /// The pointer over a hold of the one selected: the way it is pulled there.
     pointing: Option<CursorStyle>,
+    /// The frame the image is being cut down to, while the tool for that is in hand; and the shape
+    /// it is held to, if any.
+    frame: Option<Area>,
+    ratio: Option<f32>,
     /// What is being written, and how what is written next is written (`typing`).
     typing: Option<Typing>,
     letters: crate::writing::Writing,
@@ -211,6 +224,8 @@ impl Editor {
             grabbing: false,
             selected: Vec::new(),
             pointing: None,
+            frame: None,
+            ratio: None,
             typing: None,
             letters: typing::first_writing(1.0, font),
             lettering,
@@ -310,6 +325,9 @@ impl Editor {
         self.give_up_gesture();
         self.grabbing = false;
         self.finish_typing(cx);
+        // (A frame set but not cut to yet is cut to: what was put outside it was meant to stay
+        // behind.)
+        self.cut(cx);
         cx.notify();
     }
 
@@ -317,7 +335,11 @@ impl Editor {
     /// when it cannot be (too large to be a picture, a drawing that holds no more): it stays being
     /// written, nothing leaves, and the user is told.
     pub fn done_writing(&mut self, cx: &mut Context<Self>) -> bool {
-        self.finish_typing(cx)
+        if !self.finish_typing(cx) {
+            return false;
+        }
+        self.cut(cx);
+        true
     }
 
     fn give_up_gesture(&mut self) {
@@ -329,8 +351,20 @@ impl Editor {
     }
 
     /// The picture: all of the image (P4 later: what it is cut down to).
+    /// The picture: what the image is cut down to (all of it while the frame for that is set).
     fn view(&self) -> Option<Area> {
-        self.capture.as_ref().map(|capture| capture.picture.whole())
+        let whole = self.whole()?;
+        if self.tool == Kind::Crop {
+            return Some(whole);
+        }
+        Some(cropping::kept_of(self.drawing.edits(), whole).unwrap_or(whole))
+    }
+
+    /// The size of the picture as it leaves: what the image is cut down to.
+    pub fn shown_size(&self) -> Option<(u32, u32)> {
+        let whole = self.whole()?;
+        let kept = cropping::kept_of(self.drawing.edits(), whole).unwrap_or(whole);
+        Some((kept.width as u32, kept.height as u32))
     }
 
     fn unit(&self) -> f32 {
@@ -378,7 +412,7 @@ impl Editor {
 
     fn tool_mut(&mut self) -> Option<&mut dyn Tool> {
         match self.tool {
-            Kind::Select | Kind::Text => None,
+            Kind::Select | Kind::Text | Kind::Crop => None,
             Kind::Pen => Some(&mut self.pen),
             Kind::Marker => Some(&mut self.marker),
             Kind::Stamp => Some(&mut self.stamps),
@@ -389,7 +423,7 @@ impl Editor {
 
     fn tool_ref(&self) -> Option<&dyn Tool> {
         match self.tool {
-            Kind::Select | Kind::Text => None,
+            Kind::Select | Kind::Text | Kind::Crop => None,
             Kind::Pen => Some(&self.pen),
             Kind::Marker => Some(&self.marker),
             Kind::Stamp => Some(&self.stamps),
@@ -472,6 +506,19 @@ impl Editor {
                     }
                 }
             }
+        }
+        // The frame the image is cut down to: pulled, moved, or drawn anew.
+        if self.tool == Kind::Crop {
+            if let Some(whole) = self.whole() {
+                let was = self.frame.unwrap_or(whole);
+                self.gesture = Some(Gesture::Crop {
+                    grip: cropping::grip_at(was, press.at, press.scale),
+                    from: press.at,
+                    was,
+                });
+                cx.notify();
+            }
+            return;
         }
         let on_picture = self.view().is_some_and(|view| view.contains(press.at));
         // Written before: written anew, by the text tool's press, or the select tool's second.
@@ -585,6 +632,9 @@ impl Editor {
                 .get(*index)
                 .and_then(|edit| selecting::hold_at(edit, at, scale))
                 .map(|(hold, _)| pointer_of(hold)),
+            (Kind::Crop, _) => self.whole().map(|whole| {
+                cropping::pointer_of(cropping::grip_at(self.frame.unwrap_or(whole), at, scale))
+            }),
             _ if self.takes_last(at, scale) => Some(CursorStyle::Arrow),
             _ => None,
         };
@@ -692,6 +742,15 @@ impl Editor {
                 *to = press.at;
                 cx.notify();
             }
+            Some(Gesture::Crop { grip, from, was }) => {
+                let (grip, from, was) = (*grip, *from, *was);
+                if let Some(whole) = self.whole() {
+                    self.frame = Some(cropping::pulled(
+                        grip, was, from, press.at, whole, self.ratio,
+                    ));
+                }
+                cx.notify();
+            }
         }
     }
 
@@ -725,7 +784,7 @@ impl Editor {
     ) {
         match self.gesture.take() {
             None => {}
-            Some(Gesture::Pan { .. }) => cx.notify(),
+            Some(Gesture::Pan { .. }) | Some(Gesture::Crop { .. }) => cx.notify(),
             Some(Gesture::Move { indices, by, .. }) => {
                 // (Not a move that leaves them where they were.)
                 let edits = moved_in(self.drawing.edits(), &indices, by);
@@ -982,6 +1041,8 @@ impl Editor {
         if !self.finish_typing(cx) {
             return;
         }
+        // Cutting down starts from what the image is cut down to already, or from all of it.
+        self.crop_held(kind);
         self.tool = kind;
         self.pointing = None;
         self.just_drawn = false;
@@ -1108,6 +1169,8 @@ impl Editor {
                 cx.notify();
             }
             "delete" | "backspace" => self.remove(cx),
+            // While the image is being cut down, Enter cuts it.
+            "enter" if self.tool == Kind::Crop && !event.is_held => self.cut(cx),
             _ if !event.is_held => {
                 if let Some(kind) = Kind::ALL.into_iter().find(|kind| kind.key() == key) {
                     self.take(kind, cx);
@@ -1130,6 +1193,7 @@ impl Editor {
     fn held_pointer(&self) -> Option<CursorStyle> {
         match &self.gesture {
             Some(Gesture::Resize { hold, .. }) => Some(pointer_of(*hold)),
+            Some(Gesture::Crop { grip, .. }) => Some(cropping::pointer_of(*grip)),
             _ => None,
         }
     }
@@ -1302,6 +1366,20 @@ impl Editor {
                     theme.text,
                 )),
         );
+        // Cutting the image down.
+        let named = format!(
+            "{} ({})",
+            t(Kind::Crop.name()),
+            Kind::Crop.key().to_uppercase()
+        );
+        let crop = button(Kind::Crop.name().into(), self.tool == Kind::Crop, true)
+            .tooltip(tip(named))
+            .on_click(cx.listener(|this, _, _, cx| this.pick(Kind::Crop, cx)))
+            .child(icons::icon(
+                icons::of_tool(Kind::Crop, None, None),
+                16.0,
+                theme.text,
+            ));
         // The two ways to make a part unreadable: one button, which takes up the last of them taken.
         let hider = if self.tool.is_hider() {
             self.tool
@@ -1325,6 +1403,7 @@ impl Editor {
                     theme.text,
                 )),
         );
+        bar = bar.child(crop);
         let typing = false;
         let (can_undo, can_redo) = (
             self.drawing.can_undo() && !typing,
@@ -1408,6 +1487,11 @@ impl Editor {
             CursorStyle::Arrow
         };
         let frozen = self.frozen;
+        let frame = if self.tool == Kind::Crop {
+            self.frame.or(view)
+        } else {
+            None
+        };
         // What is being written: not drawn among the rest (it is drawn as it is being written), its
         // field drawn over them, and the system's input for it.
         let typing = self.typing.is_some();
@@ -1479,6 +1563,9 @@ impl Editor {
                         }
                         if let Some((from, to)) = marking {
                             paint::marked(window, &painter, from, to);
+                        }
+                        if let Some(frame) = frame {
+                            cropping::paint_frame(window, &painter, view, frame);
                         }
                     });
                     if !frozen {

@@ -51,10 +51,11 @@ pub enum Kind {
     Stamp,
     Blur,
     Mosaic,
+    Crop,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Select,
         Kind::Pen,
         Kind::Marker,
@@ -66,6 +67,7 @@ impl Kind {
         Kind::Stamp,
         Kind::Blur,
         Kind::Mosaic,
+        Kind::Crop,
     ];
 
     /// The key that takes it up.
@@ -82,6 +84,7 @@ impl Kind {
             Kind::Stamp => "n",
             Kind::Blur => "b",
             Kind::Mosaic => "x",
+            Kind::Crop => "c",
         }
     }
 
@@ -99,6 +102,7 @@ impl Kind {
             Kind::Stamp => "editor.tool.stamp",
             Kind::Blur => "editor.tool.blur",
             Kind::Mosaic => "editor.tool.mosaic",
+            Kind::Crop => "editor.tool.crop",
         }
     }
 

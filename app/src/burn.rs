@@ -89,10 +89,31 @@ pub async fn burn(frame: Arc<Frame>, edits: Vec<Edit>, cx: &mut AsyncApp) -> Res
     if from < edits.len() {
         base = Arc::new(draw_over(base, edits[from..].to_vec(), cx).await?);
     }
+    // Cut down last, to what the last crop leaves (the other edits keep the whole image's places).
+    let whole = Area::new(0.0, 0.0, base.width() as f32, base.height() as f32);
+    if let Some(kept) = perora_editor::editor::kept_of(&edits, whole)
+        && kept != whole
+    {
+        base = Arc::new(cut_to(&base, kept));
+    }
     Ok(Arc::try_unwrap(base).unwrap_or_else(|shared| Frame {
         area: shared.area,
         rgba: shared.rgba.clone(),
     }))
+}
+
+/// The image cut down to a part of it (whole pixels).
+fn cut_to(frame: &Frame, kept: Area) -> Frame {
+    let part = perora_editor::hidden::Part {
+        x: kept.x as u32,
+        y: kept.y as u32,
+        width: kept.width as u32,
+        height: kept.height as u32,
+    };
+    Frame {
+        area: Rect::new(0, 0, part.width, part.height),
+        rgba: perora_editor::hidden::cut(&frame.rgba, frame.width(), part),
+    }
 }
 
 /// A part of the image made unreadable, on its pixels as they are drawn so far.

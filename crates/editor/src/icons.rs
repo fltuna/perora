@@ -107,6 +107,7 @@ fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             Part::line("M2.5 8a5.5 4.5 0 1 0 11 0a5.5 4.5 0 1 0-11 0z"),
             colour,
         )],
+        Kind::Crop => vec![Part::line("M4.5 1.5v10h10M1.5 4.5h10v10")],
         Kind::Blur => vec![
             Part::line("M8 2.2C6 5 4.2 7.2 4.2 9.6a3.8 3.8 0 0 0 7.6 0C11.8 7.2 10 5 8 2.2z"),
             Part {

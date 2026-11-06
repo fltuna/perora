@@ -460,13 +460,14 @@ impl Render for Status {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let t = |key: &str| self.language.text(key, &[]);
-        let Some((id, edits, full)) = self
+        let Some((id, edits, full, kept)) = self
             .editor
             .read_with(cx, |editor, _| {
                 (
                     editor.capture_id(),
                     editor.edits().to_vec(),
                     editor.is_full(),
+                    editor.shown_size(),
                 )
             })
             .ok()
@@ -507,10 +508,12 @@ impl Render for Status {
                 }
             }
         };
-        let (width, height) = said
-            .as_ref()
-            .map(|said| (said.width, said.height))
-            .unwrap_or_default();
+        // (The size it leaves at: cut down, what it is cut down to.)
+        let (width, height) = kept.unwrap_or_else(|| {
+            said.as_ref()
+                .map(|said| (said.width, said.height))
+                .unwrap_or_default()
+        });
         let count = edits.len().to_string();
         let most = perora_core::drawing::MOST_EDITS.to_string();
         div().flex().flex_col().gap(px(2.0)).child(first).child(
