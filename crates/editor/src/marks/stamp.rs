@@ -136,7 +136,7 @@ impl Mark for Stamp {
     }
 
     /// Square, at whole pixels, once it is let go.
-    fn settled(&self, edit: &Edit) -> Edit {
+    fn settled(&self, edit: &Edit, _hold: Hold) -> Option<Edit> {
         let area = box_of(edit);
         let side = area.width.min(area.height).round().max(LEAST);
         let from = [area.x.round(), area.y.round()];
@@ -145,7 +145,7 @@ impl Mark for Stamp {
             *was = from;
             *to = [from[0] + side, from[1] + side];
         }
-        edit
+        Some(edit)
     }
 }
 

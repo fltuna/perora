@@ -242,6 +242,20 @@ pub fn drawing_of(id: u64, cx: &mut App) -> Option<Vec<Edit>> {
         .flatten()
 }
 
+/// Before the capture leaves from the window: what is being written in it is written. False when it
+/// cannot be (too large to be a picture, a drawing that holds no more): it stays being written, the
+/// user is told, and nothing leaves.
+pub fn done_writing(id: u64, cx: &mut App) -> bool {
+    let Some(window) = cx.default_global::<Large>().window else {
+        return true;
+    };
+    window
+        .update(cx, |editor, _, cx| {
+            editor.capture_id() != Some(id) || editor.done_writing(cx)
+        })
+        .unwrap_or(true)
+}
+
 /// Before the capture leaves: what is under way in the editor is done or given up, and nothing more
 /// is drawn until it has left (or could not). `vanish`: out of sight meanwhile (saving: the window is
 /// gone at once for whoever pressed; copying keeps it).

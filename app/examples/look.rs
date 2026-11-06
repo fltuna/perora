@@ -5,7 +5,7 @@
 //! `cargo run -p perora-app --profile fast --example look -- <script> <out-dir> [en|ja]`
 //!
 //! The script, a line each (logical pixels of the window, which is 1200 x 800; `#` begins a remark):
-//! - `move X Y`, `down X Y`, `up X Y`, `click X Y` (down and up), `drag X Y X2 Y2 [STEPS]`, with
+//! - `move X Y`, `down X Y`, `up X Y`, `click X Y` (down and up), `twice X Y` (a double click), `drag X Y X2 Y2 [STEPS]`, with
 //!   `shift`, `ctrl` after them for those held (`right`, `middle` for those buttons)
 //! - `wheel X Y LINES` (up is more than 0: closer)
 //! - `key K` (a key as GPUI names it: `r`, `escape`, `ctrl-z`), `type TEXT`
@@ -41,6 +41,10 @@ fn main() {
     let out = PathBuf::from(out);
     std::fs::create_dir_all(&out).expect("the out directory can be made");
     let code = arguments.get(2).cloned().unwrap_or_else(|| "ja".into());
+    // What the editor remembers (the font last written in) is kept beside the shots: not where the
+    // user's Perora keeps it.
+    // SAFETY: nothing else runs yet to read the environment meanwhile.
+    unsafe { std::env::set_var("PERORA_EDITOR_SETTINGS", out.join("editor-settings.json")) };
 
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_global(Theme::new(Mode::Dark, platform::accent_colour()));
@@ -159,6 +163,25 @@ async fn play(
                     events.push(moved(at, None, modifiers));
                     events.push(pressed(at, button, modifiers));
                     events.push(let_go(at, button, modifiers));
+                }
+                "twice" => {
+                    at = place(0);
+                    events.push(moved(at, None, modifiers));
+                    for count in [1, 2] {
+                        events.push(PlatformInput::MouseDown(MouseDownEvent {
+                            button,
+                            position: at,
+                            modifiers,
+                            click_count: count,
+                            first_mouse: false,
+                        }));
+                        events.push(PlatformInput::MouseUp(MouseUpEvent {
+                            button,
+                            position: at,
+                            modifiers,
+                            click_count: count,
+                        }));
+                    }
                 }
                 "drag" => {
                     let (from, to) = (place(0), place(1));

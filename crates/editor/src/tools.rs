@@ -46,11 +46,12 @@ pub enum Kind {
     Ellipse,
     Line,
     Arrow,
+    Text,
     Stamp,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Select,
         Kind::Pen,
         Kind::Marker,
@@ -58,6 +59,7 @@ impl Kind {
         Kind::Ellipse,
         Kind::Line,
         Kind::Arrow,
+        Kind::Text,
         Kind::Stamp,
     ];
 
@@ -71,6 +73,7 @@ impl Kind {
             Kind::Ellipse => "e",
             Kind::Line => "l",
             Kind::Arrow => "a",
+            Kind::Text => "t",
             Kind::Stamp => "n",
         }
     }
@@ -85,6 +88,7 @@ impl Kind {
             Kind::Ellipse => "editor.tool.ellipse",
             Kind::Line => "editor.tool.line",
             Kind::Arrow => "editor.tool.arrow",
+            Kind::Text => "editor.tool.text",
             Kind::Stamp => "editor.tool.stamp",
         }
     }
@@ -104,6 +108,6 @@ impl Kind {
 
     /// Whether a drag may begin beside the picture with it (and the pointer is a cross there too).
     pub fn begins_beside(self) -> bool {
-        !matches!(self, Kind::Select | Kind::Stamp)
+        !matches!(self, Kind::Select | Kind::Text | Kind::Stamp)
     }
 }

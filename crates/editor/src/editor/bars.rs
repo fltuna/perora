@@ -34,6 +34,20 @@ pub(super) enum Panel {
     Stroke,
     Fill,
     Outline,
+    /// What opens from the box by what is written: its inside, the line around it, its font.
+    LetterFill,
+    LetterOutline,
+    Fonts,
+}
+
+impl Panel {
+    /// Whether it opens from the box by what is written (not under a button of the bars).
+    pub(super) fn of_letters(self) -> bool {
+        matches!(
+            self,
+            Panel::LetterFill | Panel::LetterOutline | Panel::Fonts
+        )
+    }
 }
 
 /// Which second bar there is to have: of the shapes and lines in hand, or of what is selected (a
@@ -221,6 +235,7 @@ impl Editor {
                 Some(Offered::Figures | Offered::Shape | Offered::Line)
             ),
             Panel::Stamps => second == Some(Offered::Stamps),
+            Panel::LetterFill | Panel::LetterOutline | Panel::Fonts => self.lettering_shown,
         };
         open.then_some(self.asked?)
     }

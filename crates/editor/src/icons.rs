@@ -107,6 +107,14 @@ fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             Part::line("M2.5 8a5.5 4.5 0 1 0 11 0a5.5 4.5 0 1 0-11 0z"),
             colour,
         )],
+        // A letter, with a line under it in the colour it is written in.
+        Kind::Text => {
+            let mut parts = vec![Part::line("M4 4.2V2.8h8v1.4M8 2.8v8.4M6.4 11.2h3.2")];
+            if let Some(colour) = colour {
+                parts.push(underline(colour));
+            }
+            parts
+        }
         Kind::Stamp => match colour {
             // The disc in the colour, the 1 in black or white on it.
             Some(colour) => vec![

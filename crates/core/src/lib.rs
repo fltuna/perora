@@ -9,6 +9,7 @@ pub mod config;
 pub mod copying;
 pub mod drawing;
 pub mod edit;
+pub mod editor_settings;
 pub mod frame;
 pub mod geometry;
 pub mod language;

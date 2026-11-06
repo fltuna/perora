@@ -8,7 +8,9 @@
 //! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
 mod bars;
+mod lettering;
 mod panels;
+mod typing;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -36,6 +38,7 @@ use crate::tools::{self, Kind, Press, Tool};
 use crate::view::{self, Area, Looking};
 use bars::{Openers, Panel, Set};
 use panels::{Mixing, Motions};
+use typing::Typing;
 
 /// A capture to draw on.
 pub struct Capture {
@@ -125,6 +128,13 @@ pub struct Editor {
     selected: Vec<usize>,
     /// The pointer over a hold of the one selected: the way it is pulled there.
     pointing: Option<CursorStyle>,
+    /// What is being written, and how what is written next is written (`typing`).
+    typing: Option<Typing>,
+    letters: crate::writing::Writing,
+    /// The box by what is written: its fields and fonts, whether it is there, and where.
+    lettering: lettering::Lettering,
+    lettering_shown: bool,
+    lettering_side: lettering::Side,
     /// The last change was refused: the drawing holds no more (said until something is drawn).
     full: bool,
     /// While the capture leaves: nothing is drawn, no key does anything.
@@ -176,6 +186,9 @@ impl Editor {
         })
         .detach();
         let mixing = Mixing::new(cx);
+        let lettering = lettering::Lettering::new(cx);
+        // (The font written in last, the last time Perora ran.)
+        let font = perora_core::editor_settings::EditorSettings::load().font;
         Self {
             capture: None,
             drawing: Drawing::default(),
@@ -192,6 +205,11 @@ impl Editor {
             grabbing: false,
             selected: Vec::new(),
             pointing: None,
+            typing: None,
+            letters: typing::first_writing(1.0, font),
+            lettering,
+            lettering_shown: false,
+            lettering_side: lettering::Side::default(),
             full: false,
             frozen: false,
             shut: true,
@@ -216,6 +234,12 @@ impl Editor {
         if let Some(old) = self.capture.take() {
             self.retired.push(old.picture);
         }
+        // (The font written in last is kept from one capture to the next; the rest of how letters
+        // are written is not.)
+        let font = std::mem::take(&mut self.letters.font);
+        self.letters =
+            typing::first_writing(unit(capture.picture.width, capture.picture.height), font);
+        self.typing = None;
         self.capture = Some(capture);
         self.drawing = Drawing::default();
         self.shown = Rc::new(Vec::new());
@@ -264,12 +288,20 @@ impl Editor {
     }
 
     /// Before the capture leaves, or the window is put out of the way: what is under way is done or
-    /// given up, and a Space held is let go. (P4 later: the text being written is written, the
-    /// frame being cut to is cut to.)
+    /// given up, and a Space held is let go; what is being written is done (or, when it cannot be,
+    /// left being written). (P4 later: the frame being cut to is cut to.)
     pub fn settle(&mut self, cx: &mut Context<Self>) {
         self.give_up_gesture();
         self.grabbing = false;
+        self.finish_typing(cx);
         cx.notify();
+    }
+
+    /// Before the capture leaves with what is drawn: what is being written is done first. False
+    /// when it cannot be (too large to be a picture, a drawing that holds no more): it stays being
+    /// written, nothing leaves, and the user is told.
+    pub fn done_writing(&mut self, cx: &mut Context<Self>) -> bool {
+        self.finish_typing(cx)
     }
 
     fn give_up_gesture(&mut self) {
@@ -330,7 +362,7 @@ impl Editor {
 
     fn tool_mut(&mut self) -> Option<&mut dyn Tool> {
         match self.tool {
-            Kind::Select => None,
+            Kind::Select | Kind::Text => None,
             Kind::Pen => Some(&mut self.pen),
             Kind::Marker => Some(&mut self.marker),
             Kind::Stamp => Some(&mut self.stamps),
@@ -340,7 +372,7 @@ impl Editor {
 
     fn tool_ref(&self) -> Option<&dyn Tool> {
         match self.tool {
-            Kind::Select => None,
+            Kind::Select | Kind::Text => None,
             Kind::Pen => Some(&self.pen),
             Kind::Marker => Some(&self.marker),
             Kind::Stamp => Some(&self.stamps),
@@ -398,12 +430,68 @@ impl Editor {
         let Some(press) = self.press(event.position, event.modifiers, window) else {
             return;
         };
+        // While something is being written: a press in its field is about its letters, one on the band
+        // around it takes hold of it; anywhere else, it is done (and with the text tool, that is all
+        // the press does).
+        if self.typing.is_some() {
+            let painter = Painter {
+                origin: stage.origin,
+                offset: [look.part.x, look.part.y],
+                scale: look.scale,
+            };
+            match self.typing_hit(&painter, event.position) {
+                Some(false) => {
+                    self.press_in_field(press.at, event.modifiers.shift, cx);
+                    return;
+                }
+                Some(true) => {
+                    self.take_band(event.position, cx);
+                    return;
+                }
+                None => {
+                    if !self.finish_typing(cx) || self.tool == Kind::Text {
+                        return;
+                    }
+                }
+            }
+        }
+        let on_picture = self.view().is_some_and(|view| view.contains(press.at));
+        // Written before: written anew, by the text tool's press, or the select tool's second.
+        let text_at = || {
+            self.drawing
+                .edits()
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, edit)| {
+                    (matches!(edit, Edit::Text { .. })
+                        && mark_of(edit).is_some_and(|mark| mark.is_at(edit, press.at, 0.0)))
+                    .then_some(index)
+                })
+        };
+        if self.tool == Kind::Text {
+            if !on_picture {
+                return;
+            }
+            match text_at() {
+                Some(index) => self.rewrite(index, cx),
+                None => self.start_typing(press.at, cx),
+            }
+            return;
+        }
+        if self.tool == Kind::Select
+            && event.click_count == 2
+            && !event.modifiers.control
+            && let Some(index) = text_at()
+        {
+            self.rewrite(index, cx);
+            return;
+        }
         if self.tool == Kind::Select {
             self.select(&press, event.modifiers.control, cx);
             return;
         }
         let begins_beside = self.tool.begins_beside();
-        let on_picture = self.view().is_some_and(|view| view.contains(press.at));
         if !on_picture && !begins_beside {
             return;
         }
@@ -495,6 +583,36 @@ impl Editor {
             self.finish(event.position, event.modifiers, window, cx);
             return;
         }
+        // What is being written, carried along by its band, or its letters being selected.
+        if let Some(typing) = &self.typing {
+            let (carrying, selecting) = (typing.carrying.is_some(), typing.selecting);
+            if (carrying || selecting) && event.pressed_button != Some(MouseButton::Left) {
+                self.let_go_of_band(cx);
+                if let Some(typing) = self.typing.as_mut() {
+                    typing.selecting = false;
+                }
+                return;
+            }
+            if carrying {
+                if let (Some((_, look)), Some(view)) = (self.look(window), self.view()) {
+                    let part = look.part;
+                    let shown = Area::new(
+                        part.x.max(view.x),
+                        part.y.max(view.y),
+                        (part.right().min(view.right()) - part.x.max(view.x)).max(0.0),
+                        (part.bottom().min(view.bottom()) - part.y.max(view.y)).max(0.0),
+                    );
+                    self.carry(event.position, look.scale, shown, cx);
+                }
+                return;
+            }
+            if selecting {
+                if let Some(press) = self.press(event.position, event.modifiers, window) {
+                    self.select_in_field(press.at, cx);
+                }
+                return;
+            }
+        }
         if let Some(Gesture::Pan { from, was, button }) = &self.gesture {
             let (from, was, button) = (*from, *was, *button);
             if let (Some((stage, look)), Some(view)) = (self.look(window), self.view()) {
@@ -560,6 +678,15 @@ impl Editor {
     }
 
     fn up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.button == MouseButton::Left
+            && let Some(typing) = self.typing.as_mut()
+            && (typing.carrying.is_some() || typing.selecting)
+        {
+            typing.selecting = false;
+            self.let_go_of_band(cx);
+            cx.notify();
+            return;
+        }
         // (Only the button it began with ends it: another one let go is nothing to it.)
         if self
             .gesture
@@ -590,11 +717,24 @@ impl Editor {
                 cx.notify();
             }
             Some(Gesture::Resize {
-                index, was, now, ..
+                index,
+                was,
+                now,
+                hold,
+                ..
             }) => {
                 // (Only what it was when it was taken hold of is made larger.) Kept as it is kept: a
                 // number square again.
-                let now = mark_of(&now).map_or(now.clone(), |mark| mark.settled(&now));
+                let settled = match mark_of(&now) {
+                    Some(mark) => mark.settled(&now, hold),
+                    None => Some(now.clone()),
+                };
+                let Some(now) = settled else {
+                    // (Larger than what is written gets: it stays as it was.)
+                    self.full = true;
+                    cx.notify();
+                    return;
+                };
                 if self.drawing.edits().get(index) == Some(&was) && now != was {
                     let mut edits = self.drawing.edits().to_vec();
                     edits[index] = now;
@@ -819,6 +959,11 @@ impl Editor {
 
     /// The tool is in hand. Another than the select tool lets go of what is selected.
     fn hold(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        // (What is being written is done first: it is not given up for another tool. Where it
+        // cannot be done, it stays in hand.)
+        if !self.finish_typing(cx) {
+            return;
+        }
         self.tool = kind;
         self.pointing = None;
         self.just_drawn = false;
@@ -870,8 +1015,23 @@ impl Editor {
             return;
         }
         // A box of a panel has the keyboard: what is typed is its own. Esc puts the panel away, and
-        // the keyboard is the picture's again.
+        // the keyboard is the picture's again. (The search of the fonts has its arrows, Enter and
+        // Esc; the size by what is written, Enter and Esc for "done here": back to what is written.)
         if !self.focus.is_focused(window) {
+            let sought = gpui::Focusable::focus_handle(self.lettering.sought.read(cx), cx);
+            let size = gpui::Focusable::focus_handle(self.lettering.size.read(cx), cx);
+            if sought.is_focused(window) && !modifiers.control {
+                if self.fonts_key(key, window, cx) {
+                    cx.stop_propagation();
+                }
+                return;
+            }
+            if size.is_focused(window) && matches!(key, "enter" | "escape") {
+                window.focus(&self.focus, cx);
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
             if key == "escape" && !event.is_held {
                 self.asked = None;
                 window.focus(&self.focus, cx);
@@ -879,7 +1039,18 @@ impl Editor {
             }
             return;
         }
-        if key == "escape" {
+        // While something is being written, its keys are its own (and the letters come through the
+        // system's input): not tools, not Space to hold the picture, not Delete for what is selected.
+        if self.typing.is_some() && self.gesture.is_none() {
+            match self.typing_key(event, window, cx) {
+                typing::Keyed::Taken => {
+                    cx.stop_propagation();
+                    return;
+                }
+                typing::Keyed::Letter => return,
+                typing::Keyed::NotMine => {}
+            }
+        } else if key == "escape" {
             if !event.is_held {
                 self.escape(cx);
             }
@@ -1070,7 +1241,28 @@ impl Editor {
                     theme.text,
                 )),
         );
-        // (P4 later: the text, before the numbers.)
+        // The text: its letter, with a line under it in the colour it is written in (of the line
+        // around the letters, where they have no inside).
+        let written_in = if self.letters.fill > 0.0 {
+            self.letters.color
+        } else {
+            self.letters.outline.unwrap_or(self.letters.color)
+        };
+        let named = format!(
+            "{} ({})",
+            t(Kind::Text.name()),
+            Kind::Text.key().to_uppercase()
+        );
+        bar = bar.child(
+            button(Kind::Text.name().into(), self.tool == Kind::Text, true)
+                .tooltip(tip(named))
+                .on_click(cx.listener(|this, _, _, cx| this.pick(Kind::Text, cx)))
+                .child(icons::icon(
+                    icons::of_tool(Kind::Text, Some(paint::colour(written_in)), None),
+                    16.0,
+                    theme.text,
+                )),
+        );
         let named = format!(
             "{} ({})",
             t(Kind::Stamp.name()),
@@ -1155,9 +1347,15 @@ impl Editor {
             CursorStyle::Arrow
         };
         let frozen = self.frozen;
+        // What is being written: not drawn among the rest (it is drawn as it is being written), its
+        // field drawn over them, and the system's input for it.
+        let typing = self.typing.is_some();
+        let rewritten = self.typing.as_ref().and_then(|typing| typing.index);
+        let focus = self.focus.clone();
+        let theme = Theme::get(cx).clone();
         canvas(
             |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
-            move |bounds, hitbox, window, _| {
+            move |bounds, hitbox, window, cx| {
                 for picture in retired {
                     picture.let_go(window);
                 }
@@ -1182,7 +1380,7 @@ impl Editor {
                     };
                     let bases = picture.bases(&look, size, dense, window);
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                        paint::draw_all(window, &painter, view, &bases, &edits, None);
+                        paint::draw_all(window, &painter, view, &bases, &edits, rewritten);
                         if let Some(shaping) = &shaping {
                             paint::draw_all(
                                 window,
@@ -1218,8 +1416,33 @@ impl Editor {
                             paint::marked(window, &painter, from, to);
                         }
                     });
-                }
-                if !frozen {
+                    if !frozen {
+                        window.set_cursor_style(cursor, &hitbox);
+                    }
+                    if typing && let Some(editor) = this.upgrade() {
+                        let focused = focus.is_focused(window);
+                        let over = editor
+                            .read(cx)
+                            .typing_hit(&painter, window.mouse_position());
+                        window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
+                            editor.read(cx).paint_typing(
+                                window,
+                                &painter,
+                                focused,
+                                theme.accent,
+                                theme.text,
+                            );
+                        });
+                        window.handle_input(
+                            &focus,
+                            gpui::ElementInputHandler::new(bounds, editor.clone()),
+                            cx,
+                        );
+                        if !frozen && over == Some(false) {
+                            window.set_cursor_style(CursorStyle::IBeam, &hitbox);
+                        }
+                    }
+                } else if !frozen {
                     window.set_cursor_style(cursor, &hitbox);
                 }
 
@@ -1311,6 +1534,7 @@ impl Render for Editor {
         let theme = Theme::get(cx).clone();
         let tools = self.tools_bar(&theme, cx);
         let second = self.second_bar(&theme, window, cx);
+        let lettering = self.lettering_box(&theme, window, cx);
         let panel = self.panel_view(&theme, window, cx);
         let stage = self.stage(cx);
         let zoom = self.zoom(&theme, window, cx);
@@ -1356,6 +1580,7 @@ impl Render for Editor {
                     .child(zoom),
             )
             .children(second)
+            .children(lettering)
             .children(panel)
     }
 }

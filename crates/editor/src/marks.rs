@@ -16,6 +16,7 @@ mod marker;
 mod pen;
 mod shape;
 pub mod stamp;
+mod text;
 
 pub use line::head;
 pub use marker::{SEEN_THROUGH, WIDER};
@@ -61,9 +62,10 @@ pub trait Mark: Sync {
         edit.clone()
     }
 
-    /// It, once a hold is let go: as it is kept (a number square again, at whole pixels).
-    fn settled(&self, edit: &Edit) -> Edit {
-        edit.clone()
+    /// It, once `hold` is let go: as it is kept (a number square again, something written written
+    /// anew at its size). None: it cannot be kept so (larger than what is written gets).
+    fn settled(&self, edit: &Edit, _hold: Hold) -> Option<Edit> {
+        Some(edit.clone())
     }
 }
 
@@ -74,6 +76,7 @@ pub fn mark_of(edit: &Edit) -> Option<&'static dyn Mark> {
         Edit::Pen { .. } => Some(&pen::Pen),
         Edit::Marker { .. } => Some(&marker::Marker),
         Edit::Stamp { .. } => Some(&stamp::Stamp),
+        Edit::Text { .. } => Some(&text::Text),
         Edit::Rectangle { .. } | Edit::Ellipse { .. } => Some(&shape::Shape),
         Edit::Line { .. } | Edit::Arrow { .. } => Some(&line::Line),
         _ => None,

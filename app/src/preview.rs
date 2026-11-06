@@ -537,6 +537,10 @@ fn to_do(id: u64, cx: &mut App) -> Option<&mut Pending> {
 /// on that shows the file. The preview stays, with the reason, when it could not be written. From the
 /// large window, what is drawn on it is in the file, and the window is out of sight at once.
 pub fn save(id: u64, cx: &mut App) {
+    // (What is being written is written first: it is part of what is drawn.)
+    if !large::done_writing(id, cx) {
+        return;
+    }
     let settings = Perora::get(cx).settings();
     let language = Perora::get(cx).language();
     let edits = large::drawing_of(id, cx).unwrap_or_default();
@@ -666,6 +670,9 @@ fn not_left(id: u64, why: impl FnOnce(&mut Previews), cx: &mut App) {
 /// something else was copied, or to have it as another kind of file. Nothing is done when the
 /// clipboard holds just that already. From the large window, with what is drawn on it.
 pub fn copy(id: u64, cx: &mut App) {
+    if !large::done_writing(id, cx) {
+        return;
+    }
     let settings = Perora::get(cx).settings();
     let edits = large::drawing_of(id, cx).unwrap_or_default();
     let Some(pending) = to_do(id, cx) else {

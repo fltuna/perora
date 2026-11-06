@@ -12,6 +12,7 @@ pub mod picture;
 pub mod selecting;
 pub mod tools;
 pub mod view;
+pub mod writing;
 
 pub use editor::{Capture, Editor, Event, Leave};
 pub use picture::Picture;

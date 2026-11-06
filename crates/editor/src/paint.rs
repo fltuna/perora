@@ -168,9 +168,22 @@ pub fn triangles(
     indices: &[u32],
     colour: Hsla,
 ) {
+    triangles_stretched(window, painter, at, [1.0, 1.0], corners, indices, colour);
+}
+
+/// `triangles`, stretched across and down by `stretch` from `at`.
+pub fn triangles_stretched(
+    window: &mut Window,
+    painter: &Painter,
+    at: Place,
+    stretch: [f32; 2],
+    corners: &[[f32; 2]],
+    indices: &[u32],
+    colour: Hsla,
+) {
     let corner = |index: u32| {
         let [x, y] = corners[index as usize];
-        painter.at([at[0] + x, at[1] + y])
+        painter.at([at[0] + x * stretch[0], at[1] + y * stretch[1]])
     };
     let Some(start) = indices.first() else {
         return;
@@ -324,7 +337,7 @@ pub fn marked(window: &mut Window, painter: &Painter, from: Place, to: Place) {
 }
 
 /// A line around a box of the screen, `width` logical pixels, dashed when `dashes` says how.
-fn rectangle_line(
+pub fn rectangle_line(
     window: &mut Window,
     bounds: Bounds<Pixels>,
     width: f32,

@@ -29,11 +29,13 @@ use super::bars::{
     LINE_SAMPLE, Offered, PANEL, PEN_SAMPLE, Panel, Pick, STEPS, Set, SetStep, button, recorded,
     rule, shadow,
 };
+use super::lettering::LetterSet;
 use super::{Editor, tip};
 use crate::icons;
 use crate::paint;
 use crate::tools::Kind;
 use crate::tools::pen::RED;
+use crate::writing::{EDGES, first_edge};
 
 /// How a bar or a panel comes down, and how it goes back up (`come-down`, `go-up` in style.css).
 const COMING: Duration = Duration::from_millis(220);
@@ -66,8 +68,14 @@ pub(super) struct BarLook {
 #[derive(Clone)]
 pub(super) struct PanelLook {
     panel: Panel,
-    /// Its corner in the window.
+    /// Its corner in the window (its bottom-left one when it opens upwards, `up`), and how wide it
+    /// is.
     at: Point<Pixels>,
+    up: bool,
+    wide: f32,
+    /// Of what is written: how far its line reaches out (0: none), its font.
+    edge: f32,
+    font: String,
     offered: Vec<Option<Colour>>,
     /// Of the marker (its size is shown as a marker's).
     marker: bool,
@@ -151,11 +159,16 @@ fn along(since: Instant, leaving: bool, window: &mut Window) -> f32 {
     }
 }
 
-/// What comes down (or goes up), as far as it has come.
+/// What comes down (or goes up), as far as it has come; what opens upwards comes up.
 fn coming(element: impl IntoElement, share: f32) -> gpui::Div {
+    coming_from(element, share, false)
+}
+
+fn coming_from(element: impl IntoElement, share: f32, up: bool) -> gpui::Div {
+    let from = if up { FROM_OVER } else { -FROM_OVER };
     div()
         .relative()
-        .top(px(-FROM_OVER * (1.0 - share)))
+        .top(px(from * (1.0 - share)))
         .opacity(share)
         .child(element)
 }
@@ -181,6 +194,24 @@ impl Editor {
             Panel::Stroke => (palette(), Some(self.stroke_now(false).0), RED),
             Panel::Outline => (palette(), Some(self.outline_now().0), RED),
             Panel::Stamps => (palette(), Some(self.stamps_now().0), RED),
+            Panel::LetterFill | Panel::LetterOutline | Panel::Fonts => {
+                let now = self.letters_now();
+                let offered = std::iter::once(None)
+                    .chain(
+                        PALETTE
+                            .iter()
+                            .enumerate()
+                            .filter(|(index, _)| *index != NONE_TAKES)
+                            .map(|(_, colour)| Some(*colour)),
+                    )
+                    .collect();
+                match panel {
+                    Panel::LetterOutline => {
+                        (offered, now.outline, now.outline.unwrap_or(now.color))
+                    }
+                    _ => (offered, (now.fill > 0.0).then_some(now.color), now.color),
+                }
+            }
             Panel::Fill => {
                 let (colour, fill) = self.inside_now();
                 // "None" takes the place of the darkest grey: the rows stay six wide.
@@ -215,6 +246,13 @@ impl Editor {
             (Panel::Outline, Some(colour)) => self.set_outline(Set::Colour(colour), dragged, cx),
             (Panel::Fill, colour) => self.set_inside(Set::Inside(colour), dragged, cx),
             (Panel::Stamps, Some(colour)) => self.set_stamping(Set::Colour(colour), dragged, cx),
+            (Panel::LetterFill, Some(colour)) => {
+                self.set_lettering(LetterSet::Colour(colour), dragged, cx)
+            }
+            (Panel::LetterFill, None) => self.set_lettering(LetterSet::Fill(0.0), dragged, cx),
+            (Panel::LetterOutline, outline) => {
+                self.set_lettering(LetterSet::Outline(outline), dragged, cx)
+            }
             _ => {}
         }
     }
@@ -319,10 +357,16 @@ impl Editor {
             });
             self.mixing.open = open;
             self.mixing.slid = None;
+            if panel == Some(Panel::Fonts) {
+                self.fonts_opened(window, cx);
+            }
             self.mixing.kept = None;
             self.mixing.hex_of = None;
             self.mixing.parts_of = None;
-            if self.mixing.has_keyboard(window, cx) {
+            let sought = gpui::Focusable::focus_handle(self.lettering.sought.read(cx), cx);
+            if panel != Some(Panel::Fonts)
+                && (self.mixing.has_keyboard(window, cx) || sought.is_focused(window))
+            {
                 window.focus(&self.focus, cx);
             }
         }
@@ -521,25 +565,74 @@ impl Editor {
             })
     }
 
-    fn panel_look(&self, panel: Panel) -> Option<PanelLook> {
-        let under = *self.openers.borrow().get(&panel)?;
+    fn panel_look(&self, panel: Panel, window: &Window) -> Option<PanelLook> {
+        // (What opens from the box by what is written: from the box, the way away from what is
+        // written.)
+        let opener = if panel.of_letters() {
+            Panel::Fonts
+        } else {
+            panel
+        };
+        let under = *self.openers.borrow().get(&opener)?;
         let (offered, colour, fallback) = self.colours_of(panel);
         let marker = self.marks_with_marker(panel);
         let step = match panel {
             Panel::Pen | Panel::Marker | Panel::Stroke => self.stroke_now(marker).1,
             Panel::Outline => self.outline_now().1,
             Panel::Stamps => self.stamps_now().1,
-            Panel::Fill => 0,
+            Panel::Fill | Panel::LetterFill | Panel::LetterOutline | Panel::Fonts => 0,
+        };
+        let letters = self.letters_now();
+        let (at, up, wide) = if panel.of_letters() {
+            // Away from what is written, where there is room for it that way; the other way where
+            // there is more room.
+            let needed = match panel {
+                Panel::Fonts => 340.0,
+                _ => 390.0,
+            };
+            let height = window.viewport_size().height.as_f32();
+            let above = under.top().as_f32() - 14.0;
+            let below = height - under.bottom().as_f32() - 14.0;
+            let up = if self.lettering_up() {
+                needed <= above || above >= below
+            } else {
+                !(needed <= below || below >= above)
+            };
+            let left = under.origin.x - px(1.0);
+            let at = if up {
+                point(left, under.top() - px(6.0))
+            } else {
+                point(left, under.bottom() + px(6.0))
+            };
+            (at, up, under.size.width.as_f32() + 2.0)
+        } else {
+            (
+                point(under.center().x - px(PANEL / 2.0), under.bottom() + px(8.0)),
+                false,
+                PANEL,
+            )
         };
         Some(PanelLook {
             panel,
-            at: point(under.center().x - px(PANEL / 2.0), under.bottom() + px(8.0)),
+            at,
+            up,
+            wide,
+            edge: if letters.outline.is_some() {
+                letters.edge
+            } else {
+                0.0
+            },
+            font: letters.font.clone(),
             offered,
             marker,
             colour,
             fallback,
             step,
-            fill: self.inside_now().1,
+            fill: if panel.of_letters() {
+                letters.fill
+            } else {
+                self.inside_now().1
+            },
             solid: self.solid,
         })
     }
@@ -551,7 +644,9 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let live = self.panel().and_then(|panel| self.panel_look(panel));
+        let live = self
+            .panel()
+            .and_then(|panel| self.panel_look(panel, window));
         self.motions.panel_look = live.clone();
         let (look, since, leaving) = match live {
             Some(look) => {
@@ -577,11 +672,96 @@ impl Editor {
         let share = along(since, leaving, window);
         let t = |key: &str| SharedString::from(self.language.text(key, &[]));
         let panel = look.panel;
-        let mut settings: Vec<AnyElement> = vec![
-            self.colours(&look, leaving, theme, window, cx)
-                .into_any_element(),
-        ];
+        let mut settings: Vec<AnyElement> = if panel == Panel::Fonts {
+            Vec::new()
+        } else {
+            vec![
+                self.colours(&look, leaving, theme, window, cx)
+                    .into_any_element(),
+            ]
+        };
         match panel {
+            Panel::Fonts => settings.push(
+                self.fonts_list(&look.font, leaving, theme, cx)
+                    .into_any_element(),
+            ),
+            Panel::LetterFill | Panel::LetterOutline => {
+                let fill = panel == Panel::LetterFill;
+                let on = if fill {
+                    look.fill > 0.0
+                } else {
+                    look.edge > 0.0
+                };
+                let (least, most, step, value) = if fill {
+                    (
+                        5.0,
+                        100.0,
+                        5.0,
+                        ((if on { look.fill } else { 1.0 }) * 100.0).round(),
+                    )
+                } else {
+                    let edge = if on {
+                        look.edge
+                    } else {
+                        first_edge(self.letters_now().size)
+                    };
+                    (EDGES.0, EDGES.1, 1.0, edge.round().clamp(EDGES.0, EDGES.1))
+                };
+                let shown = if fill {
+                    format!("{}%", (look.fill * 100.0).round())
+                } else if on {
+                    format!("{} px", (look.edge * 10.0).round() / 10.0)
+                } else {
+                    String::new()
+                };
+                let heading = if fill {
+                    t("editor.opacity")
+                } else {
+                    t("editor.outline.width")
+                };
+                let this = cx.entity().downgrade();
+                settings.push(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .when(!on, |setting| setting.opacity(0.4))
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(heading))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.0))
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        Slider::new(
+                                            if fill { "letter-fill" } else { "letter-edge" },
+                                            value,
+                                            least,
+                                            most,
+                                        )
+                                        .step(step)
+                                        .enabled(on)
+                                        .inert(leaving)
+                                        .on_change(
+                                            move |value, _, cx| {
+                                                let _ = this.update(cx, |this, cx| {
+                                                    let set = if fill {
+                                                        LetterSet::Fill(value / 100.0)
+                                                    } else {
+                                                        LetterSet::Edge(value)
+                                                    };
+                                                    this.set_lettering(set, true, cx)
+                                                });
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .child(div().min_w(px(44.0)).flex().justify_end().child(shown)),
+                        )
+                        .into_any_element(),
+                );
+            }
             Panel::Pen | Panel::Marker | Panel::Stroke | Panel::Outline => {
                 let marker = look.marker;
                 let (sample, set): (&'static str, SetStep) = if panel == Panel::Outline {
@@ -706,15 +886,21 @@ impl Editor {
             }
         }
         let openers = self.openers.clone();
+        let letters = panel.of_letters();
+        let opener = if letters { Panel::Fonts } else { panel };
         let content = div()
             .id("panel")
-            .w(px(PANEL))
+            .w(px(look.wide))
             .flex()
             .flex_col()
-            .gap(px(16.0))
-            .pt(px(14.0))
-            .px(px(16.0))
-            .pb(px(16.0))
+            .map(|content| {
+                if letters {
+                    // (As the box's drops are: a little room around, the colours as under the bars.)
+                    content.gap(px(10.0)).p(px(8.0))
+                } else {
+                    content.gap(px(16.0)).pt(px(14.0)).px(px(16.0)).pb(px(16.0))
+                }
+            })
             .bg(theme.surface)
             .border_1()
             .border_color(theme.border)
@@ -728,7 +914,7 @@ impl Editor {
                     .on_mouse_down_out(cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                         let on_opener = openers
                             .borrow()
-                            .get(&panel)
+                            .get(&opener)
                             .is_some_and(|bounds| bounds.contains(&event.position));
                         if !on_opener && this.asked == Some(panel) {
                             this.asked = None;
@@ -741,11 +927,16 @@ impl Editor {
             deferred(
                 anchored()
                     .position_mode(AnchoredPositionMode::Window)
+                    .anchor(if look.up {
+                        gpui::Anchor::BottomLeft
+                    } else {
+                        gpui::Anchor::TopLeft
+                    })
                     .position(look.at)
                     .snap_to_window_with_margin(px(8.0))
-                    .child(coming(content, share)),
+                    .child(coming_from(content, share, look.up)),
             )
-            .with_priority(1)
+            .with_priority(2)
             .into_any_element(),
         )
     }

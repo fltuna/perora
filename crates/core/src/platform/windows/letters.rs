@@ -16,7 +16,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL,
     DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_LINE_METRICS,
+    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_HIT_TEST_METRICS, DWRITE_LINE_METRICS,
     DWRITE_MATRIX, DWRITE_MEASURING_MODE, DWRITE_STRIKETHROUGH, DWRITE_TEXT_METRICS,
     DWRITE_UNDERLINE, DWriteCreateFactory, IDWriteFactory, IDWriteInlineObject,
     IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
@@ -30,6 +30,8 @@ use windows_numerics::Vector2;
 pub struct Line {
     pub width: f32,
     pub outlines: Vec<Vec<[f32; 2]>>,
+    /// Where a caret is before each letter (by UTF-16 unit) and after the last.
+    pub carets: Vec<f32>,
 }
 
 /// Lines laid out in one font, and how far the font reaches over and under the baseline (pixels at
@@ -132,7 +134,10 @@ unsafe fn laid(
     for line in lines {
         let text: Vec<u16> = line.encode_utf16().collect();
         if text.is_empty() {
-            laid.push(Line::default());
+            laid.push(Line {
+                carets: vec![0.0],
+                ..Line::default()
+            });
             continue;
         }
         let layout =
@@ -146,9 +151,20 @@ unsafe fn laid(
         shared.baseline.set(line_metrics[0].baseline);
         shared.outlines.borrow_mut().clear();
         unsafe { layout.Draw(None, &renderer, 0.0, 0.0)? };
+        let carets = (0..=text.len() as u32)
+            .map(|at| {
+                let (mut x, mut y) = (0.0, 0.0);
+                let mut hit = DWRITE_HIT_TEST_METRICS::default();
+                match unsafe { layout.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit) } {
+                    Ok(()) => x,
+                    Err(_) => measured.widthIncludingTrailingWhitespace,
+                }
+            })
+            .collect();
         laid.push(Line {
             width: measured.widthIncludingTrailingWhitespace,
             outlines: std::mem::take(&mut *shared.outlines.borrow_mut()),
+            carets,
         });
     }
     Ok(Laid {
@@ -397,6 +413,10 @@ mod tests {
             });
         assert!(top < -50.0 && bottom <= 1.0, "{top} {bottom}");
         assert!(laid.lines[1].outlines.is_empty() && laid.lines[1].width == 0.0);
+        // A caret before each letter and after the last, going right.
+        assert_eq!(first.carets.len(), 3);
+        assert!(first.carets[0] == 0.0 && first.carets[1] > 0.0 && first.carets[2] > first.carets[1]);
+        assert_eq!(laid.lines[1].carets, vec![0.0]);
         // A letter the font has not is had from another.
         assert!(!laid.lines[2].outlines.is_empty());
     }

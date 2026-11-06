@@ -32,6 +32,10 @@ pub struct Line {
     pub width: f32,
     pub corners: Vec<[f32; 2]>,
     pub indices: Vec<u32>,
+    /// The letters' outlines themselves (for what is made of them: a line around them).
+    pub outlines: Vec<Vec<[f32; 2]>>,
+    /// Where a caret is before each letter (by UTF-16 unit) and after the last.
+    pub carets: Vec<f32>,
 }
 
 /// Lines of letters in one font, and how far the font reaches over and under the baseline.
@@ -109,6 +113,8 @@ fn make(lines: &[&str], families: &[&str], size: f32, bold: bool, italic: bool) 
                     width: line.width,
                     corners,
                     indices,
+                    outlines: line.outlines,
+                    carets: line.carets,
                 }
             })
             .collect(),
