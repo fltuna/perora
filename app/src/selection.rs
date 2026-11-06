@@ -10,8 +10,20 @@
 //! Where the pointer is comes from the window's own events while it is over the window's monitor (as
 //! since 0.1.7: a VR headset's pointer, as Virtual Desktop sends it, leaves the system's where the
 //! press began). Off it, a press held on into another monitor, the system is asked.
+//!
+//! The window of the monitor the pointer started on has the mode bar (`bar`), the list of windows of
+//! the window mode (`window_list`) and the keyboard. Every window draws a + where the pointer is,
+//! while it is on its monitor and not over the bar or a card of the list.
+//!
+//! While the screen is up, each window's own picture is taken in the background. Choosing a window
+//! then gives that window alone, without whatever lay in front of it; a window that gives no picture
+//! of itself is cut out of the capture of the screen instead. These pictures are taken one after the
+//! other in the first moments the screen is up, so a window whose content moves (a video, a game) is
+//! in its picture a few tenths of a second later than in the capture of the screen.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -19,17 +31,25 @@ use gpui::{
     FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, RenderImage, Styled, Subscription,
     WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas,
-    div, img, point, px, rgba, size,
+    div, fill, img, point, px, rgba, size,
 };
 use perora_core::geometry::{Point, Rect};
+use perora_core::language::Language;
 use perora_core::platform::{self, Desktop, Frame, Monitor, ScreenLayout, WindowId};
 use perora_core::selection::{Choice, Mode, Session, without_edge};
 
-use crate::{capture, hwnd};
+use crate::bar::{self, Bar};
+use crate::state::Perora;
+use crate::window_list::{self, List};
+use crate::{capture, cursor, hwnd};
 
 /// A window is shown once it has drawn the capture. One that has not by now is shown anyway: a
 /// screen that never appears is worse than one that flickers (as in the Tauri version).
 const SHOW_ANYWAY_AFTER: Duration = Duration::from_millis(600);
+
+/// The pictures of single windows kept while the screen is up, at most: front to back, until this
+/// many bytes are used. The rest are cut out of the capture of the screen.
+const WINDOW_PICTURES_BUDGET: usize = 512 * 1024 * 1024;
 
 /// What was taken at the press of the shortcut, for the selection screen.
 pub struct Taken {
@@ -40,6 +60,9 @@ pub struct Taken {
     pub pointer: Point,
     /// Each monitor's part of the still, ready to be drawn; `None` for one that could not be cut.
     pub parts: Vec<Option<Arc<RenderImage>>>,
+    /// Perora's own among the windows (left in the picture): hidden by now, so what the capture has
+    /// of them is all there is.
+    pub own: Vec<WindowId>,
 }
 
 /// What every monitor's window shares.
@@ -47,6 +70,22 @@ pub struct Selection {
     pub id: u64,
     session: Session,
     still: Arc<Frame>,
+    /// The monitor the pointer was on at the start: where the mode bar is, and the keyboard.
+    home: usize,
+    bar: Bar,
+    list: List,
+    /// The pictures of single windows taken so far.
+    pictures: Arc<Mutex<HashMap<WindowId, Arc<Frame>>>>,
+    /// Cleared as the screen comes down: what is still being made for it stops.
+    up: Arc<AtomicBool>,
+    /// Whether a + is drawn where the pointer is (and the system's pointer is not).
+    crosshair: bool,
+    /// Where the pointer was last seen, on the virtual screen (physical pixels).
+    pointer: Point,
+    /// Whether the button went down on the screen and has not come up: until it does, what the
+    /// pointer does is the screen's, wherever it is (over the bar too).
+    pressed: bool,
+    language: Language,
     /// The windows over the monitors, as far as they opened.
     overlays: Vec<AnyWindowHandle>,
     handles: Vec<WindowId>,
@@ -64,10 +103,81 @@ impl Selection {
             Choice::Area(area) => self.still.crop(*area),
             Choice::Window(index) => {
                 let window = self.session.windows().get(*index)?;
-                self.still
-                    .crop(without_edge(window.bounds, self.session.layout()))
+                let picture = self
+                    .pictures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(&window.id)
+                    .cloned();
+                eprintln!(
+                    "selection {}: chose window {index} {:?} at {:?}: {}",
+                    self.id,
+                    window.title,
+                    window.bounds,
+                    if picture.is_some() {
+                        "its own picture"
+                    } else {
+                        "cut out of the screen"
+                    }
+                );
+                let bounds = without_edge(window.bounds, self.session.layout());
+                match picture {
+                    // The window alone, as it was; of it, what was on the screen, as highlighted
+                    // (its own picture also has the part that hung off the edge).
+                    Some(picture) => bounds
+                        .intersection(&self.still.area)
+                        .and_then(|seen| picture.crop(seen)),
+                    // No picture of its own (yet, or ever): what was seen of it on the screen.
+                    None => self.still.crop(bounds),
+                }
             }
         }
+    }
+
+    pub fn bar(&self) -> &Bar {
+        &self.bar
+    }
+
+    fn home_monitor(&self) -> &Monitor {
+        &self.session.layout().monitors[self.home]
+    }
+
+    /// The pointer was seen here: the bar is told, in its window's pixels.
+    fn pointer_at(&mut self, at: Point, cx: &mut Context<Self>) {
+        self.pointer = at;
+        let home = self.home_monitor();
+        let scale = home.scale as f32;
+        let viewport = size(
+            px(home.bounds.width as f32 / scale),
+            px(home.bounds.height as f32 / scale),
+        );
+        let local = home.bounds.contains(at).then(|| {
+            point(
+                px((at.x - home.bounds.x) as f32 / scale),
+                px((at.y - home.bounds.y) as f32 / scale),
+            )
+        });
+        self.bar.pointer_at(local, viewport);
+        self.bar_changed(cx);
+    }
+
+    /// Whether the bar is to stay or go now; a wait for it to go, when there is one.
+    fn bar_changed(&mut self, cx: &mut Context<Self>) {
+        let dragging = self.session.highlight().is_some_and(|highlight| highlight.dragging);
+        let Some((timer, seconds)) = self.bar.update(dragging) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs_f64(seconds))
+                .await;
+            let _ = this.update(cx, |selection, cx| {
+                if selection.bar.waited(timer) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 }
 
@@ -80,23 +190,46 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
         windows,
         pointer,
         parts,
+        own,
     } = taken;
-    // The monitor the pointer was on at the start: where the mode bar is, and the keyboard.
     let home = layout
         .monitors
         .iter()
         .position(|monitor| monitor.bounds.contains(pointer))
         .or_else(|| layout.monitors.iter().position(|monitor| monitor.primary))
         .unwrap_or(0);
+    let perora = Perora::get(cx);
+    let settings = perora.settings();
+    let language = perora.language();
     let session = Session::new(layout.clone(), windows, mode, pointer);
-    let selection = cx.new(|_| Selection {
-        id,
-        session,
-        still,
-        overlays: Vec::new(),
-        handles: Vec::new(),
-        finished: false,
-        asked,
+    let on_home = &layout.monitors[home];
+    let home_scale = on_home.scale as f32;
+    let list = List::new(
+        session.windows(),
+        on_home.bounds.width as f32 / home_scale,
+        on_home.bounds.height as f32 / home_scale,
+    );
+    let selection = cx.new(|cx| {
+        let mut selection = Selection {
+            id,
+            session,
+            still,
+            home,
+            bar: Bar::new(settings.bar_hide_seconds, settings.bar_reveal_area),
+            list,
+            pictures: Arc::default(),
+            up: Arc::new(AtomicBool::new(true)),
+            crosshair: settings.show_crosshair,
+            pointer,
+            pressed: false,
+            language,
+            overlays: Vec::new(),
+            handles: Vec::new(),
+            finished: false,
+            asked,
+        };
+        selection.pointer_at(pointer, cx);
+        selection
     });
 
     let displays = cx.displays();
@@ -167,9 +300,11 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
         }
     }
     if selection.read(cx).overlays.is_empty() {
+        selection.update(cx, |selection, _| selection.up.store(false, Ordering::Release));
         return None;
     }
     cx.activate(true);
+    take_window_pictures(&selection, own, home_scale, cx);
 
     let shown_anyway = selection.downgrade();
     cx.spawn(async move |cx| {
@@ -191,6 +326,7 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
 pub fn put_away(selection: &Entity<Selection>, cx: &mut App) {
     selection.update(cx, |selection, _| {
         selection.finished = true;
+        selection.up.store(false, Ordering::Release);
         for &handle in &selection.handles {
             hwnd::hide(handle);
         }
@@ -200,9 +336,12 @@ pub fn put_away(selection: &Entity<Selection>, cx: &mut App) {
 pub fn close(selection: &Entity<Selection>, cx: &mut App) {
     let overlays = selection.update(cx, |selection, _| {
         selection.finished = true;
+        selection.up.store(false, Ordering::Release);
         selection.handles.clear();
         std::mem::take(&mut selection.overlays)
     });
+    // (The system's pointer is back for whatever is under it now.)
+    cursor::set_hidden(false);
     for overlay in overlays {
         let _ = overlay.update(cx, |_, window, _| window.remove_window());
     }
@@ -232,11 +371,12 @@ pub fn finish(selection: &Entity<Selection>, choice: Option<Choice>, cx: &mut Ap
     }
 }
 
-fn set_mode(selection: &Entity<Selection>, mode: Mode, cx: &mut App) {
+pub fn set_mode(selection: &Entity<Selection>, mode: Mode, cx: &mut App) {
     let choice = selection.update(cx, |selection, cx| {
         if selection.finished {
             return None;
         }
+        selection.pressed = false;
         if let Some(choice) = selection.session.set_mode(mode) {
             return Some(choice);
         }
@@ -244,6 +384,8 @@ fn set_mode(selection: &Entity<Selection>, mode: Mode, cx: &mut App) {
         if let Ok(pointer) = platform::desktop().pointer() {
             selection.session.pointer_moved(pointer);
         }
+        selection.bar.mode_changed();
+        selection.bar_changed(cx);
         cx.notify();
         None
     });
@@ -274,8 +416,6 @@ struct Overlay {
 
 /// The shade over what would not be taken.
 const SHADE: u32 = 0x0000_0073; // rgb(0 0 0 / 45%)
-/// The frame around what would be.
-const CHOSEN: u32 = 0x4f8c_ffff;
 
 impl Overlay {
     fn new(
@@ -321,25 +461,46 @@ impl Overlay {
         }
     }
 
+    /// Whether this is over the bar, which keeps what happens on it to itself.
+    fn over_bar(&self, position: gpui::Point<Pixels>, cx: &App) -> bool {
+        self.home
+            && self
+                .selection
+                .read(cx)
+                .bar
+                .drawn
+                .get()
+                .is_some_and(|drawn| drawn.seen.contains(&position))
+    }
+
     fn press(&mut self, press: Press, position: gpui::Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
         let at = self.screen_at(position, window);
+        let over_bar = self.over_bar(position, cx);
         let choice = self.selection.update(cx, |selection, cx| {
             if selection.finished {
                 return None;
             }
-            let before = selection.session.highlight();
+            // (What happens on the bar is the bar's, unless it is a press of the screen held on.)
+            let screens = selection.pressed || !over_bar;
             let choice = match press {
-                Press::Down => {
+                Press::Down if screens => {
+                    selection.pressed = true;
                     selection.session.pointer_down(at);
                     None
                 }
-                Press::Moved => {
+                Press::Moved if screens => {
                     selection.session.pointer_moved(at);
                     None
                 }
-                Press::Up => selection.session.pointer_up(at),
+                Press::Up if selection.pressed => {
+                    selection.pressed = false;
+                    selection.session.pointer_up(at)
+                }
+                _ => None,
             };
-            if choice.is_none() && selection.session.highlight() != before {
+            if choice.is_none() {
+                selection.pointer_at(at, cx);
+                // (Every move: the + follows the pointer.)
                 cx.notify();
             }
             choice
@@ -391,6 +552,7 @@ impl Render for Overlay {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let scale = window.scale_factor();
         let viewport = window.viewport_size();
+        let entity = self.selection.clone();
         let selection = self.selection.read(cx);
         let highlight = selection.session.highlight();
         let mode = selection.session.mode();
@@ -481,7 +643,7 @@ impl Render for Overlay {
                         .h(area.size.height + px(2.0))
                         .border_2()
                 };
-                root = root.child(frame.border_color(rgba(CHOSEN)));
+                root = root.child(frame.border_color(rgba(bar::CURRENT)));
                 // Its size while it is dragged out, in pixels of the screen, under its left corner.
                 if highlight.dragging {
                     root = root.child(
@@ -502,6 +664,62 @@ impl Render for Overlay {
             }
             None => root = root.child(div().absolute().size_full().bg(shade)),
         }
+
+        if self.home {
+            let windows = selection.session.windows();
+            let listed = mode == Mode::Window;
+            if selection.bar.sliding() || (listed && selection.list.moving(windows.len())) {
+                window.request_animation_frame();
+            }
+            if listed {
+                let accent = perora_ui::Theme::get(cx).accent;
+                root = root.child(window_list::element(
+                    &selection.list,
+                    windows,
+                    &entity,
+                    &selection.language,
+                    accent,
+                ));
+            }
+            root = root.child(bar::element(selection, &entity, mode, &selection.language));
+        }
+
+        // The + over everything, where the pointer is on this monitor: not over the bar, where the
+        // system's pointer is shown. The window the pointer is over says whether the system's is.
+        let here = self
+            .on
+            .bounds
+            .contains(selection.pointer)
+            .then(|| self.local(Rect::new(selection.pointer.x, selection.pointer.y, 1, 1), scale).origin);
+        let crosshair = selection.crosshair;
+        let drawn = self.home.then(|| selection.bar.drawn.clone());
+        let cards = (self.home && mode == Mode::Window)
+            .then(|| (selection.list.room.clone(), selection.list.cards.clone()));
+        root = root.child(
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    let Some(at) = here else {
+                        return;
+                    };
+                    let over_bar = drawn
+                        .as_ref()
+                        .and_then(|drawn| drawn.get())
+                        .is_some_and(|drawn| drawn.seen.contains(&at));
+                    let over_card = cards.as_ref().is_some_and(|(room, cards)| {
+                        room.get().is_some_and(|room| room.contains(&at))
+                            && cards.borrow().iter().flatten().any(|card| card.contains(&at))
+                    });
+                    let over_own = over_bar || over_card;
+                    cursor::set_hidden(crosshair && !over_own);
+                    if crosshair && !over_own {
+                        paint_crosshair(at, window);
+                    }
+                },
+            )
+            .absolute()
+            .size_full(),
+        );
 
         // Every mouse event of this window, over whatever it is: while the button is held, the
         // window that took the press goes on getting them, also off its monitor.
@@ -540,6 +758,141 @@ impl Render for Overlay {
             .size_full(),
         )
     }
+}
+
+/// Takes the picture of each window, front to back, while the selection screen is up, until the
+/// budget is used. Beside it, the small picture of every window is made for the list of them, at
+/// the size of its place there. Both stop when the screen is gone. Perora's own (`own`) are hidden by
+/// then: of those, what the capture has of them is all there is.
+fn take_window_pictures(selection: &Entity<Selection>, own: Vec<WindowId>, scale: f32, cx: &mut App) {
+    let (id, still, windows, sizes, pictures, up) = {
+        let selection = selection.read(cx);
+        let windows: Vec<(WindowId, Rect)> = selection
+            .session
+            .windows()
+            .iter()
+            .map(|window| (window.id, window.bounds))
+            .collect();
+        (
+            selection.id,
+            selection.still.clone(),
+            windows,
+            selection.list.sizes(selection.session.windows(), scale),
+            selection.pictures.clone(),
+            selection.up.clone(),
+        )
+    };
+    let started = Instant::now();
+
+    // The small pictures, on a thread of their own as the pictures come: those are what a choice
+    // needs, and they are not to wait for these. Of every window: of its own picture, or when it
+    // gave none, of what is seen of it on the screen.
+    let (made, to_make) = std::sync::mpsc::channel::<(usize, Rect, Option<Arc<Frame>>)>();
+    let (ready, arrived) = async_channel::unbounded::<(usize, Arc<RenderImage>)>();
+    std::thread::spawn({
+        let up = up.clone();
+        move || {
+            for (index, bounds, picture) in to_make {
+                if !up.load(Ordering::Acquire) {
+                    return;
+                }
+                let (width, height) = sizes[index];
+                let small = match picture {
+                    Some(picture) => Some(picture.scaled_to_fit(width, height)),
+                    None => still
+                        .crop(bounds)
+                        .map(|seen| seen.scaled_to_fit(width, height)),
+                };
+                if let Some(small) = small.and_then(drawable)
+                    && ready.send_blocking((index, small)).is_err()
+                {
+                    return;
+                }
+            }
+            eprintln!(
+                "selection {id}: the list of windows ready after {:.0?}",
+                started.elapsed()
+            );
+        }
+    });
+
+    std::thread::spawn(move || {
+        let desktop = platform::desktop();
+        let (mut used, mut taken) = (0usize, 0usize);
+        for (index, &(window, bounds)) in windows.iter().enumerate() {
+            if !up.load(Ordering::Acquire) {
+                return;
+            }
+            // Out of room: the rest are cut out of the capture of the screen.
+            let picture = if used > WINDOW_PICTURES_BUDGET || own.contains(&window) {
+                None
+            } else {
+                match desktop.capture_window(window) {
+                    Ok(picture) => {
+                        used += picture.rgba.len();
+                        (used <= WINDOW_PICTURES_BUDGET).then(|| Arc::new(picture))
+                    }
+                    Err(error) => {
+                        eprintln!("selection {id}: no picture of window {window:?}: {error}");
+                        None
+                    }
+                }
+            };
+            if let Some(picture) = &picture {
+                pictures
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(window, picture.clone());
+                taken += 1;
+            }
+            // The other thread is gone only when the screen is.
+            if made.send((index, bounds, picture)).is_err() {
+                return;
+            }
+        }
+        eprintln!(
+            "selection {id}: pictures of {taken} of {} windows in {:.0?}",
+            windows.len(),
+            started.elapsed()
+        );
+    });
+
+    let list = selection.downgrade();
+    cx.spawn(async move |cx| {
+        while let Ok((index, picture)) = arrived.recv().await {
+            let shown = list.update(cx, |selection, cx| {
+                selection.list.pictures.insert(index, (picture, Instant::now()));
+                cx.notify();
+            });
+            if shown.is_err() {
+                return;
+            }
+        }
+        let _ = list.update(cx, |selection, cx| {
+            selection.list.all_made = true;
+            cx.notify();
+        });
+    })
+    .detach();
+}
+
+/// A + on the pointer's pixel (`at`, its corner): two lines 31 px long that cross on it, white in a
+/// black edge, seen on anything. A whole +, the pixel included (owner, 2026-11-02: 「真ん中開けずに
+/// ちゃんとした + であってほしい」).
+fn paint_crosshair(at: gpui::Point<Pixels>, window: &mut Window) {
+    const ARM: f32 = 15.0;
+    let black: Hsla = gpui::black().opacity(0.7);
+    let white: Hsla = gpui::white();
+    let line = |x: f32, y: f32, width: f32, height: f32| {
+        Bounds::new(point(at.x + px(x), at.y + px(y)), size(px(width), px(height)))
+    };
+    // The edge: down, then across without the part where they cross (it is drawn once, not
+    // darker).
+    window.paint_quad(fill(line(-1.0, -ARM, 3.0, 2.0 * ARM + 1.0), black));
+    window.paint_quad(fill(line(-ARM, -1.0, ARM - 1.0, 3.0), black));
+    window.paint_quad(fill(line(2.0, -1.0, ARM - 1.0, 3.0), black));
+    window.paint_quad(fill(line(0.0, -ARM, 1.0, 2.0 * ARM + 1.0), white));
+    window.paint_quad(fill(line(-ARM, 0.0, 2.0 * ARM + 1.0, 1.0), white));
 }
 
 /// A monitor's part of the still, as GPUI draws pictures: blue first.

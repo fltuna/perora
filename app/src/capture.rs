@@ -135,6 +135,7 @@ fn take(own: &[WindowId], parts: bool) -> Result<Taken, String> {
         windows,
         pointer,
         parts,
+        own: own.to_vec(),
     })
 }
 

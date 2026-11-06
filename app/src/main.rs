@@ -2,12 +2,15 @@
 //!
 //! P1: the settings and the language, the icon in the notification area, the shortcut, one Perora at
 //! a time (later starts hand their arguments over), and the GPU let go of while no window is open.
-//! P2 so far: the selection screen, and what is chosen on the clipboard.
+//! P2 so far: the selection screen (its mode bar, its +, the list of windows), and what is chosen
+//! on the clipboard.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod arguments;
+mod bar;
 mod capture;
+mod cursor;
 mod gpu;
 mod hwnd;
 mod instance;
@@ -16,6 +19,7 @@ mod selection;
 mod shortcut;
 mod state;
 mod tray;
+mod window_list;
 
 use std::path::Path;
 
