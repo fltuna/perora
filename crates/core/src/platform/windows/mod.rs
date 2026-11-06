@@ -11,6 +11,7 @@ pub mod explorer;
 pub mod fonts;
 pub mod hotkeys;
 pub mod imaging;
+pub mod keys;
 pub mod letters;
 pub mod secrets;
 pub mod sound;

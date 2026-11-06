@@ -11,8 +11,6 @@ use perora_core::settings::DEFAULT_SHORTCUT;
 /// Whether a key combination may be a global shortcut: one that typing does not need. A letter, a
 /// digit or any other key of the main block needs Ctrl, Alt or the Windows key with it (with Shift
 /// alone it is a capital letter); function keys and PrintScreen may stand alone.
-// (For the settings page, P5: there a combination is checked as it is chosen.)
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_a_shortcut(combination: &str) -> bool {
     let mut keys: Vec<&str> = combination.split('+').collect();
     let Some(key) = keys.pop() else {
@@ -52,6 +50,9 @@ pub struct Shortcuts {
     own: Option<HotKey>,
     /// The system's combination for snipping, while it is Perora's.
     snipping: Option<HotKey>,
+    /// The user's own combination is let go of for the moment, on purpose: another is being
+    /// recorded on the settings page, and pressing the old one is an answer there, not a capture.
+    suspended: bool,
 }
 
 /// Which shortcuts are Perora's, after `Shortcuts::claim`.
@@ -89,6 +90,7 @@ impl Shortcuts {
             manager,
             own: None,
             snipping: None,
+            suspended: false,
         })
     }
 
@@ -123,6 +125,11 @@ impl Shortcuts {
             if let Some(key) = self.own.take() {
                 let _ = self.manager.unregister(key);
             }
+        } else if self.suspended && !(same && self.snipping.is_some()) {
+            // (Let go of while another is recorded: whatever ends that asks for it again.)
+            if let Some(key) = self.own.take() {
+                let _ = self.manager.unregister(key);
+            }
         } else if self.own.map(|key| key.id()) != own_key.map(|key| key.id()) {
             if let Some(key) = self.own.take() {
                 let _ = self.manager.unregister(key);
@@ -138,6 +145,35 @@ impl Shortcuts {
         Claimed {
             own: self.own.is_some(),
             snipping: self.snipping.is_some(),
+        }
+    }
+
+    /// Lets go of the user's own combination for the moment (`suspended`: another is being
+    /// recorded), or asks for it again; as `claim` otherwise.
+    pub fn suspend(&mut self, suspended: bool, own: &str, wanted: bool) -> Claimed {
+        self.suspended = suspended;
+        self.claim(own, wanted)
+    }
+
+    /// Makes `new` the user's own combination in place of `old`: refused (`Err`) when the system
+    /// would not give it (another application has it), and `old` is asked for again then. Either
+    /// way, which shortcuts are Perora's afterwards.
+    pub fn change(&mut self, new: &str, old: &str, wanted: bool) -> Result<Claimed, Claimed> {
+        // The one before goes first: the new one may be the same combination.
+        let suspended = std::mem::replace(&mut self.suspended, true);
+        self.claim(old, wanted);
+        let given = HotKey::from_str(new).ok().filter(|key| {
+            // (One Perora has already, as the system's that it took, is the user's own as well.)
+            self.snipping.map(|snipping| snipping.id()) == Some(key.id())
+                || self.manager.register(*key).is_ok()
+        });
+        self.suspended = suspended;
+        match given {
+            Some(key) => {
+                self.own = Some(key);
+                Ok(self.claim(new, wanted))
+            }
+            None => Err(self.claim(old, wanted)),
         }
     }
 

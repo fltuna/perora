@@ -42,6 +42,17 @@ impl Tray {
         })
     }
 
+    /// Says it all again: in another language, or with the shortcut that captures now
+    /// (`registered`: as shown, or `None` when another application has it).
+    pub fn relabel(&self, language: &Language, registered: Option<&str>, shortcut: &str) {
+        self.capture.set_text(language.capture(registered));
+        self.open.set_text(language.open());
+        self.quit.set_text(language.quit());
+        let _ = self
+            ._icon
+            .set_tooltip(Some(tooltip(language, registered, shortcut)));
+    }
+
     /// Sends what the menu and the icon are asked for. They call back outside GPUI's updates, so
     /// they only send; the application acts on it in its own time.
     pub fn listen(&self, sender: async_channel::Sender<Signal>) {

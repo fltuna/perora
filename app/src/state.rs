@@ -19,6 +19,8 @@ pub struct Perora {
     /// what it was told by then. (When it was told otherwise since, it has to start anew before
     /// things are as the user chose.)
     pub shell_left_alone: bool,
+    /// The shell is being started anew, as the settings asked: it is not asked to again meanwhile.
+    pub shell_restarting: bool,
 }
 
 impl Global for Perora {}
@@ -36,6 +38,7 @@ impl Perora {
             languages: Languages::load(user_directory().as_deref()),
             claimed: Default::default(),
             shell_left_alone: false,
+            shell_restarting: false,
         }
     }
 
@@ -68,5 +71,21 @@ impl Perora {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Changes the settings: at once for the running application, and in the file for the next run
+    /// (with whatever else the file holds kept as it is). Without a file to write, only for this
+    /// run. What is changed is the settings as they are when this is called, not a copy taken
+    /// earlier: two changes made one after the other both count.
+    pub fn change(&self, change: impl FnOnce(&mut Settings)) {
+        match &self.settings_path {
+            Some(path) => settings::update(path, &self.settings, change),
+            None => change(
+                &mut self
+                    .settings
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            ),
+        }
     }
 }

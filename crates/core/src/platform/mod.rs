@@ -347,6 +347,21 @@ pub fn letter_held() -> Option<char> {
     windows::desktop::letter_held()
 }
 
+/// The key a shortcut could end in that is held as the key press being handled was made, by the
+/// name a shortcut is written with (`H`, `F5`, `ArrowUp`, `Numpad1`, `Backquote`); `None` when none
+/// is. By where the key is, not by what it writes (with Shift, `1` writes `!`).
+#[cfg(windows)]
+pub fn held_key() -> Option<&'static str> {
+    windows::keys::held_key()
+}
+
+/// Which of Ctrl, Alt, Shift and the Windows key are held as the key press being handled was made,
+/// in that order.
+#[cfg(windows)]
+pub fn held_modifiers() -> [bool; 4] {
+    windows::keys::held_modifiers()
+}
+
 /// Whether the user has the system animate what is in its windows; without that, nothing of
 /// Perora's moves into its place either.
 #[cfg(windows)]
