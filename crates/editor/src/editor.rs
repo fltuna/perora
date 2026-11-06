@@ -217,7 +217,8 @@ impl Editor {
         let mixing = Mixing::new(cx);
         let lettering = lettering::Lettering::new(cx);
         // (The font written in last, the last time Perora ran.)
-        let font = perora_core::editor_settings::EditorSettings::load().font;
+        let font =
+            crate::writing::family(&perora_core::editor_settings::EditorSettings::load().font);
         Self {
             capture: None,
             drawing: Drawing::default(),
@@ -579,7 +580,10 @@ impl Editor {
             && event.click_count == 2
             && !event.modifiers.control
             && let Some(index) = text_at()
+            && self.chosen() == Some(index)
         {
+            self.by_button = None;
+            self.hold(Kind::Text, cx);
             self.rewrite(index, cx);
             return;
         }
@@ -997,7 +1001,7 @@ impl Editor {
     }
 
     fn undo(&mut self, cx: &mut Context<Self>) {
-        if self.gesture.is_none() && !self.frozen && self.drawing.undo() {
+        if self.gesture.is_none() && !self.frozen && self.typing.is_none() && self.drawing.undo() {
             self.full = false;
             self.just_drawn = false;
             self.selected.clear();
@@ -1007,7 +1011,7 @@ impl Editor {
     }
 
     fn redo(&mut self, cx: &mut Context<Self>) {
-        if self.gesture.is_none() && !self.frozen && self.drawing.redo() {
+        if self.gesture.is_none() && !self.frozen && self.typing.is_none() && self.drawing.redo() {
             self.just_drawn = false;
             self.selected.clear();
             self.pointing = None;
@@ -1190,8 +1194,10 @@ impl Editor {
             }
             return;
         }
-        // While a button is held, no key does anything but Esc: nothing leaves half drawn.
+        // While a button is held, no key does anything but Esc: nothing leaves half drawn (nor is
+        // a letter typed into what is being written).
         if self.gesture.is_some() {
+            cx.stop_propagation();
             return;
         }
         if modifiers.control && !modifiers.alt && !modifiers.platform {
@@ -1461,7 +1467,7 @@ impl Editor {
                 )),
         );
         bar = bar.child(crop);
-        let typing = false;
+        let typing = self.typing.is_some();
         let (can_undo, can_redo) = (
             self.drawing.can_undo() && !typing,
             self.drawing.can_redo() && !typing,

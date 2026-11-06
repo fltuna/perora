@@ -20,7 +20,10 @@ use gpui::{
 };
 use perora_core::edit::{Edit, Place};
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use super::Editor;
+use super::bars::Panel;
 use crate::paint::{self, Painter};
 use crate::writing::{self, Writing, laid_out, written};
 
@@ -63,6 +66,8 @@ pub(super) struct Typing {
     pub carrying: Option<(Point<Pixels>, Place, bool)>,
     /// The pointer is selecting letters in the field.
     pub selecting: bool,
+    /// Where the letters typed one after another end: one more there is the same step to undo.
+    run_end: Option<usize>,
 }
 
 impl Typing {
@@ -80,6 +85,7 @@ impl Typing {
             future: Vec::new(),
             carrying: None,
             selecting: false,
+            run_end: None,
         }
     }
 
@@ -107,6 +113,23 @@ impl Typing {
         self.selected = end..end;
         self.reversed = false;
         self.marked = None;
+        self.run_end = None;
+    }
+
+    /// Letters typed (or put together by the system's input, `composed`): with the letters typed
+    /// just before them, and with what they were put together from, one step to undo (as a field
+    /// of the browser had it).
+    fn type_in(&mut self, range: Range<usize>, with: &str, composed: bool) {
+        let goes_on = composed || (range.is_empty() && self.run_end == Some(range.start));
+        if !goes_on {
+            self.remember();
+        }
+        self.text.replace_range(range.clone(), with);
+        let end = range.start + with.len();
+        self.selected = end..end;
+        self.reversed = false;
+        self.marked = None;
+        self.run_end = Some(end);
     }
 
     fn move_to(&mut self, at: usize, extend: bool) {
@@ -131,16 +154,16 @@ impl Typing {
 
     fn before(&self, at: usize) -> usize {
         self.text[..at]
-            .char_indices()
+            .grapheme_indices(true)
             .next_back()
             .map_or(0, |(index, _)| index)
     }
 
     fn after(&self, at: usize) -> usize {
         self.text[at..]
-            .chars()
+            .graphemes(true)
             .next()
-            .map_or(at, |letter| at + letter.len_utf8())
+            .map_or(at, |letter| at + letter.len())
     }
 
     /// The line a byte is on, and where that line begins.
@@ -263,6 +286,7 @@ impl Editor {
         }
         let new = typing.index.is_none();
         self.typing = None;
+        self.letters_put_away();
         if next.as_slice() != self.drawing.edits() {
             self.change(next, cx);
             self.just_drawn = new;
@@ -274,7 +298,16 @@ impl Editor {
     /// What is being written is given up: what was written before stays as it was.
     pub(super) fn give_up_typing(&mut self, cx: &mut Context<Self>) {
         if self.typing.take().is_some() {
+            self.letters_put_away();
             cx.notify();
+        }
+    }
+
+    /// What opens from the box by what is written is put away with it (opened again, the box
+    /// starts with none open, as the Tauri version's did).
+    fn letters_put_away(&mut self) {
+        if self.asked.is_some_and(Panel::of_letters) {
+            self.asked = None;
         }
     }
 
@@ -387,6 +420,7 @@ impl Editor {
             if matches!(key, "delete" | "backspace") && alone && !modifiers.shift {
                 let index = typing.index;
                 self.typing = None;
+                self.letters_put_away();
                 if let Some(index) = index {
                     let edits = self
                         .drawing
@@ -520,6 +554,7 @@ impl Editor {
                     typing.text = text;
                     typing.selected = selected;
                     typing.reversed = false;
+                    typing.run_end = None;
                     cx.notify();
                 }
                 Keyed::Taken
@@ -788,7 +823,8 @@ impl EntityInputHandler for Editor {
             .unwrap_or(typing.selected.clone());
         // (Lines are broken by Shift+Enter: what comes in has no breaks of its own.)
         let text = text.replace(['\r', '\n'], "");
-        typing.replace(range, &text);
+        let composed = typing.marked.is_some();
+        typing.type_in(range, &text, composed);
         typing.held = false;
         window.invalidate_character_coordinates();
         cx.notify();

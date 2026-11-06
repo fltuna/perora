@@ -3809,6 +3809,7 @@ dependencies = [
  "lyon",
  "perora-core",
  "perora-ui",
+ "unicode-segmentation",
 ]
 
 [[package]]

@@ -139,7 +139,8 @@ pub fn families(font: &str) -> Vec<&str> {
 pub fn family(font: &str) -> String {
     font.chars()
         .filter(|letter| {
-            !matches!(letter, '"' | '\'' | ';' | '\\' | '{' | '}') && !letter.is_control()
+            !matches!(letter, '"' | '\'' | ';' | '\\' | '{' | '}' | '<' | '>')
+                && !letter.is_control()
         })
         .take(LONGEST_FONT)
         .collect::<String>()
