@@ -53,11 +53,24 @@ pub enum Event {
 
 /// What the pointer is doing with a button held.
 enum Gesture {
-    /// The tool in hand is drawing.
+    /// The tool in hand is drawing (with the left button).
     Draw,
-    /// The picture is held and moved: the place that was in the middle when it was taken hold of,
-    /// and where the pointer was (logical pixels in the place).
-    Pan { from: (f32, f32), was: Place },
+    /// The picture is held and moved, with that button: the place that was in the middle when it
+    /// was taken hold of, and where the pointer was (logical pixels in the place).
+    Pan {
+        from: (f32, f32),
+        was: Place,
+        button: MouseButton,
+    },
+}
+
+impl Gesture {
+    fn button(&self) -> MouseButton {
+        match self {
+            Gesture::Draw => MouseButton::Left,
+            Gesture::Pan { button, .. } => *button,
+        }
+    }
 }
 
 pub struct Editor {
@@ -97,7 +110,16 @@ impl Focusable for Editor {
 }
 
 impl Editor {
-    pub fn new(language: Language, cx: &mut Context<Self>) -> Self {
+    pub fn new(language: Language, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // The window left with Space held: the pointer is the tool's again (its letting go is
+        // another window's to hear).
+        cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() && this.grabbing {
+                this.grabbing = false;
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             capture: None,
             drawing: Drawing::default(),
@@ -159,10 +181,12 @@ impl Editor {
         cx.notify();
     }
 
-    /// Before the capture leaves: what is under way is done or given up. (P4 later: the text being
-    /// written is written, the frame being cut to is cut to.)
+    /// Before the capture leaves, or the window is put out of the way: what is under way is done or
+    /// given up, and a Space held is let go. (P4 later: the text being written is written, the
+    /// frame being cut to is cut to.)
     pub fn settle(&mut self, cx: &mut Context<Self>) {
         self.give_up_gesture();
+        self.grabbing = false;
         cx.notify();
     }
 
@@ -245,6 +269,7 @@ impl Editor {
             self.gesture = Some(Gesture::Pan {
                 from: Self::local(stage, event.position),
                 was: look.middle,
+                button: event.button,
             });
             cx.notify();
             return;
@@ -269,13 +294,37 @@ impl Editor {
     }
 
     fn moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // The button was let go where the window did not hear it (another window took the mouse):
+        // what it was doing ends there.
+        if self.gesture.is_some() && event.pressed_button.is_none() {
+            self.finish(event.position, event.modifiers, window, cx);
+            return;
+        }
         match &self.gesture {
             None => {}
-            Some(Gesture::Pan { from, was }) => {
-                let (from, was) = (*from, *was);
-                if let Some((stage, look)) = self.look(window) {
+            Some(Gesture::Pan { from, was, button }) => {
+                let (from, was, button) = (*from, *was, *button);
+                if let (Some((stage, look)), Some(view)) = (self.look(window), self.view()) {
                     let to = Self::local(stage, event.position);
-                    self.looking = view::moved(self.looking, was, from, to, look.scale);
+                    let moved = view::moved(self.looking, was, from, to, look.scale);
+                    // As far as its middle can go, and held there: back from past that, it comes
+                    // along at once, not once the pointer is back where it stopped.
+                    let asked = moved.middle.unwrap_or(look.middle);
+                    let middle = [
+                        asked[0].clamp(view.x, view.right()),
+                        asked[1].clamp(view.y, view.bottom()),
+                    ];
+                    if middle != asked {
+                        self.gesture = Some(Gesture::Pan {
+                            from: to,
+                            was: middle,
+                            button,
+                        });
+                    }
+                    self.looking = Looking {
+                        times: look.times,
+                        middle: Some(middle),
+                    };
                     cx.notify();
                 }
             }
@@ -291,11 +340,29 @@ impl Editor {
     }
 
     fn up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // (Only the button it began with ends it: another one let go is nothing to it.)
+        if self
+            .gesture
+            .as_ref()
+            .is_some_and(|gesture| gesture.button() == event.button)
+        {
+            self.finish(event.position, event.modifiers, window, cx);
+        }
+    }
+
+    /// The button the gesture began with is let go there: what was drawn is kept.
+    fn finish(
+        &mut self,
+        position: Point<Pixels>,
+        modifiers: Modifiers,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match self.gesture.take() {
             None => {}
             Some(Gesture::Pan { .. }) => cx.notify(),
             Some(Gesture::Draw) => {
-                let press = self.press(event.position, event.modifiers, window);
+                let press = self.press(position, modifiers, window);
                 let drawn = match (press, self.tool_mut()) {
                     (Some(press), Some(tool)) => tool.end(&press),
                     (None, Some(tool)) => {

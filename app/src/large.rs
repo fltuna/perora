@@ -18,8 +18,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, CursorStyle, Entity, Focusable, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px,
-    size,
+    Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
+    div, px, size,
 };
 use perora_core::edit::Edit;
 use perora_core::language::Language;
@@ -128,12 +128,12 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
             false
         });
         let editor = cx.new(|cx| {
-            let mut editor = Editor::new(language.clone(), cx);
+            let mut editor = Editor::new(language.clone(), window, cx);
             editor.show(capture, cx);
             editor
         });
-        let actions = cx.new(|cx| Actions::new(language.clone(), editor.clone(), cx));
-        let status = cx.new(|cx| Status::new(language.clone(), editor.clone(), cx));
+        let actions = cx.new(|cx| Actions::new(language.clone(), &editor, cx));
+        let status = cx.new(|cx| Status::new(language.clone(), &editor, cx));
         editor.update(cx, |editor, _| {
             editor.top_right = Some(actions.into());
             editor.below = Some(status.into());
@@ -186,11 +186,17 @@ pub fn close(cx: &mut App) {
 /// Out of the way of a capture: out of sight at once (cloaked, then hidden, so that the system's
 /// fade is not in the picture), and back with `show`. Whether it was on screen.
 pub fn hide(cx: &mut App) -> bool {
-    let Some(window) = cx.default_global::<Large>().window else {
+    let large = cx.default_global::<Large>();
+    large.showing += 1;
+    let Some(window) = large.window else {
         return false;
     };
     let handle = window
-        .update(cx, |_, window, _| hwnd::of(window))
+        .update(cx, |editor, window, cx| {
+            // (Its button let go while it is hidden, nobody would hear it.)
+            editor.settle(cx);
+            hwnd::of(window)
+        })
         .ok()
         .flatten();
     let Some(handle) = handle.filter(|&handle| hwnd::on_screen(handle)) else {
@@ -303,17 +309,18 @@ fn icon(glyph: &'static str, size: f32) -> gpui::Div {
 /// not on offer (P5).
 struct Actions {
     language: Language,
-    editor: Entity<Editor>,
+    /// (Weakly: the editor holds this view.)
+    editor: WeakEntity<Editor>,
     clipboard: Option<u32>,
 }
 
 impl Actions {
-    fn new(language: Language, editor: Entity<Editor>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&editor, |_, _, cx| cx.notify()).detach();
+    fn new(language: Language, editor: &Entity<Editor>, cx: &mut Context<Self>) -> Self {
+        cx.observe(editor, |_, _, cx| cx.notify()).detach();
         looks_at_clipboard(cx, |this: &mut Self| &mut this.clipboard);
         Self {
             language,
-            editor,
+            editor: editor.downgrade(),
             clipboard: platform::clipboard_sequence(),
         }
     }
@@ -347,9 +354,14 @@ impl Render for Actions {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let t = |key: &str| self.language.text(key, &[]);
-        let (id, edits) = {
-            let editor = self.editor.read(cx);
-            (editor.capture_id(), editor.edits().to_vec())
+        let Some((id, edits)) = self
+            .editor
+            .read_with(cx, |editor, _| {
+                (editor.capture_id(), editor.edits().to_vec())
+            })
+            .ok()
+        else {
+            return div();
         };
         let Some(id) = id else {
             return div();
@@ -405,17 +417,18 @@ impl Render for Actions {
 /// capture is with how much is drawn on it of how much a drawing holds.
 struct Status {
     language: Language,
-    editor: Entity<Editor>,
+    /// (Weakly: the editor holds this view.)
+    editor: WeakEntity<Editor>,
     clipboard: Option<u32>,
 }
 
 impl Status {
-    fn new(language: Language, editor: Entity<Editor>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&editor, |_, _, cx| cx.notify()).detach();
+    fn new(language: Language, editor: &Entity<Editor>, cx: &mut Context<Self>) -> Self {
+        cx.observe(editor, |_, _, cx| cx.notify()).detach();
         looks_at_clipboard(cx, |this: &mut Self| &mut this.clipboard);
         Self {
             language,
-            editor,
+            editor: editor.downgrade(),
             clipboard: platform::clipboard_sequence(),
         }
     }
@@ -425,13 +438,18 @@ impl Render for Status {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let t = |key: &str| self.language.text(key, &[]);
-        let (id, edits, full) = {
-            let editor = self.editor.read(cx);
-            (
-                editor.capture_id(),
-                editor.edits().to_vec(),
-                editor.is_full(),
-            )
+        let Some((id, edits, full)) = self
+            .editor
+            .read_with(cx, |editor, _| {
+                (
+                    editor.capture_id(),
+                    editor.edits().to_vec(),
+                    editor.is_full(),
+                )
+            })
+            .ok()
+        else {
+            return div();
         };
         let Some(id) = id else {
             return div();
