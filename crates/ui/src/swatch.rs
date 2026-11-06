@@ -54,6 +54,60 @@ pub fn swatch(colour: Option<Hsla>, side: f32, current: bool, theme: &Theme) -> 
         })
 }
 
+/// Any colour: a disc of every hue, round from red at the top (`conic-gradient`), `side` across.
+pub fn any(side: f32, theme: &Theme) -> Div {
+    let edge = Hsla {
+        a: 0.3,
+        ..theme.text
+    };
+    div()
+        .relative()
+        .flex_none()
+        .size(px(side))
+        .child(
+            canvas(
+                |_, _, _| {},
+                |bounds, _, window, _| {
+                    const PIECES: usize = 48;
+                    let middle = bounds.center();
+                    let reach = bounds.size.width.as_f32() / 2.0;
+                    let at = |turn: f32| {
+                        let angle = turn * std::f32::consts::TAU;
+                        point(
+                            middle.x + px(reach * angle.sin()),
+                            middle.y - px(reach * angle.cos()),
+                        )
+                    };
+                    for piece in 0..PIECES {
+                        let (from, to) = (
+                            piece as f32 / PIECES as f32,
+                            (piece + 1) as f32 / PIECES as f32,
+                        );
+                        let mut wedge = PathBuilder::fill();
+                        wedge.move_to(middle);
+                        wedge.line_to(at(from));
+                        wedge.line_to(at(to + 0.002));
+                        wedge.close();
+                        if let Ok(path) = wedge.build() {
+                            window.paint_path(path, crate::slider::hue((from + to) * 180.0));
+                        }
+                    }
+                },
+            )
+            .size_full(),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .rounded_full()
+                .border_1()
+                .border_color(edge),
+        )
+}
+
 /// The line through no colour: across the disc, from its bottom left to its top right.
 fn struck(colour: Hsla) -> impl gpui::IntoElement {
     canvas(

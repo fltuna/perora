@@ -43,6 +43,7 @@ fn main() {
 
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_global(Theme::new(Mode::Dark, platform::accent_colour()));
+        perora_ui::text_field::bind_keys(cx);
         let language = Languages::load(None)
             .by_code(&code)
             .expect("the language is built in");

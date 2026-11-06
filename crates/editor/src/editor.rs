@@ -8,6 +8,7 @@
 //! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
 mod bars;
+mod panels;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -34,6 +35,7 @@ use crate::selecting::{self, Pressed};
 use crate::tools::{self, Kind, Press, Tool};
 use crate::view::{self, Area, Looking};
 use bars::{Openers, Panel, Set};
+use panels::{Mixing, Motions};
 
 /// A capture to draw on.
 pub struct Capture {
@@ -138,6 +140,10 @@ pub struct Editor {
     /// a colour.
     solid: f32,
     openers: Openers,
+    /// The bars and the panels coming and going.
+    motions: Motions,
+    /// Where a colour is mixed, in the panel that is open.
+    mixing: Mixing,
     focus: FocusHandle,
     language: Language,
     /// What the window puts at the top right (what the capture leaves as) and under the picture at
@@ -167,6 +173,7 @@ impl Editor {
             }
         })
         .detach();
+        let mixing = Mixing::new(cx);
         Self {
             capture: None,
             drawing: Drawing::default(),
@@ -189,6 +196,8 @@ impl Editor {
             was: (Kind::Select, None),
             solid: 1.0,
             openers: Rc::new(RefCell::new(Default::default())),
+            motions: Motions::default(),
+            mixing,
             focus: cx.focus_handle(),
             language,
             top_right: None,
@@ -222,6 +231,7 @@ impl Editor {
         self.asked = None;
         self.was = (Kind::Select, None);
         self.solid = 1.0;
+        self.motions = Motions::default();
         cx.notify();
     }
 
@@ -837,11 +847,21 @@ impl Editor {
         }
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
         if self.frozen {
             cx.stop_propagation();
+            return;
+        }
+        // A box of a panel has the keyboard: what is typed is its own. Esc puts the panel away, and
+        // the keyboard is the picture's again.
+        if !self.focus.is_focused(window) {
+            if key == "escape" && !event.is_held {
+                self.asked = None;
+                window.focus(&self.focus, cx);
+                cx.notify();
+            }
             return;
         }
         if key == "escape" {
@@ -1249,10 +1269,11 @@ impl Editor {
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.follow();
+        self.follow_motions(window, cx);
         let theme = Theme::get(cx).clone();
         let tools = self.tools_bar(&theme, cx);
-        let second = self.second_bar(&theme, cx);
-        let panel = self.panel_view(&theme, cx);
+        let second = self.second_bar(&theme, window, cx);
+        let panel = self.panel_view(&theme, window, cx);
         let stage = self.stage(cx);
         let zoom = self.zoom(&theme, window, cx);
         let text: Hsla = theme.text;

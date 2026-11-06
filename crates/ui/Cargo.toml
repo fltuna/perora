@@ -9,3 +9,4 @@ publish = false
 [dependencies]
 gpui = { workspace = true }
 perora-core = { path = "../core" }
+unicode-segmentation = "1"

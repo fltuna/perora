@@ -143,6 +143,7 @@ fn main() {
                 _shortcuts: shortcuts,
             });
             main_window::apply_theme(cx);
+            perora_ui::text_field::bind_keys(cx);
             // Not hidden at the press of a key: the selection screen's keys (1 to 5) leave the
             // pointer where the user can see it.
             cx.set_cursor_hide_mode(CursorHideMode::Never);

@@ -203,10 +203,15 @@ pub fn sample(d: &'static str, width: f32, colour: Hsla, solid: f32, butt: bool)
 
 /// The mark that there is more: a small V (`Caret`), 8 by 5.
 pub fn caret(colour: Hsla) -> impl gpui::IntoElement {
+    caret_turned(colour, false)
+}
+
+/// The caret, turned over (`up`) when what it opens is open.
+pub fn caret_turned(colour: Hsla, up: bool) -> impl gpui::IntoElement {
     use gpui::Styled;
     let part = Part {
         ink: Ink::Line(1.2),
-        ..Part::line("M1 1l3 3 3-3")
+        ..Part::line(if up { "M1 4l3-3 3 3" } else { "M1 1l3 3 3-3" })
     };
     drawing(vec![part], (8.0, 5.0), colour)
         .w(px(8.0))

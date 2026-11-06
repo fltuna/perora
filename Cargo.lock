@@ -3782,6 +3782,7 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "perora-core",
+ "unicode-segmentation",
 ]
 
 [[package]]
