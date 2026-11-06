@@ -113,7 +113,11 @@ fn main() {
     let settings = out.join("settings.json");
     std::fs::write(
         &settings,
-        format!("{{\"language\": \"{code}\", \"theme\": \"{look}\"}}"),
+        // (With a setting of a version to come: what the file holds that this one does not know is
+        // to be kept as it is.)
+        format!(
+            "{{\"language\": \"{code}\", \"theme\": \"{look}\", \"aSettingToCome\": [1, 2]}}"
+        ),
     )
     .expect("the settings can be written");
     // SAFETY: nothing else runs yet to read the environment meanwhile.

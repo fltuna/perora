@@ -30,6 +30,8 @@ pub struct Seconds {
     /// What was last set from here, or given: what the box says again when it is left.
     set: f64,
     unit: SharedString,
+    /// The box had the keyboard when it was last drawn.
+    typing: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -67,12 +69,7 @@ fn stepped(seconds: f64, up: bool) -> f64 {
 }
 
 impl Seconds {
-    pub fn new(
-        seconds: f64,
-        unit: impl Into<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(seconds: f64, unit: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         let field = cx.new(|cx| {
             let mut field = TextField::new(cx).longest(10);
             field.set_text(&written(seconds), cx);
@@ -87,16 +84,12 @@ impl Seconds {
                 cx.emit(SecondsEvent::Set(seconds));
             }
         });
-        let focus = field.focus_handle(cx);
-        let left = cx.on_focus_out(&focus, window, |this, _, _, cx| {
-            let set = written(this.set);
-            this.field.update(cx, |field, cx| field.set_text(&set, cx));
-        });
         Self {
             field,
             set: seconds,
             unit: unit.into(),
-            _subscriptions: vec![changed, left],
+            typing: false,
+            _subscriptions: vec![changed],
         }
     }
 
@@ -113,8 +106,10 @@ impl Seconds {
             self.unit = unit;
             cx.notify();
         }
+        // (Left since it was last drawn: what is not seconds is gone, and it says what is set.)
         let typing = self.field.focus_handle(cx).is_focused(window);
-        if typing || seconds == self.set {
+        let left = std::mem::replace(&mut self.typing, typing) && !typing;
+        if typing || (seconds == self.set && !left) {
             return;
         }
         self.set = seconds;

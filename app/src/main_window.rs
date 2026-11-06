@@ -18,12 +18,15 @@ mod shortcut_page;
 #[path = "main_window/system.rs"]
 mod system;
 
+use std::path::PathBuf;
+
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyWindowHandle, App, AppContext, Bounds, Context, Entity, ExternalPaths, FocusHandle,
-    FontWeight, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, div, point, px, relative, size,
+    AnyWindowHandle, App, AppContext, Bounds, Context, DispatchPhase, DragMoveEvent, Entity,
+    ExternalPaths, FocusHandle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent,
+    MouseUpEvent, ParentElement, Render, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, canvas, div, point,
+    px, relative, size,
 };
 use perora_core::platform::WindowId;
 use perora_core::settings::{Settings, seconds_to_set};
@@ -101,6 +104,8 @@ pub struct MainWindow {
     scroll: ScrollHandle,
     /// A new shortcut is being recorded: the next combination pressed is it.
     recording: bool,
+    /// The first of the files being dragged over the window, while they are.
+    dragged: Option<PathBuf>,
     /// The last combination that was not made the shortcut, and why.
     refusal: Option<(Refusal, String)>,
     seconds: SecondsFields,
@@ -115,11 +120,8 @@ impl MainWindow {
             .text("main.general.seconds", &[])
             .into();
         let mut subscriptions = Vec::new();
-        let mut field = |seconds: f64,
-                         set: fn(&mut Settings, f64),
-                         window: &mut Window,
-                         cx: &mut Context<Self>| {
-            let field = cx.new(|cx| Seconds::new(seconds, unit.clone(), window, cx));
+        let mut field = |seconds: f64, set: fn(&mut Settings, f64), cx: &mut Context<Self>| {
+            let field = cx.new(|cx| Seconds::new(seconds, unit.clone(), cx));
             subscriptions.push(cx.subscribe(&field, move |_, _, event: &SecondsEvent, cx| {
                 let SecondsEvent::Set(seconds) = *event;
                 if let Some(seconds) = seconds_to_set(seconds) {
@@ -132,19 +134,16 @@ impl MainWindow {
             bar_hide: field(
                 settings.bar_hide_seconds,
                 |settings, seconds| settings.bar_hide_seconds = seconds,
-                window,
                 cx,
             ),
             preview: field(
                 settings.preview_seconds,
                 |settings, seconds| settings.preview_seconds = seconds,
-                window,
                 cx,
             ),
             notice: field(
                 settings.notice_seconds,
                 |settings, seconds| settings.notice_seconds = seconds,
-                window,
                 cx,
             ),
         };
@@ -164,11 +163,18 @@ impl MainWindow {
             apply_theme(cx);
             system::changed(cx);
         }));
+        // Closed while a shortcut was being recorded: the shortcut is Perora's again.
+        subscriptions.push(cx.on_release(|this, cx| {
+            if this.recording {
+                system::suspend_shortcut(false, cx);
+            }
+        }));
         Self {
             page: Page::Home,
             focus: cx.focus_handle(),
             scroll: ScrollHandle::new(),
             recording: false,
+            dragged: None,
             refusal: None,
             seconds,
             _subscriptions: subscriptions,
@@ -187,10 +193,20 @@ impl MainWindow {
         cx.notify();
     }
 
-    /// Images dragged over the window and let go of: the first opens in the editor.
-    fn dropped(&mut self, paths: &ExternalPaths, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(path) = paths.paths().first() {
-            system::open_file(path.clone(), cx);
+    /// Files dragged over the window: which, for when they are let go of.
+    fn dragging(
+        &mut self,
+        event: &DragMoveEvent<ExternalPaths>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dragged = event.drag(cx).paths().first().cloned();
+    }
+
+    /// Files let go of over the window: the first opens in the editor.
+    fn dropped(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = self.dragged.take() {
+            system::open_file(path, cx);
         }
     }
 
@@ -334,6 +350,25 @@ impl Render for MainWindow {
 
         // An image dragged over the window: dropped, it opens in the editor.
         let dropping = cx.has_active_drag();
+        if !dropping {
+            self.dragged = None;
+        }
+        // (Let go of anywhere over the window, whatever is under it and whatever was pressed last:
+        // GPUI's own dropping asks whether the pointer is over what it is dropped on, which it
+        // takes not to be after a key was pressed.)
+        let main = cx.entity();
+        let letting_go = canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Bubble && cx.has_active_drag() {
+                        main.update(cx, |main, cx| main.dropped(cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0();
         let drop_said = language.text("preview.drop", &[]);
         div()
             .id("main")
@@ -349,7 +384,8 @@ impl Render for MainWindow {
             .track_focus(&self.focus)
             .capture_key_down(cx.listener(Self::recorded))
             .on_key_down(cx.listener(Self::key_down))
-            .on_drop(cx.listener(Self::dropped))
+            .on_drag_move(cx.listener(Self::dragging))
+            .child(letting_go)
             // (Above the pages, the band that offers a newer version goes here: P7, the updater.)
             .child(
                 div()
