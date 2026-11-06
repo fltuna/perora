@@ -348,6 +348,13 @@ pub fn put_file_on_clipboard(path: &std::path::Path) -> std::result::Result<(), 
     windows::clipboard::put_file(path)
 }
 
+/// Puts a picture on the clipboard, in place of whatever is there: as the PNG it was made into
+/// (`png`), and as a bitmap. Refused with the reason when the clipboard would not take it.
+#[cfg(windows)]
+pub fn put_picture_on_clipboard(frame: &Frame, png: &[u8]) -> std::result::Result<(), String> {
+    windows::clipboard::put_picture(frame, png)
+}
+
 /// A number that changes whenever what is on the clipboard does: for telling whether what was put
 /// there is still what is there. `None` when the system does not say.
 #[cfg(windows)]

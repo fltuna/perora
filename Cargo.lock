@@ -3726,6 +3726,7 @@ dependencies = [
  "global-hotkey",
  "gpui",
  "gpui_platform",
+ "image",
  "perora-core",
  "perora-ui",
  "raw-window-handle",

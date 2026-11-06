@@ -1,22 +1,25 @@
 //! Perora on GPUI. The plan is docs/gpui-rewrite.md; what must keep working is docs/gpui-parity.md.
 //!
-//! P1 so far: the settings and the language, the icon in the notification area, the shortcut, one
-//! Perora at a time (later starts hand their arguments over), and the GPU let go of while no window
-//! is open.
+//! P1: the settings and the language, the icon in the notification area, the shortcut, one Perora at
+//! a time (later starts hand their arguments over), and the GPU let go of while no window is open.
+//! P2 so far: the selection screen, and what is chosen on the clipboard.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod arguments;
+mod capture;
 mod gpu;
+mod hwnd;
 mod instance;
 mod main_window;
+mod selection;
 mod shortcut;
 mod state;
 mod tray;
 
 use std::path::Path;
 
-use gpui::{App, QuitMode};
+use gpui::{App, CursorHideMode, QuitMode};
 
 use crate::arguments::Asked;
 use crate::shortcut::Shortcuts;
@@ -129,6 +132,9 @@ fn main() {
                 _shortcuts: shortcuts,
             });
             main_window::apply_theme(cx);
+            // Not hidden at the press of a key: the selection screen's keys (1 to 5) leave the
+            // pointer where the user can see it.
+            cx.set_cursor_hide_mode(CursorHideMode::Never);
 
             cx.spawn(async move |cx| {
                 while let Ok(signal) = receiver.recv().await {
@@ -145,9 +151,7 @@ fn main() {
 
 fn act(signal: Signal, cx: &mut App) {
     match signal {
-        // P2: the selection screen. Until then the main window opens, so that the shortcut can be
-        // seen to work.
-        Signal::Capture => main_window::open(cx),
+        Signal::Capture => capture::start(cx),
         Signal::Open => main_window::open(cx),
         Signal::ToggleMain => main_window::toggle(cx),
         Signal::Asked(Asked::Main) => main_window::open(cx),

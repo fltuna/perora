@@ -5,8 +5,10 @@ use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Context, IntoElement, ParentElement, Render, Styled,
     TitlebarOptions, Window, WindowBounds, WindowOptions, div, px, size,
 };
+use perora_core::platform::WindowId;
 use perora_ui::{Mode, Theme};
 
+use crate::hwnd;
 use crate::state::Perora;
 
 /// The size the Tauri version opens at, and the smallest it may be (logical pixels).
@@ -78,17 +80,33 @@ pub fn toggle(cx: &mut App) {
 
 /// Shown, and not minimized.
 fn on_screen(window: &Window) -> bool {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
-    let Ok(handle) = HasWindowHandle::window_handle(window) else {
-        return false;
-    };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return false;
-    };
-    let hwnd = HWND(handle.hwnd.get() as *mut _);
-    unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() }
+    hwnd::of(window).is_some_and(hwnd::on_screen)
+}
+
+/// The main window, when it is on screen: what a capture takes Perora's own windows out of the
+/// picture by, or puts in it.
+pub fn on_screen_now(cx: &mut App) -> Option<WindowId> {
+    let window = find(cx)?;
+    window
+        .update(cx, |_, window, _| hwnd::of(window).filter(|&id| hwnd::on_screen(id)))
+        .ok()
+        .flatten()
+}
+
+/// Out of the way of a capture, at once: without the system's fade, which would be in the picture
+/// (as in the Tauri version, which also put the window aside this way). The window, when it was on
+/// screen, for `come_back`.
+pub fn step_aside(cx: &mut App) -> Option<WindowId> {
+    let window = on_screen_now(cx)?;
+    perora_core::platform::set_transitions(window, false);
+    hwnd::hide(window);
+    Some(window)
+}
+
+/// Back after the capture: as it was put aside, and with the system's animations again.
+pub fn come_back(window: WindowId) {
+    hwnd::show(window);
+    perora_core::platform::set_transitions(window, true);
 }
 
 pub fn open(cx: &mut App) {
