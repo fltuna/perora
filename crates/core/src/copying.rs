@@ -25,6 +25,8 @@ pub fn turn() -> u64 {
 
 /// What came of a copy.
 pub struct Copied {
+    /// A later copy was on the clipboard already: this one was not put there.
+    pub passed: bool,
     /// The clipboard's count of changes right after, where the system says.
     pub sequence: Option<u32>,
     /// The PNG it was put there as, when that is the picture as it was (not made smaller): for
@@ -56,16 +58,28 @@ pub fn to_clipboard(frame: &Frame, how: Output, turn: u64) -> Result<Copied, Str
     if PUT.load(Ordering::Acquire) > turn {
         // (A later copy is there: what is said of that one is what counts.)
         return Ok(Copied {
+            passed: true,
             sequence: None,
             png: (how.format == Format::Png && as_it_was).then_some(file),
         });
     }
-    PUT.store(turn, Ordering::Release);
-    if how.format == Format::Png {
+    // (The turn is the clipboard's once the copy is there: one that failed holds back none before
+    // it.)
+    let put = put(frame, file, how.format, as_it_was);
+    if put.is_ok() {
+        PUT.store(turn, Ordering::Release);
+    }
+    put
+}
+
+/// (By whoever has the clipboard and the folder.)
+fn put(frame: &Frame, file: Vec<u8>, format: Format, as_it_was: bool) -> Result<Copied, String> {
+    if format == Format::Png {
         crate::platform::put_picture_on_clipboard(frame, &file)?;
         // (No file of Perora's is on the clipboard any more.)
         forget_copied_held(None);
         return Ok(Copied {
+            passed: false,
             sequence: crate::platform::clipboard_sequence(),
             png: as_it_was.then_some(file),
         });
@@ -86,7 +100,7 @@ pub fn to_clipboard(frame: &Frame, how: Output, turn: u64) -> Result<Copied, Str
                 } else {
                     format!(" ({attempt})")
                 },
-                how.format.name()
+                format.name()
             ))
         })
         .find(|path| !path.exists())
@@ -98,6 +112,7 @@ pub fn to_clipboard(frame: &Frame, how: Output, turn: u64) -> Result<Copied, Str
     }
     forget_copied_held(Some(&path));
     Ok(Copied {
+        passed: false,
         sequence: crate::platform::clipboard_sequence(),
         png: None,
     })

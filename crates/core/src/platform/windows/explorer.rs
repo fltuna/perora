@@ -219,8 +219,21 @@ pub fn reveal(path: &std::path::Path) -> Result<(), String> {
                 ILFree(Some(list));
             }
         }
-        shown
+        shown.or_else(|why| explore(path.parent().unwrap_or(path)).map_err(|_| why))
     }
+}
+
+/// Opens a folder, through the shell (as tauri-plugin-opener does when the file cannot be shown in
+/// it).
+fn explore(folder: &std::path::Path) -> Result<(), ()> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, w};
+
+    let folder = HSTRING::from(folder.as_os_str());
+    let opened = unsafe { ShellExecuteW(None, w!("explore"), &folder, None, None, SW_SHOWNORMAL) };
+    // (Above 32 is a success, as the call has always said.)
+    if opened.0 as usize > 32 { Ok(()) } else { Err(()) }
 }
 
 #[cfg(test)]

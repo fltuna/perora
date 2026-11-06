@@ -284,7 +284,7 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
         // As the PNG the copy was made into, when that is the picture as it was.)
         let png = copied.as_ref().ok().and_then(|copied| copied.png.as_deref());
         let saved = saves.then(|| saving::save_as_taken(&settings, &frame, png));
-        let copied = copied.map(|_| ());
+        let copied = copied.map(|copied| copied.passed);
         eprintln!(
             "deliver: {}x{} copied in {:.0} ms{}",
             frame.area.width,
@@ -308,13 +308,30 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     .detach();
 }
 
-/// What became of each is said: one of them not done is no reason to leave out the other.
+/// What became of each is said: one of them not done is no reason to leave out the other. (`copied`
+/// is whether a later capture went past this one to the clipboard: then only what was saved of it
+/// is said, if anything was.)
 fn tell(
-    copied: Result<(), String>,
+    copied: Result<bool, String>,
     saved: Option<Result<Vec<PathBuf>, String>>,
     language: &Language,
     cx: &mut App,
 ) {
+    if copied == Ok(true) {
+        match saved {
+            Some(Ok(files)) => {
+                let first = files.first().cloned().unwrap_or_default();
+                let message = language.saved_as_taken(&first.display().to_string(), files.len() - 1);
+                notice::say_of_file(message, Lasting::Brief, first, cx);
+            }
+            Some(Err(detail)) => {
+                notice::say(language.not_saved_as_taken(&detail), Lasting::Long, None, cx)
+            }
+            None => {}
+        }
+        return;
+    }
+    let copied = copied.map(|_| ());
     match (copied, saved) {
         (Ok(()), None) => notice::say(language.copied(), Lasting::Brief, None, cx),
         (Err(detail), None) => notice::say(language.not_copied(&detail), Lasting::Long, None, cx),

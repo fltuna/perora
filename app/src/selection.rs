@@ -206,23 +206,10 @@ pub struct Prepared {
 /// Opens a window over every monitor there is now, for the screen being taken.
 pub fn prepare(cx: &mut App) -> Option<Prepared> {
     let layout = platform::screen_capture().layout().ok()?;
-    let pointer = platform::desktop().pointer().ok();
-    let home = pointer
-        .and_then(|pointer| {
-            layout
-                .monitors
-                .iter()
-                .position(|monitor| monitor.bounds.contains(pointer))
-        })
-        .or_else(|| layout.monitors.iter().position(|monitor| monitor.primary))
-        .unwrap_or(0);
     let windows = layout
         .monitors
         .iter()
-        .enumerate()
-        .filter_map(|(index, monitor)| {
-            open_shell(monitor, index == home, cx).map(|handle| (monitor.bounds, handle))
-        })
+        .filter_map(|monitor| open_shell(monitor, cx).map(|handle| (monitor.bounds, handle)))
         .collect();
     Some(Prepared { windows })
 }
@@ -234,13 +221,15 @@ pub fn discard(prepared: Prepared, cx: &mut App) {
     }
 }
 
-/// A window over a monitor, out of sight (until it has drawn the screen) and empty.
-fn open_shell(monitor: &Monitor, focus: bool, cx: &mut App) -> Option<WindowHandle<Shell>> {
+/// A window over a monitor, out of sight (until it has drawn the screen) and empty. It does not take
+/// the foreground as it opens (the one with the bar does once the screen is there): what is in front
+/// while the screen is taken, a menu or a game in full screen, stays as it is.
+fn open_shell(monitor: &Monitor, cx: &mut App) -> Option<WindowHandle<Shell>> {
     let display = crate::display::of(monitor, cx)?;
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(display.bounds())),
         titlebar: None,
-        focus,
+        focus: false,
         show: true,
         kind: WindowKind::PopUp,
         is_movable: false,
@@ -363,7 +352,7 @@ pub fn open(
             continue;
         };
         let is_home = index == home;
-        let Some(handle) = made.or_else(|| open_shell(monitor, is_home, cx)) else {
+        let Some(handle) = made.or_else(|| open_shell(monitor, cx)) else {
             eprintln!("selection {id}: a window was not opened for {}", monitor.name);
             continue;
         };
@@ -428,7 +417,11 @@ pub fn open(
                 for &handle in &selection.handles {
                     platform::set_cloaked(handle, false);
                 }
-                cursor::refresh();
+                // (Not while a press is held: a VR headset's pointer is, to the system, where the
+                // press began, and would be put there.)
+                if !selection.pressed {
+                    cursor::refresh();
+                }
             }
         });
     })
@@ -674,12 +667,18 @@ impl Render for Overlay {
             // drawn as the window opens and put on screen at the next; what is asked for at the
             // next comes before that is done, so the window is shown at the one after.
             let (asked, id, monitor) = (selection.asked, selection.id, self.monitor);
+            let pressing = self.selection.downgrade();
             window.on_next_frame(move |window, _| {
-                window.on_next_frame(move |window, _| {
+                window.on_next_frame(move |window, cx| {
                     if let Some(handle) = hwnd::of(window) {
                         platform::set_cloaked(handle, false);
                     }
-                    cursor::refresh();
+                    if pressing
+                        .upgrade()
+                        .is_some_and(|selection| !selection.read(cx).pressed)
+                    {
+                        cursor::refresh();
+                    }
                     eprintln!(
                         "selection {id}: monitor {monitor} shown {:.0} ms after the shortcut",
                         asked.elapsed().as_secs_f64() * 1000.0
