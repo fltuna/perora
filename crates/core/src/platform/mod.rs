@@ -348,6 +348,13 @@ pub fn put_file_on_clipboard(path: &std::path::Path) -> std::result::Result<(), 
     windows::clipboard::put_file(path)
 }
 
+/// Opens the folder a file is in, with the file chosen there (as the file manager's "show in
+/// folder"). Refused with the reason when the system would not.
+#[cfg(windows)]
+pub fn reveal_in_folder(path: &std::path::Path) -> std::result::Result<(), String> {
+    windows::explorer::reveal(path)
+}
+
 /// Puts a picture on the clipboard, in place of whatever is there: as the PNG it was made into
 /// (`png`), and as a bitmap. Refused with the reason when the clipboard would not take it.
 #[cfg(windows)]

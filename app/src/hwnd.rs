@@ -6,7 +6,8 @@ use perora_core::platform::WindowId;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsIconic, IsWindowVisible, SW_HIDE, SW_SHOW, ShowWindow,
+    GWL_EXSTYLE, GetWindowLongPtrW, IsIconic, IsWindowVisible, SW_HIDE, SW_SHOW,
+    SetWindowLongPtrW, ShowWindow, WS_EX_NOACTIVATE,
 };
 
 pub fn of(window: &Window) -> Option<WindowId> {
@@ -31,6 +32,16 @@ pub fn on_screen(window: WindowId) -> bool {
 pub fn hide(window: WindowId) {
     unsafe {
         let _ = ShowWindow(hwnd(window), SW_HIDE);
+    }
+}
+
+/// Never the active window, not even when it is clicked: for what appears over a game or whatever
+/// the user is in (the notice), which must not take the keyboard from it.
+pub fn never_active(window: WindowId) {
+    let window = hwnd(window);
+    unsafe {
+        let style = GetWindowLongPtrW(window, GWL_EXSTYLE);
+        SetWindowLongPtrW(window, GWL_EXSTYLE, style | WS_EX_NOACTIVATE.0 as isize);
     }
 }
 

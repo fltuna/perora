@@ -187,3 +187,29 @@ mod tests {
         unregister(&classes.0, elsewhere).unwrap();
     }
 }
+
+/// Opens the folder a file is in, with the file chosen there (what the file manager's "show in
+/// folder" does), in a window of the file manager's. Refused with the reason when the system would
+/// not. (As the Tauri version's opener did: `SHOpenFolderAndSelectItems`.)
+pub fn reveal(path: &std::path::Path) -> Result<(), String> {
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+    use windows::core::HSTRING;
+
+    unsafe {
+        // (Whatever this thread was set up as before stands: then it is not undone either.)
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let item = ILCreateFromPathW(&HSTRING::from(path.as_os_str()));
+        let shown = if item.is_null() {
+            Err(format!("{} is not there", path.display()))
+        } else {
+            let shown = SHOpenFolderAndSelectItems(item, None, 0).map_err(|error| error.message());
+            ILFree(Some(item));
+            shown
+        };
+        if initialized {
+            CoUninitialize();
+        }
+        shown
+    }
+}

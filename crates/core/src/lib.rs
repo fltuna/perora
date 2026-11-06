@@ -4,6 +4,8 @@
 
 pub mod account;
 pub mod config;
+#[cfg(windows)]
+pub mod copying;
 pub mod edit;
 pub mod frame;
 pub mod geometry;
@@ -12,6 +14,7 @@ pub mod notice;
 pub mod oidc;
 pub mod output;
 pub mod platform;
+pub mod saving;
 pub mod selection;
 pub mod settings;
 pub mod shots;

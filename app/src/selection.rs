@@ -232,19 +232,11 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
         selection
     });
 
-    let displays = cx.displays();
     for (index, monitor) in layout.monitors.iter().enumerate() {
         let Some(image) = parts.get(index).cloned().flatten() else {
             continue;
         };
-        // GPUI places a window in the logical pixels of its display: the physical corner divided by
-        // that display's own scale.
-        let Some(display) = displays.iter().find(|display| {
-            let origin = display.bounds().origin;
-            (f64::from(origin.x.as_f32()) * monitor.scale).round() as i32 == monitor.bounds.x
-                && (f64::from(origin.y.as_f32()) * monitor.scale).round() as i32
-                    == monitor.bounds.y
-        }) else {
+        let Some(display) = crate::display::of(monitor, cx) else {
             eprintln!("selection {id}: no display of GPUI's for {}", monitor.name);
             continue;
         };

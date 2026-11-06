@@ -675,6 +675,13 @@ pub fn config_directory() -> Option<PathBuf> {
     Some(dirs::config_dir()?.join(IDENTIFIER))
 }
 
+/// The folder the application keeps what it can lose in (on Windows, `%LOCALAPPDATA%` and the
+/// application's identifier: the Tauri version's cache folder). `None` when the system names no such
+/// folder.
+pub fn cache_directory() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(IDENTIFIER))
+}
+
 /// Where the settings are written: `settings.json` in [`config_directory`].
 pub fn settings_path() -> Option<PathBuf> {
     Some(config_directory()?.join("settings.json"))
