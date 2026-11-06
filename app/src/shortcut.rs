@@ -11,6 +11,8 @@ use perora_core::settings::DEFAULT_SHORTCUT;
 /// Whether a key combination may be a global shortcut: one that typing does not need. A letter, a
 /// digit or any other key of the main block needs Ctrl, Alt or the Windows key with it (with Shift
 /// alone it is a capital letter); function keys and PrintScreen may stand alone.
+// (For the settings page, P5: there a combination is checked as it is chosen.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_a_shortcut(combination: &str) -> bool {
     let mut keys: Vec<&str> = combination.split('+').collect();
     let Some(key) = keys.pop() else {
@@ -26,9 +28,10 @@ pub fn is_a_shortcut(combination: &str) -> bool {
 }
 
 /// The combination to register: the settings', or the default when theirs means nothing (edited by
-/// hand).
+/// hand). (As in the Tauri version, only that: whether it is one typing needs is the settings
+/// page's to check when it is chosen.)
 pub fn chosen(setting: &str) -> String {
-    if HotKey::from_str(setting).is_ok() && is_a_shortcut(setting) {
+    if HotKey::from_str(setting).is_ok() {
         setting.to_owned()
     } else {
         DEFAULT_SHORTCUT.to_owned()
@@ -170,7 +173,8 @@ mod tests {
         assert_eq!(chosen("Ctrl+Shift+H"), "Ctrl+Shift+H");
         assert_eq!(chosen("Alt+F9"), "Alt+F9");
         assert_eq!(chosen("nonsense"), DEFAULT_SHORTCUT);
-        assert_eq!(chosen("Shift+H"), DEFAULT_SHORTCUT);
         assert_eq!(chosen(""), DEFAULT_SHORTCUT);
+        // Parsed, so kept, as the Tauri version did: a hand edit is the user's to make.
+        assert_eq!(chosen("Shift+H"), "Shift+H");
     }
 }

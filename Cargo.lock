@@ -3728,6 +3728,7 @@ dependencies = [
  "gpui_platform",
  "perora-core",
  "perora-ui",
+ "raw-window-handle",
  "tray-icon",
  "windows 0.62.2",
 ]

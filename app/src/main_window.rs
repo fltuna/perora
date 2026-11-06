@@ -61,13 +61,34 @@ impl Render for MainWindow {
     }
 }
 
-/// Shows the main window, or puts it away when it is up.
+/// Puts the main window away when it is on screen; otherwise shows it (also when it is minimized,
+/// as in the Tauri version: one click brings it back).
 pub fn toggle(cx: &mut App) {
     if let Some(window) = find(cx) {
-        let _ = window.update(cx, |_, window, _| window.remove_window());
-        return;
+        let on_screen = window
+            .update(cx, |_, window, _| on_screen(window))
+            .unwrap_or(false);
+        if on_screen {
+            let _ = window.update(cx, |_, window, _| window.remove_window());
+            return;
+        }
     }
     open(cx);
+}
+
+/// Shown, and not minimized.
+fn on_screen(window: &Window) -> bool {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return false;
+    };
+    let hwnd = HWND(handle.hwnd.get() as *mut _);
+    unsafe { IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() }
 }
 
 pub fn open(cx: &mut App) {

@@ -9,13 +9,13 @@
 use std::cell::RefCell;
 
 use windows::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, FindWindowW,
+    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW,
     GetWindowThreadProcessId, HWND_MESSAGE, RegisterClassW, SMTO_NORMAL, SendMessageTimeoutW,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WNDCLASSW,
 };
@@ -39,26 +39,56 @@ type Receiver = Box<dyn Fn(Forwarded)>;
 
 thread_local! {
     static RECEIVER: RefCell<Option<Receiver>> = const { RefCell::new(None) };
+    /// What later starts sent before anyone listened (the application was still starting).
+    static WAITING: RefCell<Vec<Forwarded>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Kept while the application runs: the mutex says it is running.
+/// Kept while the application runs: the mutex says it is running, the window takes later starts.
 pub struct Instance {
-    _mutex: HANDLE,
+    mutex: HANDLE,
+    window: Option<HWND>,
 }
 
-/// The first Perora gets `Some`; a second one has handed its arguments over by the time it gets
-/// `None`, and should end.
+impl Drop for Instance {
+    fn drop(&mut self) {
+        unsafe {
+            if let Some(window) = self.window.take() {
+                let _ = DestroyWindow(window);
+            }
+            let _ = ReleaseMutex(self.mutex);
+            let _ = CloseHandle(self.mutex);
+        }
+    }
+}
+
+/// How long a second Perora looks for the first one's window, when the first one has only just
+/// started and has not made it yet (it makes it at once, before anything else).
+const WINDOW_APPEARS_WITHIN_MS: u64 = 3_000;
+
+/// The first Perora gets `Some`, with the window later starts send their arguments to already
+/// made (they are kept until `listen`); a second one has handed its arguments over by the time it
+/// gets `None`, and should end.
 pub fn claim() -> Option<Instance> {
     let mutex = unsafe { CreateMutexW(None, true, &HSTRING::from(MUTEX)) };
     let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     let mutex = mutex.ok()?;
     if !already {
-        return Some(Instance { _mutex: mutex });
+        let window = make_window();
+        return Some(Instance { mutex, window });
     }
     unsafe {
-        let Ok(window) = FindWindowW(&HSTRING::from(CLASS), &HSTRING::from(NAME)) else {
-            // Running, but without its window yet (starting): this start is lost, as in the plugin.
-            return None;
+        let _ = CloseHandle(mutex);
+        // The first one makes its window right after the mutex, but it may be between the two.
+        let began = std::time::Instant::now();
+        let window = loop {
+            if let Ok(window) = FindWindowW(&HSTRING::from(CLASS), &HSTRING::from(NAME)) {
+                break window;
+            }
+            if began.elapsed().as_millis() as u64 >= WINDOW_APPEARS_WITHIN_MS {
+                eprintln!("the Perora that is running has no window for this start's arguments");
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         };
         // The one running may bring its window to the front for this start; only the one in front
         // (this one, just started) can let it.
@@ -93,14 +123,20 @@ pub fn claim() -> Option<Instance> {
     None
 }
 
-/// Makes the window that second starts send their arguments to, and calls `receive` with them (on
-/// this thread, from the message loop).
+/// Calls `receive` with what later starts send (on this thread, from the message loop), first with
+/// what they sent before this.
 pub fn listen(receive: impl Fn(Forwarded) + 'static) {
+    for forwarded in WAITING.with(|waiting| std::mem::take(&mut *waiting.borrow_mut())) {
+        receive(forwarded);
+    }
     RECEIVER.with(|receiver| *receiver.borrow_mut() = Some(Box::new(receive)));
+}
+
+/// The window that later starts send their arguments to: a message-only window, never seen, found by
+/// its class and name. Made on the thread that runs the message loop (the main one).
+fn make_window() -> Option<HWND> {
     unsafe {
-        let Ok(module) = GetModuleHandleW(None) else {
-            return;
-        };
+        let module = GetModuleHandleW(None).ok()?;
         let class = HSTRING::from(CLASS);
         let description = WNDCLASSW {
             lpfnWndProc: Some(window_procedure),
@@ -109,8 +145,7 @@ pub fn listen(receive: impl Fn(Forwarded) + 'static) {
             ..Default::default()
         };
         RegisterClassW(&description);
-        // A message-only window: never seen, found by its class and name.
-        if CreateWindowExW(
+        let made = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             &class,
             &HSTRING::from(NAME),
@@ -123,11 +158,11 @@ pub fn listen(receive: impl Fn(Forwarded) + 'static) {
             None,
             Some(module.into()),
             None,
-        )
-        .is_err()
-        {
+        );
+        if made.is_err() {
             eprintln!("the window for later starts could not be made");
         }
+        made.ok()
     }
 }
 
@@ -151,10 +186,9 @@ unsafe extern "system" fn window_procedure(
                 folder,
                 arguments: parts.collect(),
             };
-            RECEIVER.with(|receiver| {
-                if let Some(receive) = receiver.borrow().as_ref() {
-                    receive(forwarded);
-                }
+            RECEIVER.with(|receiver| match receiver.borrow().as_ref() {
+                Some(receive) => receive(forwarded),
+                None => WAITING.with(|waiting| waiting.borrow_mut().push(forwarded)),
             });
             return LRESULT(1);
         }

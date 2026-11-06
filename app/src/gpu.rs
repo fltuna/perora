@@ -3,22 +3,21 @@
 //! window, GPUI is switched to headless, which lets go of the device and the vsync thread. Back to
 //! windowed before a window opens (23-36 ms). Measured in P0: 8.8 MB waiting in the tray.
 
-use std::cell::Cell;
 use std::time::Duration;
 
 use gpui::{App, GraphicalEnvironment, WindowingRequest};
 
-thread_local! {
-    static HEADLESS: Cell<bool> = const { Cell::new(false) };
-}
+/// How the application starts: with no GPU, as it waits in the tray. (No device is made only to be
+/// let go of, and a GPU that cannot be used does not stop the start: the tray is there anyway.)
+pub const AT_START: WindowingRequest = WindowingRequest::Headless;
 
-/// Before opening a window.
+/// Before opening a window. Whether the GPU is there is the platform's to say (asked every time):
+/// a device that could not be made leaves it headless, and the next window tries again.
 pub fn attach(cx: &mut App) {
-    if !HEADLESS.with(Cell::get) {
+    if cx.graphical_environment().is_some() {
         return;
     }
     let task = cx.request_windowing(WindowingRequest::Windowed(GraphicalEnvironment::detect()));
-    HEADLESS.with(|headless| headless.set(false));
     cx.foreground_executor()
         .spawn(async move {
             if let Err(error) = task.await {
@@ -30,11 +29,10 @@ pub fn attach(cx: &mut App) {
 
 /// Once no window is open.
 pub fn release(cx: &mut App) {
-    if !cx.windows().is_empty() || HEADLESS.with(Cell::get) {
+    if !cx.windows().is_empty() || cx.graphical_environment().is_none() {
         return;
     }
     let task = cx.request_windowing(WindowingRequest::Headless);
-    HEADLESS.with(|headless| headless.set(true));
     cx.foreground_executor()
         .spawn(async move {
             if let Err(error) = task.await {

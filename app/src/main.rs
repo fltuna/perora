@@ -38,7 +38,7 @@ pub enum Signal {
 /// Kept for as long as the application runs: dropping them takes the icon and the shortcut away.
 struct Kept {
     _instance: instance::Instance,
-    _tray: Option<Tray>,
+    _tray: Tray,
     _shortcuts: Option<Shortcuts>,
 }
 
@@ -57,11 +57,17 @@ fn main() {
     let started: Vec<String> = std::env::args_os()
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect();
-    let first = arguments::asked(&started, &std::env::current_dir().unwrap_or_default());
+    // The first start: as in the Tauri version, `--capture` only means something to a Perora that
+    // is running; started with it, Perora shows its window.
+    let first = match arguments::asked(&started, &std::env::current_dir().unwrap_or_default()) {
+        Asked::Capture => Asked::Main,
+        other => other,
+    };
 
     gpui_platform::application()
         // An application of the notification area: no window is open while it waits.
         .with_quit_mode(QuitMode::Explicit)
+        .with_windowing(gpu::AT_START)
         .run(|cx: &mut App| {
             let mut perora = Perora::load();
             let (sender, receiver) = async_channel::unbounded::<Signal>();
@@ -102,9 +108,14 @@ fn main() {
                 perora.shortcut_label().as_deref(),
                 &perora.shortcut_shown(),
             );
-            if let Some(tray) = &tray {
-                tray.listen(sender.clone());
-            }
+            // Without its icon, Perora could be neither found nor ended: it does not start (as the
+            // Tauri version, whose start failed with it).
+            let Some(tray) = tray else {
+                eprintln!("the icon could not be put in the notification area");
+                cx.quit();
+                return;
+            };
+            tray.listen(sender.clone());
             let later = sender.clone();
             instance::listen(move |forwarded| {
                 let asked = arguments::asked(&forwarded.arguments, Path::new(&forwarded.folder));
@@ -126,16 +137,17 @@ fn main() {
             })
             .detach();
 
-            // Waiting in the tray needs no GPU.
-            gpu::release(cx);
+            // Waiting in the tray needs no GPU (started headless); let go of it again a while
+            // after the last window closes.
             gpu::release_after_windows(cx);
         });
 }
 
 fn act(signal: Signal, cx: &mut App) {
     match signal {
-        // P2: the selection screen.
-        Signal::Capture => eprintln!("capture: not yet (P2)"),
+        // P2: the selection screen. Until then the main window opens, so that the shortcut can be
+        // seen to work.
+        Signal::Capture => main_window::open(cx),
         Signal::Open => main_window::open(cx),
         Signal::ToggleMain => main_window::toggle(cx),
         Signal::Asked(Asked::Main) => main_window::open(cx),
@@ -144,8 +156,11 @@ fn act(signal: Signal, cx: &mut App) {
         // P5: opening an image in the editor.
         Signal::Asked(Asked::Open(file)) => eprintln!("open {}: not yet (P5)", file.display()),
         Signal::Quit => {
-            // The icon and the shortcut go before the application does.
-            cx.remove_global::<Kept>();
+            // The icon, the shortcut and the claim to be the one Perora go before the application
+            // does.
+            if cx.has_global::<Kept>() {
+                cx.remove_global::<Kept>();
+            }
             cx.quit();
         }
     }
