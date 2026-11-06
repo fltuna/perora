@@ -96,11 +96,17 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// What the choice is of the capture: the area, or the window (without its edge, where what is
-    /// behind it showed through). `None` when that is all off the screen.
-    fn frame_of(&self, choice: &Choice) -> Option<Frame> {
+    /// What the choice is of the capture, and where to cut it out of: the area of the still, or the
+    /// window (without its edge, where what is behind it showed through) of its own picture or of
+    /// the still. `None` when that is all off the screen. (Cut out by whoever takes it on, off the
+    /// UI thread: a choice across monitors is a copy of a hundred megabytes and more.)
+    fn cut_of(&self, choice: &Choice) -> Option<(Arc<Frame>, Rect)> {
+        let of_still = |area: Rect| {
+            area.intersection(&self.still.area)
+                .map(|seen| (self.still.clone(), seen))
+        };
         match choice {
-            Choice::Area(area) => self.still.crop(*area),
+            Choice::Area(area) => of_still(*area),
             Choice::Window(index) => {
                 let window = self.session.windows().get(*index)?;
                 let picture = self
@@ -126,9 +132,10 @@ impl Selection {
                     // (its own picture also has the part that hung off the edge).
                     Some(picture) => bounds
                         .intersection(&self.still.area)
-                        .and_then(|seen| picture.crop(seen)),
+                        .and_then(|seen| seen.intersection(&picture.area))
+                        .map(|seen| (picture, seen)),
                     // No picture of its own (yet, or ever): what was seen of it on the screen.
-                    None => self.still.crop(bounds),
+                    None => of_still(bounds),
                 }
             }
         }
@@ -232,6 +239,8 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
         selection
     });
 
+    // The window with the bar, as it opened (or the first that did).
+    let mut opened_home: Option<(usize, AnyWindowHandle)> = None;
     for (index, monitor) in layout.monitors.iter().enumerate() {
         let Some(image) = parts.get(index).cloned().flatten() else {
             continue;
@@ -271,7 +280,7 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
                 }
                 false
             });
-            cx.new(|cx| Overlay::new(shared, index, monitor, image, is_home, window, cx))
+            cx.new(|cx| Overlay::new(shared, index, monitor, image, window, cx))
         });
         match opened {
             Ok(handle) => {
@@ -283,18 +292,30 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
                 selection.update(cx, |selection, _| {
                     selection.overlays.push(handle);
                     selection.handles.extend(id);
+                    opened_home.get_or_insert((index, handle));
+                    if is_home {
+                        opened_home = Some((index, handle));
+                    }
                 });
-                if is_home {
-                    let _ = handle.update(cx, |_, window, _| window.activate_window());
-                }
             }
             Err(error) => eprintln!("selection {id}: a window was not opened: {error}"),
         }
     }
-    if selection.read(cx).overlays.is_empty() {
+    // The bar and the keyboard where the pointer is; on another monitor, when that one's window
+    // could not be opened (with no bar, nothing could be chosen but by pointing).
+    let Some((home, window)) = opened_home else {
         selection.update(cx, |selection, _| selection.up.store(false, Ordering::Release));
         return None;
-    }
+    };
+    selection.update(cx, |selection, cx| {
+        if selection.home != home {
+            eprintln!("selection {id}: the bar is on monitor {home}: that of the pointer did not open");
+            selection.home = home;
+            let pointer = selection.pointer;
+            selection.pointer_at(pointer, cx);
+        }
+    });
+    let _ = window.update(cx, |_, window, _| window.activate_window());
     cx.activate(true);
     take_window_pictures(&selection, own, home_scale, cx);
 
@@ -350,16 +371,16 @@ pub fn finish(selection: &Entity<Selection>, choice: Option<Choice>, cx: &mut Ap
         for &handle in &selection.handles {
             hwnd::hide(handle);
         }
-        Some(choice.and_then(|choice| selection.frame_of(&choice)))
+        Some(choice.and_then(|choice| selection.cut_of(&choice)))
     });
-    let Some(frame) = chosen else {
+    let Some(cut) = chosen else {
         return;
     };
     close(selection, cx);
     capture::ended(selection, cx);
     // (A choice all off the screen: the screen just comes down.)
-    if let Some(frame) = frame {
-        capture::deliver(frame, cx);
+    if let Some((source, area)) = cut {
+        capture::deliver(source, area, cx);
     }
 }
 
@@ -401,7 +422,6 @@ struct Overlay {
     on: Monitor,
     still: Arc<RenderImage>,
     focus: FocusHandle,
-    home: bool,
     drawn: bool,
     _observing: Subscription,
 }
@@ -415,23 +435,20 @@ impl Overlay {
         monitor: usize,
         on: Monitor,
         still: Arc<RenderImage>,
-        home: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let observing = cx.observe(&selection, |_, _, cx| cx.notify());
+        // Every window hears keys while it is the active one: at first the one the pointer started
+        // on, then whichever was clicked (as every page of the Tauri version listened).
         let focus = cx.focus_handle();
-        // Only the window the pointer started on hears keys.
-        if home {
-            focus.focus(window, cx);
-        }
+        focus.focus(window, cx);
         Self {
             selection,
             monitor,
             on,
             still,
             focus,
-            home,
             drawn: false,
             _observing: observing,
         }
@@ -455,10 +472,9 @@ impl Overlay {
 
     /// Whether this is over the bar, which keeps what happens on it to itself.
     fn over_bar(&self, position: gpui::Point<Pixels>, cx: &App) -> bool {
-        self.home
-            && self
-                .selection
-                .read(cx)
+        let selection = self.selection.read(cx);
+        selection.home == self.monitor
+            && selection
                 .bar
                 .drawn
                 .get()
@@ -548,19 +564,24 @@ impl Render for Overlay {
         let selection = self.selection.read(cx);
         let highlight = selection.session.highlight();
         let mode = selection.session.mode();
+        let home = selection.home == self.monitor;
 
         if !self.drawn {
             self.drawn = true;
-            // Seen once the still is drawn: never an empty window first.
+            // Seen once the still is on screen: never an empty window first. The first frame is
+            // drawn as the window opens and put on screen at the next; what is asked for at the
+            // next comes before that is done, so the window is shown at the one after.
             let (asked, id, monitor) = (selection.asked, selection.id, self.monitor);
             window.on_next_frame(move |window, _| {
-                if let Some(handle) = hwnd::of(window) {
-                    platform::set_cloaked(handle, false);
-                }
-                eprintln!(
-                    "selection {id}: monitor {monitor} shown {:.0} ms after the shortcut",
-                    asked.elapsed().as_secs_f64() * 1000.0
-                );
+                window.on_next_frame(move |window, _| {
+                    if let Some(handle) = hwnd::of(window) {
+                        platform::set_cloaked(handle, false);
+                    }
+                    eprintln!(
+                        "selection {id}: monitor {monitor} shown {:.0} ms after the shortcut",
+                        asked.elapsed().as_secs_f64() * 1000.0
+                    );
+                });
             });
         }
 
@@ -577,12 +598,9 @@ impl Render for Overlay {
             .overflow_hidden()
             .bg(gpui::black())
             .cursor(cursor)
-            .child(img(self.still.clone()).absolute().top_0().left_0().size_full());
-        if self.home {
-            root = root
-                .track_focus(&self.focus)
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.on_key(event, cx)));
-        }
+            .child(img(self.still.clone()).absolute().top_0().left_0().size_full())
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| this.on_key(event, cx)));
 
         match highlight {
             Some(highlight) => {
@@ -657,7 +675,7 @@ impl Render for Overlay {
             None => root = root.child(div().absolute().size_full().bg(shade)),
         }
 
-        if self.home {
+        if home {
             let windows = selection.session.windows();
             let listed = mode == Mode::Window;
             if selection.bar.sliding() || (listed && selection.list.moving(windows.len())) {
@@ -684,8 +702,8 @@ impl Render for Overlay {
             .contains(selection.pointer)
             .then(|| self.local(Rect::new(selection.pointer.x, selection.pointer.y, 1, 1), scale).origin);
         let crosshair = selection.crosshair;
-        let drawn = self.home.then(|| selection.bar.drawn.clone());
-        let cards = (self.home && mode == Mode::Window)
+        let drawn = home.then(|| selection.bar.drawn.clone());
+        let cards = (home && mode == Mode::Window)
             .then(|| (selection.list.room.clone(), selection.list.cards.clone()));
         root = root.child(
             canvas(

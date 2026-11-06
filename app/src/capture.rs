@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use std::path::PathBuf;
 
 use gpui::{App, Entity, Global};
-use perora_core::geometry::Point;
+use perora_core::geometry::{Point, Rect};
 use perora_core::language::Language;
 use perora_core::notice::Sound;
 use perora_core::platform::{self, Desktop, Frame, ScreenCapture, WindowId};
@@ -86,9 +86,11 @@ pub fn start(cx: &mut App) {
         }
         take(&own, start_mode != Mode::AllMonitors)
     });
-    // The GPU back while the screen is taken.
+    // The GPU back while the screen is taken (not for every monitor at once: no screen is put up).
     let attaching = Instant::now();
-    gpu::attach(cx);
+    if start_mode != Mode::AllMonitors {
+        gpu::attach(cx);
+    }
     let attached = attaching.elapsed();
 
     cx.spawn(async move |cx| {
@@ -165,6 +167,7 @@ fn arrived(
             let message = Perora::get(cx).language().capture_failed(&detail);
             eprintln!("{message}");
             come_back(cx);
+            gpu::release_soon(cx);
             notice::say(message, Lasting::Long, None, cx);
             return;
         }
@@ -172,7 +175,8 @@ fn arrived(
     // Every monitor is the one mode with nothing to choose: no screen for it.
     if start_mode == Mode::AllMonitors {
         come_back(cx);
-        deliver(Frame::clone(&taken.still), cx);
+        let area = taken.still.area;
+        deliver(taken.still, area, cx);
         return;
     }
     // Perora's own windows were left in the picture: out of the way now, under the selection
@@ -185,11 +189,15 @@ fn arrived(
         capturing.last_id += 1;
         capturing.last_id
     };
+    // (Let go of meanwhile, should the last window have closed just before the press: windows
+    // cannot be opened without it.)
+    gpu::attach(cx);
     match selection::open(id, taken, start_mode, asked, cx) {
         Some(selection) => cx.global_mut::<Capturing>().current = Some(selection),
         None => {
             eprintln!("selection {id}: no window could be opened");
             come_back(cx);
+            gpu::release_soon(cx);
         }
     }
 }
@@ -223,7 +231,7 @@ fn come_back(cx: &mut App) {
 /// goes as when the user chose to have no preview: to the clipboard (as copies are made: the kind of
 /// file, and how large at most), saved as well when the user has every capture saved, and one notice
 /// says what became of it. And the capture's sound, the moment there is a capture.
-pub fn deliver(frame: Frame, cx: &mut App) {
+pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     let perora = Perora::get(cx);
     let settings = perora.settings();
     let language = perora.language();
@@ -240,6 +248,11 @@ pub fn deliver(frame: Frame, cx: &mut App) {
     let saves = settings.save_on_capture;
     let working = cx.background_executor().spawn(async move {
         let started = Instant::now();
+        // (Somewhere on it: whoever chose it saw to that.)
+        let Some(frame) = source.crop(area) else {
+            return (Err("nothing was chosen".to_owned()), None);
+        };
+        drop(source);
         let copied = copying::to_clipboard(&frame, how).map(|_| ());
         let copying_took = started.elapsed();
         // (Saved meanwhile too, when it is: one notice says both, and a click on it shows the file.)

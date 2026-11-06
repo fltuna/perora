@@ -27,9 +27,13 @@ pub fn attach(cx: &mut App) {
         .detach();
 }
 
-/// Once no window is open.
+/// Once no window is open (and none is about to be: not while the screen is being taken for the
+/// selection screen).
 pub fn release(cx: &mut App) {
-    if !cx.windows().is_empty() || cx.graphical_environment().is_none() {
+    if !cx.windows().is_empty()
+        || cx.graphical_environment().is_none()
+        || crate::capture::busy(cx)
+    {
         return;
     }
     let task = cx.request_windowing(WindowingRequest::Headless);
@@ -45,12 +49,15 @@ pub fn release(cx: &mut App) {
 /// Lets the GPU go a while after the last window closes (not at once: a window often follows
 /// another, and the device takes a moment to make).
 pub fn release_after_windows(cx: &mut App) {
-    cx.on_window_closed(|cx, _| {
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(Duration::from_secs(3)).await;
-            cx.update(release);
-        })
-        .detach();
+    cx.on_window_closed(|cx, _| release_soon(cx)).detach();
+}
+
+/// Lets the GPU go in a while, when no window is open by then: also after it was made for a window
+/// that did not open.
+pub fn release_soon(cx: &mut App) {
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(Duration::from_secs(3)).await;
+        cx.update(release);
     })
     .detach();
 }
