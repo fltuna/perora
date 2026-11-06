@@ -2,7 +2,10 @@
 //! (cloaked: never seen, takes no input from the user), driven by a script of presses and keys sent
 //! to the window itself, and drawn into PNG files to look at. As `look.rs` does for the editor.
 //!
-//! `cargo run -p perora-app --profile fast --example look_main -- <script> <out-dir> [en|ja] [light|dark|system]`
+//! `cargo run -p perora-app --profile fast --example look_main -- <script> <out-dir> [en|ja] [light|dark|system] [reveal [WxH]]`
+//!
+//! With `reveal`, the screen that sets the part of the monitor that brings the mode bar back, over a
+//! made-up still, in a window of that size (1200x800 unless said: a monitor that is not 16:9).
 //!
 //! The settings are a file of their own in `<out-dir>` (made anew each run, with the language and
 //! the look asked for), never the user's; nothing reaches the system (`PERORA_DRY_SYSTEM`: no
@@ -70,10 +73,12 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Point,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px,
 };
-use perora_core::platform::{self, WindowId};
+use perora_core::geometry::Rect;
+use perora_core::platform::{self, Frame, WindowId};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use crate::main_window::MainWindow;
+use crate::main_window::area_screen::AreaScreen;
 use crate::state::Perora;
 
 /// As the application's `main.rs` has them (`tray.rs` sends these).
@@ -94,13 +99,12 @@ struct Kept {
 
 impl gpui::Global for Kept {}
 
-const WIDTH: u32 = 1200;
-const HEIGHT: u32 = 800;
+const SIZE: (u32, u32) = (1200, 800);
 
 fn main() {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let (Some(script), Some(out)) = (arguments.first(), arguments.get(1)) else {
-        eprintln!("look_main <script> <out-dir> [en|ja] [light|dark|system]");
+        eprintln!("look_main <script> <out-dir> [en|ja] [light|dark|system] [reveal [WxH]]");
         std::process::exit(2);
     };
     let script = std::fs::read_to_string(script).expect("the script can be read");
@@ -108,6 +112,12 @@ fn main() {
     std::fs::create_dir_all(&out).expect("the out directory can be made");
     let code = arguments.get(2).cloned().unwrap_or_else(|| "ja".into());
     let look = arguments.get(3).cloned().unwrap_or_else(|| "dark".into());
+    let reveal = arguments.get(4).is_some_and(|what| what == "reveal");
+    let (width, height) = arguments
+        .get(5)
+        .and_then(|size| size.split_once('x'))
+        .and_then(|(width, height)| Some((width.parse().ok()?, height.parse().ok()?)))
+        .unwrap_or(SIZE);
     // The settings are a file of their own beside the shots, made anew: not where the user's
     // Perora keeps them.
     let settings = out.join("settings.json");
@@ -115,9 +125,7 @@ fn main() {
         &settings,
         // (With a setting of a version to come: what the file holds that this one does not know is
         // to be kept as it is.)
-        format!(
-            "{{\"language\": \"{code}\", \"theme\": \"{look}\", \"aSettingToCome\": [1, 2]}}"
-        ),
+        format!("{{\"language\": \"{code}\", \"theme\": \"{look}\", \"aSettingToCome\": [1, 2]}}"),
     )
     .expect("the settings can be written");
     // SAFETY: nothing else runs yet to read the environment meanwhile.
@@ -143,7 +151,7 @@ fn main() {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(gpui::Bounds::new(
                 point(px(0.0), px(0.0)),
-                gpui::size(px(WIDTH as f32), px(HEIGHT as f32)),
+                gpui::size(px(width as f32), px(height as f32)),
             ))),
             titlebar: None,
             focus: false,
@@ -156,20 +164,34 @@ fn main() {
             ..Default::default()
         };
         let mut handle = None;
-        let window = cx
-            .open_window(options, |window, cx| {
-                handle = of(window);
-                if let Some(handle) = handle {
-                    platform::set_cloaked(handle, true);
-                    platform::without_transitions(handle);
-                }
+        let mut hidden = |window: &mut gpui::Window| {
+            handle = of(window);
+            if let Some(handle) = handle {
+                platform::set_cloaked(handle, true);
+                platform::without_transitions(handle);
+            }
+        };
+        let window: AnyWindowHandle = if reveal {
+            let still = selection::drawable(test_frame(width * 2, height * 2)).expect("a still");
+            let zone = Perora::get(cx).settings().bar_reveal_area;
+            cx.open_window(options, |window, cx| {
+                hidden(window);
+                cx.new(|cx| AreaScreen::new(still, zone, cx))
+            })
+            .expect("the window opens")
+            .into()
+        } else {
+            cx.open_window(options, |window, cx| {
+                hidden(window);
                 cx.new(|cx| MainWindow::new(window, cx))
             })
-            .expect("the window opens");
+            .expect("the window opens")
+            .into()
+        };
         let handle = handle.expect("the window has a handle");
-        let any: AnyWindowHandle = window.into();
+        let any = window;
         let (script, out) = (script.clone(), out.clone());
-        cx.spawn(async move |cx| play(script, out, any, handle, cx).await)
+        cx.spawn(async move |cx| play(script, out, any, handle, (width, height), cx).await)
             .detach();
     });
 }
@@ -179,6 +201,7 @@ async fn play(
     out: PathBuf,
     any: AnyWindowHandle,
     handle: WindowId,
+    (width, height): (u32, u32),
     cx: &mut gpui::AsyncApp,
 ) {
     let scale = any
@@ -186,8 +209,8 @@ async fn play(
         .unwrap_or(1.0);
     let (across, down) = sized(
         handle,
-        (WIDTH as f32 * scale) as u32,
-        (HEIGHT as f32 * scale) as u32,
+        (width as f32 * scale) as u32,
+        (height as f32 * scale) as u32,
     );
     eprintln!("look_main: the window is {across}x{down} at {scale}");
     let mut held = None::<MouseButton>;
@@ -458,5 +481,30 @@ fn sized(window: WindowId, across: u32, down: u32) -> (u32, u32) {
             (inside.right - inside.left).max(1) as u32,
             (inside.bottom - inside.top).max(1) as u32,
         )
+    }
+}
+
+/// A still to set the part over: soft colours across, darker down, and a grid every 120 pixels.
+fn test_frame(width: u32, height: u32) -> Frame {
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        for x in 0..width {
+            let grid = x % 120 < 2 || y % 120 < 2;
+            let light = 1.0 - y as f32 / height as f32 * 0.5;
+            let (r, g, b) = if grid {
+                (230.0, 230.0, 230.0)
+            } else {
+                (
+                    90.0 + 100.0 * x as f32 / width as f32,
+                    120.0,
+                    190.0 - 90.0 * x as f32 / width as f32,
+                )
+            };
+            rgba.extend_from_slice(&[(r * light) as u8, (g * light) as u8, (b * light) as u8, 255]);
+        }
+    }
+    Frame {
+        area: Rect::new(0, 0, width, height),
+        rgba,
     }
 }

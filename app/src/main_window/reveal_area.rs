@@ -3,7 +3,7 @@
 //! own over the whole monitor, as a capture is (owner, 2026-11-02: 「設定ボタン押したらキャプチャ画面
 //! みたいなのが出てくるイメージ！」).
 
-use gpui::{App, Hsla, IntoElement, ParentElement, Styled, div, px, rgb, rgba};
+use gpui::{Hsla, IntoElement, ParentElement, Styled, div, px, rgb, rgba};
 use perora_core::language::Language;
 use perora_core::settings::Zone;
 use perora_ui::{Button, Theme};
@@ -78,7 +78,7 @@ pub fn preview(zone: Zone, language: &Language, theme: &Theme) -> impl IntoEleme
                 .gap(px(8.0))
                 .child(
                     Button::new("barRevealAreaEdit", t("main.capture.barRevealAreaEdit"))
-                        .on_click(|_, cx| edit(cx)),
+                        .on_click(|_, cx| super::area_screen::edit(cx)),
                 )
                 .child(
                     Button::new("barRevealAreaReset", t("main.capture.barRevealAreaReset"))
@@ -87,10 +87,4 @@ pub fn preview(zone: Zone, language: &Language, theme: &Theme) -> impl IntoEleme
                         }),
                 ),
         )
-}
-
-/// The screen that sets the part, over the monitor the main window is on.
-pub fn edit(cx: &mut App) {
-    let _ = cx;
-    eprintln!("the screen for the bar's area: not yet");
 }

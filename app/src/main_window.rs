@@ -7,10 +7,12 @@
 
 // (Each part has its path said: `examples/look_main.rs` takes this file in by its path, and a file
 // taken in so looks for its parts beside itself.)
+#[path = "main_window/area_screen.rs"]
+pub mod area_screen;
 #[path = "main_window/pages.rs"]
 mod pages;
 #[path = "main_window/reveal_area.rs"]
-pub mod reveal_area;
+mod reveal_area;
 #[path = "main_window/rows.rs"]
 mod rows;
 #[path = "main_window/shortcut_page.rs"]
