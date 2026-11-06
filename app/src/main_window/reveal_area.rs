@@ -78,7 +78,8 @@ pub fn preview(zone: Zone, language: &Language, theme: &Theme) -> impl IntoEleme
                 .gap(px(8.0))
                 .child(
                     Button::new("barRevealAreaEdit", t("main.capture.barRevealAreaEdit"))
-                        .on_click(|_, cx| super::area_screen::edit(cx)),
+                        // (Once the main window's own update is over: it steps aside for the screen.)
+                        .on_click(|_, cx| cx.defer(super::area_screen::edit)),
                 )
                 .child(
                     Button::new("barRevealAreaReset", t("main.capture.barRevealAreaReset"))

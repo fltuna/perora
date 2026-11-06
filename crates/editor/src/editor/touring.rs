@@ -122,6 +122,24 @@ impl Editor {
         .detach();
     }
 
+    /// The language changed: what the editor says, in the new one (the tour too, on the step it is
+    /// on).
+    pub fn set_language(
+        &mut self,
+        language: perora_core::language::Language,
+        cx: &mut Context<Self>,
+    ) {
+        self.language = language;
+        if self.touring.is_some() {
+            let (steps, showing) = self.tour_steps();
+            if let Some(touring) = self.touring.as_mut() {
+                touring.tour.set_steps(steps);
+                touring.showing = showing;
+            }
+        }
+        cx.notify();
+    }
+
     /// Whether the tour is on: nothing else hears the keys or the pointer meanwhile.
     pub fn touring(&self) -> bool {
         self.touring.is_some()

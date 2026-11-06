@@ -48,6 +48,18 @@ pub fn never_active(window: WindowId) {
 }
 
 /// Back on screen, as it was.
+/// Shown, without being made the window in front.
+pub fn show_behind(window: WindowId) {
+    unsafe {
+        let _ = ShowWindow(hwnd(window), windows::Win32::UI::WindowsAndMessaging::SW_SHOWNA);
+    }
+}
+
+/// Whether it is the window in front (the one with the keyboard).
+pub fn in_front(window: WindowId) -> bool {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd(window) }
+}
+
 pub fn show(window: WindowId) {
     unsafe {
         let _ = ShowWindow(hwnd(window), SW_SHOW);

@@ -74,6 +74,13 @@ pub fn open_clipboard(cx: &mut App) {
         {
             return OnClipboard::File(file);
         }
+        // (Not one larger than is opened: its header says how large it is, and a picture that large
+        // is not made at all.)
+        if let Some((width, height)) = platform::clipboard_picture_size()
+            && too_large(width, height)
+        {
+            return OnClipboard::TooLarge(width, height);
+        }
         // Another program may have the clipboard for a moment: asked again a few times, not told
         // that there is nothing there.
         let mut asked = 0;

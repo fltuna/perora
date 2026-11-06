@@ -340,6 +340,13 @@ pub fn restart_shell() -> std::result::Result<(), String> {
     windows::hotkeys::restart_shell()
 }
 
+/// How large the picture on the clipboard says it is (across, down), from its header alone: before
+/// anything is made of it. `None` when there is none, or its header cannot be read.
+#[cfg(windows)]
+pub fn clipboard_picture_size() -> Option<(u32, u32)> {
+    windows::clipboard::picture_size()
+}
+
 /// The letter key (A to Z) held down now, by its place on the keyboard (as the US layout names it),
 /// when one is: what a key with Ctrl means, whatever letter the user's layout has there.
 #[cfg(windows)]

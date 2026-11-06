@@ -217,7 +217,7 @@ pub fn present(shown: Shown, cx: &mut App) {
 pub fn restore(cx: &mut App) {
     if cx.default_global::<Previews>().pending.is_none() {
         if large::awaiting(cx) && !capture::busy(cx) {
-            large::await_image(cx);
+            large::await_again(cx);
         }
         return;
     }
@@ -558,6 +558,17 @@ fn leave_to_its_time(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The language changed: what the small window says, in the new one.
+pub fn relanguage(cx: &mut App) {
+    let language = Perora::get(cx).language();
+    if let Some(window) = cx.default_global::<Previews>().window {
+        let _ = window.update(cx, |small, _, cx| {
+            small.language = language;
+            cx.notify();
+        });
+    }
 }
 
 /// Throws the capture away and closes the window: `id` when it is still the one previewed, whichever
@@ -1360,13 +1371,13 @@ impl Render for Small {
                 let _ = this.update(cx, |small, cx| small.tour_button(button, cx));
             })
         });
-        // (Showing where it appears, nothing in it is pressed.)
-        let root = root.when(sampling, |root| {
-            root.child(div().id("sample").absolute().inset_0().occlude())
-        });
         root.child(picture)
             .child(status)
             .child(actions)
+            // (Showing where it appears, nothing in it is pressed: a cover over all of it.)
+            .when(sampling, |root| {
+                root.child(div().id("sample").absolute().inset_0().occlude())
+            })
             .children(tour.map(|tour| gpui::deferred(tour).with_priority(3)))
     }
 }

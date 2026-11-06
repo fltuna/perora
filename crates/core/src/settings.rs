@@ -714,6 +714,8 @@ pub fn read(path: &Path) -> Settings {
 
 /// `None` for what is not a JSON object at all.
 pub fn parse(bytes: &[u8]) -> Option<Settings> {
+    // (A file saved by hand with the mark some editors put first is read all the same.)
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
     serde_json::from_slice(bytes).ok().map(Settings::from_file)
 }
 
@@ -776,6 +778,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         directory.join("settings.json")
+    }
+
+    #[test]
+    fn a_file_saved_with_the_mark_first_is_read() {
+        let settings = parse(b"\xEF\xBB\xBF{\"theme\": \"dark\"}").unwrap();
+        assert_eq!(settings.look, Look::Dark);
     }
 
     #[test]

@@ -49,6 +49,12 @@ struct Large {
     /// The window was asked for with no capture in it, and waits for an image: it comes back so
     /// after a capture that came to nothing.
     awaiting: bool,
+    /// Waiting so, it was put out of the way of a capture while on screen: whether it was the
+    /// window in front then (it comes back as it was).
+    put_aside: Option<bool>,
+    /// What the window puts beside the editor: what is said in the user's language.
+    actions: Option<Entity<Actions>>,
+    status: Option<Entity<Status>>,
     /// The tour of the window was seen since Perora started (before the settings say so).
     toured: bool,
     _subscription: Option<Subscription>,
@@ -131,6 +137,57 @@ pub fn awaiting(cx: &mut App) -> bool {
     cx.default_global::<Large>().awaiting
 }
 
+/// After a capture that came to nothing: the window that waits for an image is back where it was
+/// put out of the way, in front only if it was in front (not over a game the capture was taken
+/// from). Not when it was not on screen.
+pub fn await_again(cx: &mut App) {
+    let large = cx.default_global::<Large>();
+    let Some(in_front) = large.put_aside.take() else {
+        return;
+    };
+    if !large.awaiting {
+        return;
+    }
+    let Some(window) = large.window else {
+        return;
+    };
+    let _ = window.update(cx, |editor, window, cx| {
+        let Some(handle) = hwnd::of(window) else {
+            return;
+        };
+        platform::set_cloaked(handle, false);
+        if in_front {
+            hwnd::show(handle);
+            window.activate_window();
+            window.focus(&editor.focus_handle(cx), cx);
+        } else {
+            hwnd::show_behind(handle);
+        }
+    });
+}
+
+/// The language changed: what the window says, in the new one.
+pub fn relanguage(cx: &mut App) {
+    let language = Perora::get(cx).language();
+    let large = cx.default_global::<Large>();
+    let (window, actions, status) = (large.window, large.actions.clone(), large.status.clone());
+    if let Some(actions) = actions {
+        actions.update(cx, |actions, cx| {
+            actions.language = language.clone();
+            cx.notify();
+        });
+    }
+    if let Some(status) = status {
+        status.update(cx, |status, cx| {
+            status.language = language.clone();
+            cx.notify();
+        });
+    }
+    if let Some(window) = window {
+        let _ = window.update(cx, |editor, _, cx| editor.set_language(language, cx));
+    }
+}
+
 /// The window with the capture (or with none, waiting for an image), opened when it is not, and in
 /// front.
 fn open(capture: Option<Capture>, cx: &mut App) {
@@ -171,6 +228,7 @@ fn open(capture: Option<Capture>, cx: &mut App) {
         window_min_size: Some(size(px(SIZE.0), px(SIZE.1))),
         ..Default::default()
     };
+    let mut parts = None;
     let opened = cx.open_window(options, |window, cx| {
         // Closed (its button, Alt+F4): thrown away, as the bin does. (Waiting for an image: closed.)
         window.on_window_should_close(cx, |_, cx| {
@@ -195,6 +253,7 @@ fn open(capture: Option<Capture>, cx: &mut App) {
         });
         let actions = cx.new(|cx| Actions::new(language.clone(), &editor, cx));
         let status = cx.new(|cx| Status::new(language.clone(), &editor, cx));
+        parts = Some((actions.clone(), status.clone()));
         editor.update(cx, |editor, _| {
             editor.top_right = Some(actions.into());
             editor.below = Some(status.into());
@@ -220,6 +279,10 @@ fn open(capture: Option<Capture>, cx: &mut App) {
             let large = cx.default_global::<Large>();
             large.window = Some(window);
             large._subscription = subscription;
+            if let Some((actions, status)) = parts {
+                large.actions = Some(actions);
+                large.status = Some(status);
+            }
         }
         Err(error) => eprintln!("the large window could not be opened: {error}"),
     }
@@ -316,6 +379,9 @@ pub fn close(cx: &mut App) {
     let large = cx.default_global::<Large>();
     large.showing += 1;
     large.awaiting = false;
+    large.put_aside = None;
+    large.actions = None;
+    large.status = None;
     large._subscription = None;
     let Some(window) = large.window.take() else {
         return;
@@ -349,6 +415,10 @@ pub fn hide(cx: &mut App) -> bool {
     let Some(handle) = handle.filter(|&handle| hwnd::on_screen(handle)) else {
         return false;
     };
+    let large = cx.default_global::<Large>();
+    if large.awaiting {
+        large.put_aside = Some(hwnd::in_front(handle));
+    }
     platform::set_cloaked(handle, true);
     hwnd::hide(handle);
     cx.spawn(async move |cx| {

@@ -14,9 +14,12 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+};
 use windows::core::w;
 
 use crate::platform::Frame;
@@ -117,6 +120,59 @@ pub fn clear_if(written: u32) -> Result<bool, String> {
     };
     let _ = unsafe { CloseClipboard() };
     emptied
+}
+
+/// How large the picture on the clipboard says it is (across, down), as it would be read: the PNG,
+/// when there is one, otherwise the bitmap. Read from its header alone, before anything is made of
+/// it: a header can claim a picture far larger than anything that should be made. `None` when there
+/// is no picture, or its header cannot be read.
+pub fn picture_size() -> Option<(u32, u32)> {
+    open().ok()?;
+    let png = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    let size = unsafe {
+        if png != 0 && IsClipboardFormatAvailable(png).is_ok() {
+            header(png, 24).and_then(|bytes| {
+                // (The signature, the length and name of the first chunk, then its width and height.)
+                (&bytes[12..16] == b"IHDR").then(|| {
+                    (
+                        u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]),
+                        u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]),
+                    )
+                })
+            })
+        } else if IsClipboardFormatAvailable(BITMAP).is_ok() {
+            header(BITMAP, 12).map(|bytes| {
+                // (The header's own size, then its width and height; upwards when the height is
+                // less than nothing.)
+                let across = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+                let down = i32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+                (across.unsigned_abs(), down.unsigned_abs())
+            })
+        } else {
+            None
+        }
+    };
+    let _ = unsafe { CloseClipboard() };
+    size
+}
+
+/// The first bytes of what is on the clipboard under that format (the clipboard had): `None` when
+/// there are not that many.
+unsafe fn header(format: u32, length: usize) -> Option<Vec<u8>> {
+    unsafe {
+        let data = GetClipboardData(format).ok()?;
+        let memory = HGLOBAL(data.0);
+        if GlobalSize(memory) < length {
+            return None;
+        }
+        let at = GlobalLock(memory) as *const u8;
+        if at.is_null() {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(at, length).to_vec();
+        let _ = GlobalUnlock(memory);
+        Some(bytes)
+    }
 }
 
 /// Has the clipboard, asking again for a moment while another program has it.

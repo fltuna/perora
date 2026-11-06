@@ -281,7 +281,8 @@ pub fn page(
             )
             .into_any_element(),
         ),
-        None if !registered => page.push(
+        // (While recording, it is let go of on purpose: not taken by anything.)
+        None if !registered && !recording => page.push(
             notice(
                 language.text("main.home.shortcutTaken", &[("shortcut", &shown)]),
                 true,

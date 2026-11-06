@@ -421,8 +421,14 @@ impl Editor {
         let Some(typing) = self.typing.as_mut() else {
             return Keyed::NotMine;
         };
-        let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
+        // (With Ctrl, a letter by its place on the keyboard: Ctrl+V is Ctrl+V on any layout.)
+        let lettered = if modifiers.control {
+            super::letter_of(&event.keystroke.key)
+        } else {
+            event.keystroke.key.clone()
+        };
+        let key = lettered.as_str();
         let alone = !modifiers.control && !modifiers.alt && !modifiers.platform;
         // (Keys the system's input is putting letters together with are its own.)
         if typing.marked.is_some() {

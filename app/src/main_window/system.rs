@@ -82,6 +82,11 @@ pub fn set_language(code: &str, cx: &mut App) {
     }
     Perora::get(cx).change(|settings| settings.language = Some(code.to_owned()));
     relabel(cx);
+    // (The editor and the small preview say what they say in it from now on too.)
+    if !dry() {
+        crate::large::relanguage(cx);
+        crate::preview::relanguage(cx);
+    }
     // (Explorer's "Open with Perora" says it in the user's language too.)
     explorer_entry(cx);
     changed(cx);
@@ -432,7 +437,11 @@ pub fn suspend_shortcut(suspended: bool, cx: &mut App) {
     {
         cx.global_mut::<Perora>().claimed = claimed;
     }
-    relabel(cx);
+    // (Let go of to record another, it is not taken by anything: the tray says it as it was until
+    // the recording is over.)
+    if !suspended {
+        relabel(cx);
+    }
     changed(cx);
 }
 
@@ -499,7 +508,9 @@ pub fn capture(cx: &mut App) {
         eprintln!("dry: a capture would start");
         return;
     }
-    crate::capture::start(cx);
+    // (Once the main window's own update is over: pressed from it, the window is being updated, and
+    // could not be stepped aside for the capture.)
+    cx.defer(crate::capture::start);
 }
 
 /// The editor: with the image that is previewed when there is one, otherwise empty.
