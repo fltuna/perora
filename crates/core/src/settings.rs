@@ -682,8 +682,12 @@ pub fn cache_directory() -> Option<PathBuf> {
     Some(dirs::cache_dir()?.join(IDENTIFIER))
 }
 
-/// Where the settings are written: `settings.json` in [`config_directory`].
+/// Where the settings are written: `settings.json` in [`config_directory`]. (`PERORA_SETTINGS`
+/// names another file: for trying the windows that change them without changing the user's.)
 pub fn settings_path() -> Option<PathBuf> {
+    if let Some(elsewhere) = std::env::var_os("PERORA_SETTINGS") {
+        return Some(PathBuf::from(elsewhere));
+    }
     Some(config_directory()?.join("settings.json"))
 }
 
