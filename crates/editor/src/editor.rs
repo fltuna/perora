@@ -13,6 +13,7 @@ mod cropping;
 mod hiding;
 mod lettering;
 mod panels;
+mod turning;
 mod typing;
 
 use std::cell::{Cell, RefCell};
@@ -139,6 +140,10 @@ pub struct Editor {
     selected: Vec<usize>,
     /// The pointer over a hold of the one selected: the way it is pulled there.
     pointing: Option<CursorStyle>,
+    /// The other button of the mouse (the wheel with it held, pressed twice), and the settings put
+    /// where the pointer was.
+    turning: turning::Turning,
+    afloat: Option<Point<Pixels>>,
     /// What was copied of the drawing (this capture's only), and how closely the picture was last
     /// looked at (pixels of the screen to one of the image).
     copied: copying::Copied,
@@ -229,6 +234,8 @@ impl Editor {
             grabbing: false,
             selected: Vec::new(),
             pointing: None,
+            turning: Default::default(),
+            afloat: None,
             copied: Default::default(),
             scale: Rc::new(Cell::new(1.0)),
             frame: None,
@@ -276,6 +283,7 @@ impl Editor {
             typing::first_writing(unit(capture.picture.width, capture.picture.height), font);
         self.typing = None;
         self.copied = Default::default();
+        self.afloat = None;
         self.capture = Some(capture);
         self.drawing = Drawing::default();
         self.shown = Rc::new(Vec::new());
@@ -487,11 +495,21 @@ impl Editor {
             cx.notify();
             return;
         }
+        if event.button == MouseButton::Right {
+            let over = self
+                .press(event.position, event.modifiers, window)
+                .zip(self.view())
+                .is_some_and(|(press, view)| view.contains(press.at));
+            self.right_pressed(event, over, cx);
+            return;
+        }
         if event.button != MouseButton::Left {
             return;
         }
-        // (The picture is pressed on: the bar of the tool, there since its button was pressed, goes.)
+        // (The picture is pressed on: the bar of the tool, there since its button was pressed, goes;
+        // and the settings put where the pointer was.)
         self.shut = true;
+        self.afloat = None;
         let Some(press) = self.press(event.position, event.modifiers, window) else {
             return;
         };
@@ -658,6 +676,7 @@ impl Editor {
     }
 
     fn moved(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.turning_moved(event.position, event.pressed_button, cx);
         // The button was let go where the window did not hear it (another window took the mouse):
         // what it was doing ends there.
         if self.gesture.is_some() && event.pressed_button.is_none() {
@@ -768,6 +787,9 @@ impl Editor {
     }
 
     fn up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if event.button == MouseButton::Right {
+            self.right_let_go(cx);
+        }
         if event.button == MouseButton::Left
             && let Some(typing) = self.typing.as_mut()
             && (typing.carrying.is_some() || typing.selecting)
@@ -881,6 +903,10 @@ impl Editor {
     }
 
     fn wheel(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // (With the other button held, the wheel goes through the tools: it does not look closer.)
+        if self.turned(event, cx) {
+            return;
+        }
         if self.frozen || self.gesture.is_some() {
             return;
         }
@@ -1037,7 +1063,11 @@ impl Editor {
         }
         if kind == self.tool && self.offered().is_some() {
             self.asked = None;
-            self.shut = !self.shut;
+            // (Not while the settings are where the pointer was: those are there, the bar stays
+            // away.)
+            if self.afloat.is_none() {
+                self.shut = !self.shut;
+            }
             cx.notify();
             return;
         }
@@ -1084,6 +1114,14 @@ impl Editor {
         }
         if self.panel().is_some() {
             self.asked = None;
+            if self.offered().is_none() {
+                self.afloat = None;
+            }
+            cx.notify();
+            return;
+        }
+        if self.afloat.is_some() {
+            self.afloat = None;
             cx.notify();
             return;
         }
@@ -1707,6 +1745,7 @@ impl Render for Editor {
         let theme = Theme::get(cx).clone();
         let tools = self.tools_bar(&theme, cx);
         let second = self.second_bar(&theme, window, cx);
+        let turned = self.turned_view(&theme, window, cx);
         let lettering = self.lettering_box(&theme, window, cx);
         let panel = self.panel_view(&theme, window, cx);
         let stage = self.stage(cx);
@@ -1753,6 +1792,7 @@ impl Render for Editor {
                     .child(zoom),
             )
             .children(second)
+            .children(turned)
             .children(lettering)
             .children(panel)
     }

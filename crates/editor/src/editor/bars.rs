@@ -221,7 +221,11 @@ impl Editor {
 
     /// The second bar that is there.
     pub(super) fn second(&self) -> Option<Offered> {
-        if self.shut { None } else { self.offered() }
+        if self.shut && self.afloat.is_none() {
+            None
+        } else {
+            self.offered()
+        }
     }
 
     /// Whether a shape's inside can be set: of a shape (not of a line).
@@ -264,6 +268,20 @@ impl Editor {
         }
         if self.tool != tool || chosen != was {
             self.asked = None;
+            // (Another shape, or the other way to hide, keeps the settings where they are: the bar
+            // of the same tools.)
+            let group = |kind: Kind| {
+                if kind.is_figure() {
+                    Kind::Rectangle
+                } else if kind.is_hider() {
+                    Kind::Blur
+                } else {
+                    kind
+                }
+            };
+            if group(self.tool) != group(tool) || chosen != was {
+                self.afloat = None;
+            }
         }
         self.was = (self.tool, chosen);
     }

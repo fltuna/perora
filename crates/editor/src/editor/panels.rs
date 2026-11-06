@@ -683,6 +683,14 @@ impl Editor {
                     ));
             }
         }
+        // Where the pointer was, when it was asked for there.
+        if let Some(at) = self.afloat {
+            return Some(
+                deferred(super::turning::afloat_bar(at, coming(bar, share)))
+                    .with_priority(1)
+                    .into_any_element(),
+            );
+        }
         // Over the top of the picture, under the first bar; no room is made for it (owner: 「押した
         // ときに下にpadding作られるの消してほしいー」).
         Some(
@@ -766,7 +774,17 @@ impl Editor {
             | Panel::Ratio => 0,
         };
         let letters = self.letters_now();
-        let (at, up, wide) = if panel.of_letters() {
+        // (The panel of the pen or the marker where the pointer was, when it was asked for there.)
+        let afloat = self
+            .afloat
+            .filter(|_| matches!(panel, Panel::Pen | Panel::Marker));
+        let (at, up, wide) = if let Some(afloat) = afloat {
+            (
+                point(afloat.x - px(PANEL / 2.0), afloat.y + px(8.0)),
+                false,
+                PANEL,
+            )
+        } else if panel.of_letters() {
             // Away from what is written, where there is room for it that way; the other way where
             // there is more room.
             let needed = match panel {
@@ -1139,6 +1157,9 @@ impl Editor {
                             .is_some_and(|bounds| bounds.contains(&event.position));
                         if !on_opener && this.asked == Some(panel) {
                             this.asked = None;
+                            if this.offered().is_none() {
+                                this.afloat = None;
+                            }
                             cx.notify();
                         }
                     }))
@@ -1222,6 +1243,10 @@ impl Editor {
                             disc.on_click(cx.listener(move |this, _, _, cx| {
                                 pick(this, colour, cx);
                                 this.asked = None;
+                                // (The panel of the pen where the pointer was goes with it.)
+                                if this.offered().is_none() {
+                                    this.afloat = None;
+                                }
                                 cx.notify();
                             }))
                         })
