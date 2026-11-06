@@ -21,13 +21,16 @@ use perora_core::{copying, saving};
 use crate::notice::{self, Lasting};
 use crate::selection::{self, Selection, Taken};
 use crate::state::Perora;
-use crate::{corner, gpu, main_window, preview};
+use crate::{corner, gpu, large, main_window, preview};
 
 /// How long a window that was just hidden may still be on screen: the compositor draws the next
 /// frame without it only after a moment. The main window and the notice (as in the Tauri version),
 /// and the selection screen taken away for the next.
 const SETTLE_MAIN: Duration = Duration::from_millis(60);
 const SETTLE: Duration = Duration::from_millis(40);
+/// How long the question over what is drawn takes to be gone from the screen (it fades out as it
+/// closes, as windows do) before the screen is taken.
+const ASKED_GONE: Duration = Duration::from_millis(250);
 
 #[derive(Default)]
 pub struct Capturing {
@@ -44,6 +47,37 @@ impl Global for Capturing {}
 
 /// Takes the screen and puts the selection screen over it.
 pub fn start(cx: &mut App) {
+    if cx.default_global::<Capturing>().busy {
+        return;
+    }
+    // A capture that goes to the preview takes the place of the image there: when something is
+    // drawn on that, the user says first whether that is what they want (owner, 2026-11-02: 「撮影
+    // 入る前に出そうか」). Not when the capture goes elsewhere (only copied), nor while the selection
+    // screen is up (agreed to already, and the question would be behind it).
+    let to_preview = Perora::get(cx).settings().after_capture != After::Copy;
+    let selecting = cx.global::<Capturing>().current.is_some();
+    if to_preview && !selecting && let Some(answer) = large::ask_over_drawing(cx) {
+        cx.global_mut::<Capturing>().busy = true;
+        cx.spawn(async move |cx| {
+            let go = answer.await == Some(0);
+            if go {
+                cx.background_executor().timer(ASKED_GONE).await;
+            }
+            cx.update(|cx| {
+                cx.global_mut::<Capturing>().busy = false;
+                if go {
+                    start_now(cx);
+                }
+            });
+        })
+        .detach();
+        return;
+    }
+    start_now(cx);
+}
+
+/// The capture is taken (asked about first when that was needed).
+fn start_now(cx: &mut App) {
     let asked = Instant::now();
     let capturing = cx.default_global::<Capturing>();
     if capturing.busy {

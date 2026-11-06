@@ -769,7 +769,7 @@ pub fn copy(id: u64, cx: &mut App) {
 
 /// The user chose what the capture leaves as this once, one way: remembered for it (and something
 /// was done about it: it is not given up on its own after that).
-fn choose(id: u64, leaves: Leaves, chosen: impl FnOnce(&mut Once), cx: &mut App) {
+pub(crate) fn choose(id: u64, leaves: Leaves, chosen: impl FnOnce(&mut Once), cx: &mut App) {
     if let Some(pending) = cx
         .default_global::<Previews>()
         .pending
@@ -783,7 +783,7 @@ fn choose(id: u64, leaves: Leaves, chosen: impl FnOnce(&mut Once), cx: &mut App)
 }
 
 /// Something is being done about the capture (a choice was opened): it is not given up on its own.
-fn touch(id: u64, cx: &mut App) {
+pub(crate) fn touch(id: u64, cx: &mut App) {
     if let Some(pending) = cx
         .default_global::<Previews>()
         .pending
@@ -997,6 +997,17 @@ fn leaves_as_said(language: &Language, settings: &Settings, once: &Once, leaves:
         let within = language.text("main.output.fit.within", &[("side", &fit.to_string())]);
         format!("{kinds}, {within}")
     }
+}
+
+/// What the capture `id` leaves as, one way, as `leaves_as` says (while it is the one previewed).
+pub(crate) fn leaves_now(id: u64, leaves: Leaves, cx: &mut App) -> Option<(Format, Vec<Format>, u32)> {
+    let settings = Perora::get(cx).settings();
+    let pending = cx
+        .default_global::<Previews>()
+        .pending
+        .as_ref()
+        .filter(|pending| pending.id == id)?;
+    Some(leaves_as(&settings, pending.once.of(leaves), leaves))
 }
 
 /// What the capture leaves as, one way: what was chosen this once, or what the settings say. (The

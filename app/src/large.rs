@@ -12,15 +12,17 @@
 
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Bounds, Context, CursorStyle, Entity, Focusable, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
-    div, px, size,
+    KeyDownEvent, MouseButton, MouseDownEvent, deferred, div, point, px, size,
 };
+use perora_core::output::{FITS, Format};
+use perora_core::settings::Leaves;
 use perora_core::edit::Edit;
 use perora_core::language::Language;
 use perora_core::platform::{self, Frame, WindowId};
@@ -103,6 +105,7 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
             editor.set_default_hider(hider);
             editor.show(capture, cx);
             if let Some(handle) = hwnd::of(window) {
+                fade_in(handle, cx);
                 platform::set_cloaked(handle, false);
                 hwnd::show(handle);
             }
@@ -143,6 +146,9 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
             editor.below = Some(status.into());
         });
         window.focus(&editor.focus_handle(cx), cx);
+        if let Some(handle) = hwnd::of(window) {
+            fade_in(handle, cx);
+        }
         // In front: opened from a click on the small window (which never takes the keyboard), Perora
         // is not the application in front, and the system opens a new window behind it unless asked
         // to bring it forward (GPUI's activation sees to that).
@@ -161,6 +167,26 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
         }
         Err(error) => eprintln!("the large window could not be opened: {error}"),
     }
+}
+
+/// How the window comes in: faded in (0.16 s, in 12 steps), as the Tauri version's did. Not for a
+/// user who has the system move nothing.
+const FADE: Duration = Duration::from_millis(160);
+const FADE_STEPS: u32 = 12;
+
+fn fade_in(handle: WindowId, cx: &mut App) {
+    if !platform::animations_enabled() {
+        return;
+    }
+    platform::set_opacity(handle, Some(0));
+    cx.spawn(async move |cx| {
+        for step in 1..=FADE_STEPS {
+            cx.background_executor().timer(FADE / FADE_STEPS).await;
+            platform::set_opacity(handle, Some((255 * step / FADE_STEPS) as u8));
+        }
+        platform::set_opacity(handle, None);
+    })
+    .detach();
 }
 
 /// What the editor asks of the window.
@@ -244,6 +270,34 @@ pub fn drawing_of(id: u64, cx: &mut App) -> Option<Vec<Edit>> {
         })
         .ok()
         .flatten()
+}
+
+/// When something is drawn in the window: asks whether it may be given up for a new capture (going
+/// ahead is the first answer). None when nothing is drawn (or there is no window).
+pub fn ask_over_drawing(cx: &mut App) -> Option<impl std::future::Future<Output = Option<usize>> + use<>> {
+    let window = cx.default_global::<Large>().window?;
+    let language = Perora::get(cx).language();
+    let drawn = window
+        .read_with(cx, |editor, _| !editor.edits().is_empty())
+        .unwrap_or(false);
+    if !drawn {
+        return None;
+    }
+    window
+        .update(cx, |_, window, cx| {
+            window.prompt(
+                gpui::PromptLevel::Warning,
+                &language.capture_over_drawing(),
+                None,
+                &[
+                    gpui::PromptButton::ok(language.capture_anyway()),
+                    gpui::PromptButton::cancel(language.keep_drawing()),
+                ],
+                cx,
+            )
+        })
+        .ok()
+        .map(|answer| async move { answer.await.ok() })
 }
 
 /// Before the capture leaves from the window: what is being written in it is written. False when it
@@ -334,7 +388,17 @@ struct Actions {
     /// (Weakly: the editor holds this view.)
     editor: WeakEntity<Editor>,
     clipboard: Option<u32>,
+    /// The choice of what the capture leaves as this once, open for one way, and since when (it
+    /// comes down into its place).
+    choosing: Option<Leaves>,
+    opened: Instant,
+    /// For which capture it was open: another capture has none open.
+    choosing_for: Option<u64>,
 }
+
+/// The arrow that opens the choice, and how the choice comes down.
+const CHEVRON: &str = "\u{E70D}";
+const CHOICE_COMES: Duration = Duration::from_millis(160);
 
 impl Actions {
     fn new(language: Language, editor: &Entity<Editor>, cx: &mut Context<Self>) -> Self {
@@ -344,7 +408,207 @@ impl Actions {
             language,
             editor: editor.downgrade(),
             clipboard: platform::clipboard_sequence(),
+            choosing: None,
+            opened: Instant::now(),
+            choosing_for: None,
         }
+    }
+
+    /// The small arrow beside a way to leave (the large window's: a list under the row): it opens
+    /// or puts away the choice of what the capture leaves as that way, this once.
+    fn chevron(&self, leaves: Leaves, id: u64, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let open = self.choosing == Some(leaves);
+        let what = self.language.text(
+            match leaves {
+                Leaves::Save => "preview.save",
+                Leaves::Upload => "preview.upload",
+                Leaves::Copy => "preview.copy",
+            },
+            &[],
+        );
+        let said = self.language.text("preview.as", &[("what", &what)]);
+        let text = theme.text;
+        div()
+            .id(SharedString::from(format!("as-{}", leaves.name())))
+            .w(px(18.0))
+            .h(px(34.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_1()
+            .border_r_0()
+            .border_color(theme.border)
+            .rounded_l(px(6.0))
+            .bg(theme.surface)
+            .text_color(if open { theme.text } else { theme.muted })
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.text_color(text))
+            .tooltip(tip(said))
+            .child(icon(CHEVRON, 9.0))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.choosing = if open { None } else { Some(leaves) };
+                this.opened = Instant::now();
+                this.choosing_for = Some(id);
+                if !open {
+                    cx.defer(move |cx| preview::touch(id, cx));
+                }
+                cx.notify();
+            }))
+    }
+
+    /// The choice, under the row from its right end: the kinds of file (ticked for saving, several
+    /// at once; the last stays ticked) and how large at most, the one in use with a dot. Chosen,
+    /// it stays open; a press elsewhere or Esc puts it away. For this capture, this way only.
+    fn menu(
+        &self,
+        leaves: Leaves,
+        id: u64,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        let (format, kinds, fit) = preview::leaves_now(id, leaves, cx)?;
+        let down = if platform::animations_enabled() {
+            perora_ui::motion::EASE_OUT.at(perora_ui::motion::along(
+                self.opened,
+                Duration::ZERO,
+                CHOICE_COMES,
+                window,
+            ))
+        } else {
+            1.0
+        };
+        let heading = |text: String| {
+            div()
+                .mt(px(4.0))
+                .mb(px(2.0))
+                .mx(px(8.0))
+                .text_size(px(11.0))
+                .text_color(theme.muted)
+                .child(text)
+        };
+        let accent = theme.accent;
+        let hover = theme.border;
+        let item = |name: SharedString, label: String, checked: bool, ticked: bool| {
+            div()
+                .id(name)
+                .relative()
+                .h(px(28.0))
+                .pl(px(26.0))
+                .pr(px(8.0))
+                .flex()
+                .items_center()
+                .rounded(px(5.0))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |style| style.bg(hover))
+                .when(checked, |item| {
+                    item.child(if ticked {
+                        div()
+                            .absolute()
+                            .left(px(8.0))
+                            .text_color(accent)
+                            .child(icon(TICK, 11.0))
+                    } else {
+                        div()
+                            .absolute()
+                            .left(px(10.0))
+                            .size(px(7.0))
+                            .rounded_full()
+                            .bg(accent)
+                    })
+                })
+                .child(label)
+        };
+        let t = |key: &str| self.language.text(key, &[]);
+        let mut list = div()
+            .id("menu")
+            .occlude()
+            .min_w(px(200.0))
+            .p(px(6.0))
+            .flex()
+            .flex_col()
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(8.0))
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::Hsla::from(gpui::rgba(0x0000_0047)),
+                offset: point(px(0.0), px(8.0)),
+                blur_radius: px(24.0),
+                spread_radius: px(0.0),
+                inset: false,
+            }])
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.choosing = None;
+                cx.notify();
+            }))
+            .child(heading(t("main.output.format")));
+        for each in Format::ALL {
+            let save = leaves == Leaves::Save;
+            let checked = if save { kinds.contains(&each) } else { format == each };
+            let now = kinds.clone();
+            list = list.child(
+                item(
+                    SharedString::from(format!("format-{}", each.name())),
+                    self.language.text(&format!("main.output.format.{}", each.name()), &[]),
+                    checked,
+                    save,
+                )
+                .on_click(move |_, _, cx| {
+                    let now = now.clone();
+                    cx.defer(move |cx| {
+                        preview::choose(
+                            id,
+                            leaves,
+                            |once| match leaves {
+                                Leaves::Save => {
+                                    let kinds: Vec<Format> = Format::ALL
+                                        .into_iter()
+                                        .filter(|one| now.contains(one) != (*one == each))
+                                        .collect();
+                                    if !kinds.is_empty() {
+                                        once.formats = Some(kinds);
+                                    }
+                                }
+                                _ => once.format = Some(each),
+                            },
+                            cx,
+                        )
+                    });
+                }),
+            );
+        }
+        list = list.child(heading(t("main.output.fit")));
+        for side in std::iter::once(0).chain(FITS) {
+            let label = if side == 0 {
+                t("main.output.fit.none")
+            } else {
+                self.language
+                    .text("main.output.fit.within", &[("side", &side.to_string())])
+            };
+            list = list.child(
+                item(SharedString::from(format!("fit-{side}")), label, fit == side, false)
+                    .on_click(move |_, _, cx| {
+                        cx.defer(move |cx| {
+                            preview::choose(
+                                id,
+                                leaves,
+                                |once| once.fit = Some((side != 0).then_some(side)),
+                                cx,
+                            )
+                        })
+                    }),
+            );
+        }
+        Some(
+            div()
+                .absolute()
+                .top(px(34.0 + 6.0 - 6.0 * (1.0 - down)))
+                .right_0()
+                .opacity(down)
+                .child(deferred(list).with_priority(2)),
+        )
     }
 }
 
@@ -373,9 +637,9 @@ fn looks_at_clipboard<T: 'static>(
 }
 
 impl Render for Actions {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
-        let t = |key: &str| self.language.text(key, &[]);
+        let t = |key: &str| self.language.text(key, &[]).to_string();
         let Some((id, edits)) = self
             .editor
             .read_with(cx, |editor, _| {
@@ -388,6 +652,10 @@ impl Render for Actions {
         let Some(id) = id else {
             return div();
         };
+        // (Another capture has its own choice: none open.)
+        if self.choosing_for != Some(id) {
+            self.choosing = None;
+        }
         let said = preview::said_of(id, &edits, cx);
         let copied = said.as_ref().is_some_and(|said| said.copied);
         let (save_as, copy_as) = said
@@ -431,7 +699,46 @@ impl Render for Actions {
             .tooltip(tip(format!("{} (Esc)", t("preview.discard"))))
             .child(icon(BIN, 16.0))
             .on_click(move |_, _, cx| cx.defer(move |cx| preview::discard_by_user(Some(id), cx)));
-        div().flex().gap(px(4.0)).child(save).child(copy).child(bin)
+        let menu = self
+            .choosing
+            .and_then(|leaves| self.menu(leaves, id, &theme, window, cx));
+        // While the choice is open, Esc puts it away and no other key does anything (owner's
+        // window: the keys are the editor's otherwise).
+        if self.choosing.is_some() {
+            let this = cx.entity().downgrade();
+            window.on_key_event(move |event: &KeyDownEvent, phase, _, cx| {
+                if phase != gpui::DispatchPhase::Capture {
+                    return;
+                }
+                cx.stop_propagation();
+                if event.keystroke.key == "escape" {
+                    let _ = this.update(cx, |this, cx| {
+                        this.choosing = None;
+                        cx.notify();
+                    });
+                }
+            });
+        }
+        let save_as_chevron = self.chevron(Leaves::Save, id, &theme, cx);
+        let copy_as_chevron = self.chevron(Leaves::Copy, id, &theme, cx);
+        div()
+            .relative()
+            .flex()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex()
+                    .child(save_as_chevron)
+                    .child(save.rounded_l(px(0.0))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .child(copy_as_chevron)
+                    .child(copy.rounded_l(px(0.0))),
+            )
+            .child(bin)
+            .children(menu)
     }
 }
 
