@@ -355,6 +355,14 @@ pub fn held_key() -> Option<&'static str> {
     windows::keys::held_key()
 }
 
+/// One of the keys a shortcut can end in that a window is never told were pressed (PrintScreen,
+/// Pause, ScrollLock, NumLock) that is down at this moment, with which of Ctrl, Alt, Shift and the
+/// Windows key are down with it: for asking again and again while a shortcut is recorded.
+#[cfg(windows)]
+pub fn unheard_key() -> Option<(&'static str, [bool; 4])> {
+    windows::keys::unheard_key()
+}
+
 /// Which of Ctrl, Alt, Shift and the Windows key are held as the key press being handled was made,
 /// in that order.
 #[cfg(windows)]

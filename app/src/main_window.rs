@@ -191,6 +191,8 @@ impl MainWindow {
             self.stop_recording(cx);
         }
         self.page = page;
+        // (What was said of the last combination tried belongs to the shortcut page as it was.)
+        self.refusal = None;
         self.scroll.set_offset(point(px(0.0), px(0.0)));
         cx.notify();
     }

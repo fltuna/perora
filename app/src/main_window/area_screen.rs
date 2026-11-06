@@ -64,7 +64,8 @@ pub fn is_up(cx: &App) -> bool {
 /// From the settings: the screen comes up. Once: pressed again while it is coming or up, nothing
 /// more happens.
 pub fn edit(cx: &mut App) {
-    if is_up(cx) {
+    // (Nor while a capture is under way: the screen would be in it.)
+    if is_up(cx) || crate::capture::busy(cx) || crate::capture::current(cx).is_some() {
         return;
     }
     // (Over the whole monitor, it would take the screen from whoever looks at the settings, which
@@ -430,9 +431,6 @@ impl AreaScreen {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if event.is_held {
-            return;
-        }
         let keystroke = &event.keystroke;
         let step = match keystroke.key.as_str() {
             "left" => Some((-0.01, 0.0)),
@@ -447,6 +445,10 @@ impl AreaScreen {
                 self.zone = made;
                 cx.notify();
             }
+            return;
+        }
+        // (Held, the arrows go on; Enter and Esc count once.)
+        if event.is_held {
             return;
         }
         match keystroke.key.as_str() {

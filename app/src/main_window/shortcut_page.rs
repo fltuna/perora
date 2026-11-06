@@ -5,6 +5,8 @@
 //! While a new one is recorded the old one is not a shortcut: pressing it is an answer, not a
 //! capture. Whatever ends the recording gives it back.
 
+use std::time::Duration;
+
 use gpui::{
     AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, SharedString, Styled, Window,
     div, px,
@@ -90,6 +92,12 @@ fn combination(event: &KeyDownEvent) -> Option<String> {
             )
         }
     };
+    joined(&key, [control, alt, shift, windows])
+}
+
+/// A key with Ctrl, Alt, Shift and the Windows key (those held), as the shortcut is written; `None`
+/// for a key that typing needs without Ctrl, Alt or the Windows key.
+fn joined(key: &str, [control, alt, shift, windows]: [bool; 4]) -> Option<String> {
     let free = key
         .strip_prefix('F')
         .is_some_and(|number| matches!(number.parse::<u8>(), Ok(1..=24)))
@@ -106,9 +114,13 @@ fn combination(event: &KeyDownEvent) -> Option<String> {
     .into_iter()
     .filter_map(|(held, name)| held.then_some(name))
     .collect();
-    parts.push(&key);
+    parts.push(key);
     Some(parts.join("+"))
 }
+
+/// How often the keys a window is never told of (PrintScreen, Pause, ScrollLock, NumLock) are
+/// looked at while a shortcut is recorded.
+const LOOKED_AT_EVERY: Duration = Duration::from_millis(25);
 
 impl MainWindow {
     /// "Change": the next combination pressed is the shortcut. "Cancel": it is not.
@@ -122,6 +134,32 @@ impl MainWindow {
         // (The keys come to the window itself, whatever had them.)
         window.focus(&self.focus, cx);
         cx.notify();
+        // The keys a window is never told were pressed: looked at for as long as it records.
+        #[cfg(windows)]
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(LOOKED_AT_EVERY).await;
+                let recording = this.update(cx, |this, cx| {
+                    if !this.recording {
+                        return false;
+                    }
+                    let Some((key, held)) = perora_core::platform::unheard_key() else {
+                        return true;
+                    };
+                    match joined(key, held) {
+                        Some(pressed) => {
+                            this.answered(pressed, cx);
+                            false
+                        }
+                        None => true,
+                    }
+                });
+                if !matches!(recording, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     pub(super) fn stop_recording(&mut self, cx: &mut Context<Self>) {
@@ -150,9 +188,13 @@ impl MainWindow {
             return;
         }
         // Not one to use: as if nothing was pressed, and the recording goes on.
-        let Some(pressed) = combination(event) else {
-            return;
-        };
+        if let Some(pressed) = combination(event) {
+            self.answered(pressed, cx);
+        }
+    }
+
+    /// A combination to use was pressed: it is the shortcut, unless the system would not have it.
+    fn answered(&mut self, pressed: String, cx: &mut Context<Self>) {
         self.stop_recording(cx);
         self.refusal = system::set_shortcut(&pressed, cx)
             .err()
@@ -306,5 +348,20 @@ mod tests {
         assert_eq!(named("menu"), None);
         assert_eq!(named("escape"), None);
         assert_eq!(named("!"), None);
+    }
+
+    #[test]
+    fn a_combination_is_one_typing_does_not_need() {
+        let none = [false; 4];
+        let control_shift = [true, false, true, false];
+        assert_eq!(joined("H", control_shift).as_deref(), Some("Ctrl+Shift+H"));
+        assert_eq!(joined("H", [false, false, true, false]), None);
+        assert_eq!(joined("F5", none).as_deref(), Some("F5"));
+        assert_eq!(joined("PrintScreen", none).as_deref(), Some("PrintScreen"));
+        assert_eq!(joined("Pause", none), None);
+        assert_eq!(
+            joined("1", [true, true, true, true]).as_deref(),
+            Some("Ctrl+Alt+Shift+Super+1")
+        );
     }
 }

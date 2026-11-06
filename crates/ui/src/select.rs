@@ -94,11 +94,13 @@ impl Select {
     }
 }
 
-/// Whether the list is open, which choice the keys and the pointer are at meanwhile, and where the
-/// button was last drawn (what the list opens beside).
+/// Whether the list is open, which choice the keys and the pointer are at meanwhile, which is
+/// chosen (as it was drawn, or taken since: two presses of a key before it is drawn again are two
+/// steps), and where the button was last drawn (what the list opens beside).
 struct Opened {
     open: bool,
     at: usize,
+    chosen: Option<usize>,
     button: Option<Bounds<Pixels>>,
     scroll: ScrollHandle,
 }
@@ -110,6 +112,7 @@ impl RenderOnce for Select {
         let opened = window.use_keyed_state((self.id.clone(), "opened"), cx, |_, _| Opened {
             open: false,
             at: 0,
+            chosen: None,
             button: None,
             scroll: ScrollHandle::new(),
         });
@@ -132,6 +135,7 @@ impl RenderOnce for Select {
         );
         let count = choices.len();
         let chosen = self.chosen.filter(|&chosen| chosen < count);
+        opened.update(cx, |opened, _| opened.chosen = chosen);
         let open = self.enabled && opened.read(cx).open;
         if !self.enabled && opened.read(cx).open {
             opened.update(cx, |opened, _| opened.open = false);
@@ -164,9 +168,12 @@ impl RenderOnce for Select {
         let choose: Rc<dyn Fn(usize, &mut Window, &mut App)> = {
             let opened = opened.clone();
             Rc::new(move |choice: usize, window: &mut Window, cx: &mut App| {
-                opened.update(cx, |opened, _| opened.open = false);
+                let before = opened.update(cx, |opened, _| {
+                    opened.open = false;
+                    opened.chosen.replace(choice)
+                });
                 window.refresh();
-                if Some(choice) != chosen
+                if Some(choice) != before
                     && let Some(on_change) = &on_change
                 {
                     on_change(choice, window, cx);
@@ -276,6 +283,7 @@ impl RenderOnce for Select {
                             });
                             window.refresh();
                         } else {
+                            let chosen = opened.read(cx).chosen;
                             let now = chosen.unwrap_or(0);
                             let to = match key {
                                 "down" if keystroke.modifiers.alt => {

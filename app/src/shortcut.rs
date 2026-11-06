@@ -157,7 +157,8 @@ impl Shortcuts {
 
     /// Makes `new` the user's own combination in place of `old`: refused (`Err`) when the system
     /// would not give it (another application has it), and `old` is asked for again then. Either
-    /// way, which shortcuts are Perora's afterwards.
+    /// way, which shortcuts are Perora's afterwards. (For while the system's combination for
+    /// snipping is not wanted: the settings page changes nothing else meanwhile.)
     pub fn change(&mut self, new: &str, old: &str, wanted: bool) -> Result<Claimed, Claimed> {
         // The one before goes first: the new one may be the same combination.
         let suspended = std::mem::replace(&mut self.suspended, true);

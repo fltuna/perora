@@ -3,16 +3,17 @@
 //! Shift and on the layout, the key a shortcut is registered by does not.
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VIRTUAL_KEY, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7, VK_8, VK_9, VK_A,
-    VK_ADD, VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_E,
-    VK_END, VK_F, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11,
-    VK_F12, VK_F13, VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F20, VK_F21, VK_F22, VK_F23,
-    VK_F24, VK_G, VK_H, VK_HOME, VK_I, VK_INSERT, VK_J, VK_K, VK_L, VK_LEFT, VK_LWIN, VK_M,
-    VK_MENU, VK_MULTIPLY, VK_N, VK_NEXT, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3,
-    VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_O, VK_OEM_1,
-    VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7, VK_OEM_COMMA, VK_OEM_MINUS,
-    VK_OEM_PERIOD, VK_OEM_PLUS, VK_P, VK_PRIOR, VK_Q, VK_R, VK_RETURN, VK_RIGHT, VK_RWIN, VK_S,
-    VK_SHIFT, VK_SPACE, VK_SUBTRACT, VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
+    GetAsyncKeyState, GetKeyState, VIRTUAL_KEY, VK_0, VK_1, VK_2, VK_3, VK_4, VK_5, VK_6, VK_7,
+    VK_8, VK_9, VK_A, VK_ADD, VK_B, VK_BACK, VK_C, VK_CONTROL, VK_D, VK_DECIMAL, VK_DELETE,
+    VK_DIVIDE, VK_DOWN, VK_E, VK_END, VK_F, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7, VK_F8,
+    VK_F9, VK_F10, VK_F11, VK_F12, VK_F13, VK_F14, VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F20,
+    VK_F21, VK_F22, VK_F23, VK_F24, VK_G, VK_H, VK_HOME, VK_I, VK_INSERT, VK_J, VK_K, VK_L,
+    VK_LEFT, VK_LWIN, VK_M, VK_MENU, VK_MULTIPLY, VK_N, VK_NEXT, VK_NUMLOCK, VK_NUMPAD0,
+    VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8,
+    VK_NUMPAD9, VK_O, VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+    VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD, VK_OEM_PLUS, VK_P, VK_PAUSE, VK_PRIOR, VK_Q, VK_R,
+    VK_RETURN, VK_RIGHT, VK_RWIN, VK_S, VK_SCROLL, VK_SHIFT, VK_SNAPSHOT, VK_SPACE, VK_SUBTRACT,
+    VK_T, VK_TAB, VK_U, VK_UP, VK_V, VK_W, VK_X, VK_Y, VK_Z,
 };
 
 /// The keys a shortcut can end in, each by the name the shortcut is written with (`Ctrl+Shift+H`,
@@ -133,6 +134,36 @@ pub fn held_key() -> Option<&'static str> {
     KEYS.iter()
         .find(|(key, _)| held(*key))
         .map(|(_, name)| *name)
+}
+
+/// The keys a shortcut can end in that a window is never told were pressed (the system gives it
+/// no press of them, only their letting go, or nothing), by the same names.
+const UNHEARD: &[(VIRTUAL_KEY, &str)] = &[
+    (VK_SNAPSHOT, "PrintScreen"),
+    (VK_PAUSE, "Pause"),
+    (VK_SCROLL, "ScrollLock"),
+    (VK_NUMLOCK, "NumLock"),
+];
+
+fn down_now(key: VIRTUAL_KEY) -> bool {
+    // (The high bit: down at this moment, whichever window has the keyboard.)
+    let state = unsafe { GetAsyncKeyState(key.0 as i32) };
+    state < 0
+}
+
+/// One of the keys a window is not told of that is down at this moment, by its name, with which of
+/// Ctrl, Alt, Shift and the Windows key are down with it; `None` when none is.
+pub fn unheard_key() -> Option<(&'static str, [bool; 4])> {
+    let (_, name) = UNHEARD.iter().find(|(key, _)| down_now(*key))?;
+    Some((
+        name,
+        [
+            down_now(VK_CONTROL),
+            down_now(VK_MENU),
+            down_now(VK_SHIFT),
+            down_now(VK_LWIN) || down_now(VK_RWIN),
+        ],
+    ))
 }
 
 /// Which of Ctrl, Alt, Shift and the Windows key are held now, in that order.
