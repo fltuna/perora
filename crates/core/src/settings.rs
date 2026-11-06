@@ -1,0 +1,1208 @@
+//! What the user chose and Perora remembers between runs: a small JSON file in the application's
+//! configuration directory. Nothing in it is secret.
+//!
+//! The file is read one setting at a time: a value that is missing or of the wrong kind leaves that
+//! setting as it would be without the file, and nothing else. What the file holds that this version
+//! does not know (the settings of a newer one) is written back as it was read. A file that is not
+//! readable as settings at all is put aside before a new one takes its place.
+//!
+//! The file is the one the first interface of Perora (the Tauri one) already writes: the folder and
+//! the format are its. The interface that replaces it finds what the user chose there, and the two
+//! can be run one after the other without either losing a setting. So nothing in here may change how
+//! a setting is named, read or written.
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde_json::{Map, Value};
+
+use crate::notice::{Corner, DEFAULT_SECONDS, MOST_SECONDS, Sound};
+use crate::output::{FITS, Format, Output, Quality};
+use crate::selection::Mode;
+
+/// What becomes of a capture once it is taken, before the user says anything: the small preview in
+/// a corner, the large window where it is drawn on, or the clipboard and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum After {
+    #[default]
+    Preview,
+    Edit,
+    Copy,
+}
+
+impl After {
+    pub const ALL: [After; 3] = [After::Preview, After::Edit, After::Copy];
+
+    /// The name used in settings, language files and between the windows and the application.
+    pub const fn name(self) -> &'static str {
+        match self {
+            After::Preview => "preview",
+            After::Edit => "edit",
+            After::Copy => "copy",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|after| after.name() == name)
+    }
+}
+
+/// Which of the two ways of making a part unreadable is in hand in the editor, before the user picks
+/// one: the one they used last, or always the same (owner, 2026-10-19).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Hider {
+    #[default]
+    Last,
+    Mosaic,
+    Blur,
+}
+
+impl Hider {
+    pub const ALL: [Hider; 3] = [Hider::Last, Hider::Mosaic, Hider::Blur];
+
+    /// The name used in settings, language files and between the windows and the application.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Hider::Last => "last",
+            Hider::Mosaic => "mosaic",
+            Hider::Blur => "blur",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|hider| hider.name() == name)
+    }
+}
+
+/// A tour: what one of the windows shows of itself, a step at a time, the first time it is seen
+/// (and again whenever it is asked for).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tour {
+    /// Of the selection screen.
+    Capture,
+    /// Of the small preview in the corner.
+    Preview,
+    /// Of the large window, where a capture is drawn on.
+    Editor,
+}
+
+impl Tour {
+    pub const ALL: [Tour; 3] = [Tour::Capture, Tour::Preview, Tour::Editor];
+
+    /// The name used in settings and between the windows and the application.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Tour::Capture => "capture",
+            Tour::Preview => "preview",
+            Tour::Editor => "editor",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tour| tour.name() == name)
+    }
+}
+
+/// Which of their two looks the windows have: the one the system is set to, or one of them whatever
+/// the system is set to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Look {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Look {
+    pub const ALL: [Look; 3] = [Look::System, Look::Light, Look::Dark];
+
+    /// The name used in settings, language files and between the windows and the application.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Look::System => "system",
+            Look::Light => "light",
+            Look::Dark => "dark",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|look| look.name() == name)
+    }
+}
+
+/// A way a capture leaves: each has the kind of file it leaves as, and how large at most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Leaves {
+    /// To the clipboard.
+    Copy,
+    /// To the server.
+    Upload,
+    /// To a file.
+    Save,
+}
+
+impl Leaves {
+    pub const ALL: [Leaves; 3] = [Leaves::Copy, Leaves::Upload, Leaves::Save];
+
+    /// The name used in settings and between the windows and the application.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Leaves::Copy => "copy",
+            Leaves::Upload => "upload",
+            Leaves::Save => "save",
+        }
+    }
+}
+
+/// Kinds of file, each once, in the order they are always named in.
+pub fn several(kinds: impl Iterator<Item = Format>) -> Vec<Format> {
+    let named: Vec<Format> = kinds.collect();
+    Format::ALL
+        .into_iter()
+        .filter(|kind| named.contains(kind))
+        .collect()
+}
+
+/// The shortcut Perora asks for until the user chooses another.
+pub const DEFAULT_SHORTCUT: &str = "Ctrl+Shift+H";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settings {
+    /// The code of the language chosen; `None` when none was, and the system decides.
+    pub language: Option<String>,
+    /// Whether the windows are light or dark.
+    pub look: Look,
+    /// Whether Perora uploads at all: it does only when the user chose so (and is signed in).
+    pub upload_enabled: bool,
+    /// Whether what was selected is uploaded at once, without the preview. Counts only while
+    /// Perora uploads.
+    pub upload_immediately: bool,
+    /// The mode the selection screen starts in.
+    pub start_mode: Mode,
+    /// How long the selection screen's mode bar stays before it slides up out of the way, in
+    /// seconds; 0 for for good. It comes back while the pointer is up there.
+    pub bar_hide_seconds: f64,
+    /// Where on its monitor the pointer brings the slid-away bar back.
+    pub bar_reveal_area: Zone,
+    /// Whether the selection screen draws a + where the pointer is (seen where the system's pointer
+    /// is not, as in VR).
+    pub show_crosshair: bool,
+    /// Whether Perora's own windows (the main window, the previews) are out of the picture: hidden
+    /// before the screen is captured. Otherwise they are captured too, and hidden only once they are.
+    pub hide_own_windows: bool,
+    /// Whether what was selected is put on the clipboard as the preview appears.
+    pub copy_to_clipboard: bool,
+    /// Whether discarding a capture also takes it off the clipboard.
+    pub clear_clipboard_on_discard: bool,
+    /// Where "save" writes; `None` for a folder of Perora's own in the user's pictures.
+    pub save_directory: Option<PathBuf>,
+    /// Whether "save" asks where to, each time.
+    pub ask_where_to_save: bool,
+    /// Whether every capture is saved as it was taken, the moment it is, into the folder for saving
+    /// (never asking where), whatever else becomes of it.
+    pub save_on_capture: bool,
+    /// Whether discarding a capture also takes away what was saved of it that way.
+    pub delete_saved_on_discard: bool,
+    /// Whether what a capture is saved as that way is its own (the kinds of file, at least one, and
+    /// the square it is made to fit), or as "save" has it.
+    pub as_taken_custom: bool,
+    pub as_taken_formats: Vec<Format>,
+    pub as_taken_fit: Option<u32>,
+    /// The global shortcut that captures, as `Ctrl+Shift+H`.
+    pub shortcut: String,
+    /// Whether the system's own combination for snipping (Win+Shift+S) captures with Perora too:
+    /// taken from the system's shell, which has to let go of it for that.
+    pub take_snipping: bool,
+    /// Whether the file manager offers "Open with Perora" on images (owner, 2026-11-02: on unless
+    /// the user turns it off).
+    pub open_from_explorer: bool,
+    /// What becomes of a capture once it is taken.
+    pub after_capture: After,
+    /// Which way of making a part unreadable the editor starts with.
+    pub default_hider: Hider,
+    /// How long the small preview stays before the capture is given up, in seconds; 0 for until
+    /// something is done with it.
+    pub preview_seconds: f64,
+    /// The corner of the screen the small preview appears in.
+    pub preview_corner: Corner,
+    /// The sound a capture comes with, and the file of the user's own that is that sound when it
+    /// is one of their own.
+    pub capture_sound: Sound,
+    pub capture_sound_file: Option<PathBuf>,
+    /// How long a notice that says how something ended stays, in seconds; 0 for until it is
+    /// clicked.
+    pub notice_seconds: f64,
+    /// The corner of the screen Perora's notices appear in.
+    pub notice_corner: Corner,
+    /// The sound a notice comes with.
+    pub notice_sound: Sound,
+    /// The file of the user's own that is that sound, when it is one of their own; kept while
+    /// another sound is chosen.
+    pub notice_sound_file: Option<PathBuf>,
+    /// The kind of file a capture leaves as, and the square it is made to fit when it does not
+    /// (`None` for as large as it is): for each way of leaving, in the order of `Leaves::ALL`.
+    pub formats: [Format; 3],
+    pub fits: [Option<u32>; 3],
+    /// The kinds of file a capture is saved as: one file of each, and at least one (the first is
+    /// the one `formats` has for saving).
+    pub save_formats: Vec<Format>,
+    /// How good a file that loses something is, whichever way it leaves.
+    pub quality: Quality,
+    /// The tours that were seen to the end, or put away: each in order, once.
+    pub tours_seen: Vec<Tour>,
+    /// The newer version the user chose to skip: its band is not shown (a newer one's is).
+    pub skipped_version: Option<String>,
+    /// Whatever else the file holds.
+    rest: Map<String, Value>,
+}
+
+impl Settings {
+    /// Has the tour seen: it is not shown again unless it is asked for.
+    pub fn saw(&mut self, tour: Tour) {
+        if !self.tours_seen.contains(&tour) {
+            self.tours_seen.push(tour);
+            self.tours_seen = Tour::ALL
+                .into_iter()
+                .filter(|one| self.tours_seen.contains(one))
+                .collect();
+        }
+    }
+
+    /// The names of the tours seen, for the windows.
+    pub fn tours_seen(&self) -> Vec<&'static str> {
+        self.tours_seen.iter().map(|tour| tour.name()).collect()
+    }
+
+    /// Has a capture saved as these kinds of file, one of each; as it was, when none is named.
+    pub fn save_as(&mut self, kinds: &[Format]) {
+        let kinds = several(kinds.iter().copied());
+        if let Some(first) = kinds.first() {
+            self.formats[Leaves::Save as usize] = *first;
+            self.save_formats = kinds;
+        }
+    }
+
+    /// What a capture is saved as the moment it is taken: the kinds of file (one file of each), and
+    /// what it is made into (of the first kind).
+    pub fn as_taken(&self) -> (Vec<Format>, Output) {
+        if !self.as_taken_custom {
+            return (self.save_formats.clone(), self.output(Leaves::Save));
+        }
+        let kinds = self.as_taken_formats.clone();
+        let output = Output {
+            format: kinds.first().copied().unwrap_or_default(),
+            quality: self.quality,
+            fit: self.as_taken_fit,
+        };
+        (kinds, output)
+    }
+
+    /// Has a capture saved as these kinds of file the moment it is taken, when that is the user's
+    /// own; as it was, when none is named.
+    pub fn save_as_taken_as(&mut self, kinds: &[Format]) {
+        let kinds = several(kinds.iter().copied());
+        if !kinds.is_empty() {
+            self.as_taken_formats = kinds;
+        }
+    }
+
+    /// What a capture is made into as it leaves that way.
+    pub fn output(&self, leaves: Leaves) -> Output {
+        let which = leaves as usize;
+        Output {
+            format: self.formats[which],
+            quality: self.quality,
+            fit: self.fits[which],
+        }
+    }
+}
+
+/// A number of seconds as it can be set: 0 (for good), or from a tenth to as many as can be chosen,
+/// to the thousandth. (Less than a tenth is too short to see, and would be taken for 0 rounded.)
+pub fn seconds_to_set(seconds: f64) -> Option<f64> {
+    (seconds.is_finite() && (seconds == 0.0 || (0.1..=MOST_SECONDS).contains(&seconds)))
+        .then(|| (seconds * 1000.0).round() / 1000.0)
+}
+
+/// How long the mode bar stays at first, in seconds (owner: 「3~5秒ほど」, then 「デフォルトの消える
+/// 秒数を2秒ぐらいにしておこ」, then 「0.75sがデフォルトの速度にしておいて」).
+pub const DEFAULT_BAR_HIDE_SECONDS: f64 = 0.75;
+
+/// A part of a monitor, as shares of its width and height (0 to 1), from its top left corner: the
+/// same on a monitor of any size.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Zone {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl Zone {
+    /// Where the pointer brings the mode bar back at first: a thin strip right at the top, under
+    /// the bar (owner, 2026-11-02: 「本当にかなり上にいかないと出ないようにしてほしい」). Drawn
+    /// otherwise in the settings, by dragging (「ドラッグで好きな範囲を設定するみたいな感じ！」).
+    pub const BAR_REVEAL: Self = Self {
+        x: 0.3,
+        y: 0.0,
+        width: 0.4,
+        height: 0.01,
+    };
+
+    /// One as written: shares that make a part of the monitor, not nothing.
+    pub fn from_value(value: &Value) -> Option<Self> {
+        let object = value.as_object()?;
+        let share = |key: &str| object.get(key)?.as_f64().filter(|share| share.is_finite());
+        let zone = Self {
+            x: share("x")?,
+            y: share("y")?,
+            width: share("width")?,
+            height: share("height")?,
+        };
+        let within =
+            |start: f64, length: f64| start >= 0.0 && length > 0.0 && start + length <= 1.0 + 1e-9;
+        (within(zone.x, zone.width) && within(zone.y, zone.height)).then_some(zone)
+    }
+
+    pub fn to_value(self) -> Value {
+        serde_json::json!({ "x": self.x, "y": self.y, "width": self.width, "height": self.height })
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self::from_file(Map::new())
+    }
+}
+
+impl Settings {
+    fn from_file(mut file: Map<String, Value>) -> Self {
+        let mut flag = |key: &str, otherwise: bool| match file.remove(key) {
+            Some(Value::Bool(value)) => value,
+            _ => otherwise,
+        };
+        let upload_immediately = flag("uploadImmediately", false);
+        let upload_enabled = flag("enableUpload", false);
+        let copy_to_clipboard = flag("copyToClipboard", true);
+        let clear_clipboard_on_discard = flag("clearClipboardOnDiscard", false);
+        let ask_where_to_save = flag("askWhereToSave", false);
+        let save_on_capture = flag("saveOnCapture", false);
+        let delete_saved_on_discard = flag("deleteSavedOnDiscard", false);
+        let as_taken_custom = flag("saveOnCaptureCustom", false);
+        // (Notices could once be switched off. What a file says of that is let go of: not kept
+        // for a version that does not know it, as other things it does not know are.)
+        flag("noticeEnabled", true);
+        // (Once a switch, for a preview or none: off, it was what is now "to the clipboard only".)
+        let preview_enabled = flag("previewEnabled", true);
+        let take_snipping = flag("takeSnipping", false);
+        let open_from_explorer = flag("openFromExplorer", true);
+        let hide_own_windows = flag("hideOwnWindows", true);
+        let show_crosshair = flag("showCrosshair", true);
+        // (What is saved as it is taken, when that has kinds and a size of its own.)
+        let as_taken_formats = match file.remove("saveOnCaptureFormats") {
+            Some(Value::Array(names)) => several(
+                names
+                    .iter()
+                    .filter_map(|name| name.as_str().and_then(Format::from_name)),
+            ),
+            _ => Vec::new(),
+        };
+        let as_taken_formats = if as_taken_formats.is_empty() {
+            vec![Format::default()]
+        } else {
+            as_taken_formats
+        };
+        let as_taken_fit = match file.remove("saveOnCaptureFit") {
+            Some(Value::Number(side)) => side
+                .as_u64()
+                .and_then(|side| u32::try_from(side).ok())
+                .filter(|side| FITS.contains(side)),
+            _ => None,
+        };
+
+        let mut text = |key: &str| match file.remove(key) {
+            Some(Value::String(value)) if !value.is_empty() => Some(value),
+            _ => None,
+        };
+        let language = text("language");
+        let skipped_version = text("skippedVersion");
+        let default_hider = text("defaultHider")
+            .and_then(|name| Hider::from_name(&name))
+            .unwrap_or_default();
+        let after_capture = text("afterCapture")
+            .and_then(|name| After::from_name(&name))
+            .unwrap_or(match preview_enabled {
+                true => After::Preview,
+                false => After::Copy,
+            });
+        let look = text("theme")
+            .and_then(|name| Look::from_name(&name))
+            .unwrap_or_default();
+        let start_mode = text("startMode")
+            .and_then(|name| Mode::from_name(&name))
+            .unwrap_or(Mode::Smart);
+        let save_directory = text("saveDirectory").map(PathBuf::from);
+        let shortcut = text("shortcut").unwrap_or_else(|| DEFAULT_SHORTCUT.into());
+        let notice_corner = text("noticeCorner")
+            .and_then(|name| Corner::from_name(&name))
+            .unwrap_or_default();
+        let notice_sound = text("noticeSound")
+            .and_then(|name| Sound::from_name(&name))
+            .unwrap_or_default();
+        let notice_sound_file = text("noticeSoundFile").map(PathBuf::from);
+        let preview_corner = text("previewCorner")
+            .and_then(|name| Corner::from_name(&name))
+            .unwrap_or_default();
+        let capture_sound = text("captureSound")
+            .and_then(|name| Sound::from_name(&name))
+            .unwrap_or_default();
+        let capture_sound_file = text("captureSoundFile").map(PathBuf::from);
+        let formats = Leaves::ALL.map(|leaves| {
+            text(&format!("{}Format", leaves.name()))
+                .and_then(|name| Format::from_name(&name))
+                .unwrap_or_default()
+        });
+        let quality = text("quality")
+            .and_then(|name| Quality::from_name(&name))
+            .unwrap_or_default();
+        // (Saved as several kinds at once, when the file names more than one; else as the one.)
+        let mut formats = formats;
+        let save_formats = match file.remove("saveFormats") {
+            Some(Value::Array(names)) => several(
+                names
+                    .iter()
+                    .filter_map(|name| name.as_str().and_then(Format::from_name)),
+            ),
+            _ => Vec::new(),
+        };
+        let mut tours_seen = Vec::new();
+        if let Some(Value::Array(names)) = file.remove("toursSeen") {
+            for name in names.iter().filter_map(Value::as_str) {
+                if let Some(tour) = Tour::from_name(name) {
+                    tours_seen.push(tour);
+                }
+            }
+        }
+        let tours_seen = Tour::ALL
+            .into_iter()
+            .filter(|tour| tours_seen.contains(tour))
+            .collect();
+        let save_formats = match save_formats.first() {
+            Some(first) => {
+                formats[Leaves::Save as usize] = *first;
+                save_formats
+            }
+            None => vec![formats[Leaves::Save as usize]],
+        };
+
+        // (Seconds, in parts of one too (owner, 2026-11-02: 「1.5秒とか絶妙な時間設定できるといい気がする」),
+        // none below 0 or more than can be chosen.)
+        let mut seconds = |key: &str| match file.remove(key) {
+            Some(Value::Number(seconds)) => seconds.as_f64().and_then(seconds_to_set),
+            _ => None,
+        };
+        let notice_seconds = seconds("noticeSeconds").unwrap_or(DEFAULT_SECONDS);
+        let preview_seconds = seconds("previewSeconds").unwrap_or(0.0);
+        let bar_hide_seconds = seconds("barHideSeconds").unwrap_or(DEFAULT_BAR_HIDE_SECONDS);
+        let bar_reveal_area = file
+            .remove("barRevealArea")
+            .as_ref()
+            .and_then(Zone::from_value)
+            .unwrap_or(Zone::BAR_REVEAL);
+        // (One of the squares there are to choose from; anything else is no square.)
+        let fits = Leaves::ALL.map(
+            |leaves| match file.remove(&format!("{}Fit", leaves.name())) {
+                Some(Value::Number(side)) => side
+                    .as_u64()
+                    .and_then(|side| u32::try_from(side).ok())
+                    .filter(|side| FITS.contains(side)),
+                _ => None,
+            },
+        );
+
+        Self {
+            language,
+            look,
+            upload_immediately,
+            upload_enabled,
+            start_mode,
+            bar_hide_seconds,
+            bar_reveal_area,
+            show_crosshair,
+            hide_own_windows,
+            copy_to_clipboard,
+            clear_clipboard_on_discard,
+            save_directory,
+            ask_where_to_save,
+            save_on_capture,
+            delete_saved_on_discard,
+            as_taken_custom,
+            as_taken_formats,
+            as_taken_fit,
+            shortcut,
+            take_snipping,
+            open_from_explorer,
+            notice_seconds,
+            notice_corner,
+            notice_sound,
+            notice_sound_file,
+            after_capture,
+            default_hider,
+            preview_seconds,
+            preview_corner,
+            capture_sound,
+            capture_sound_file,
+            formats,
+            fits,
+            save_formats,
+            quality,
+            tours_seen,
+            skipped_version,
+            rest: file,
+        }
+    }
+
+    fn to_file(&self) -> Map<String, Value> {
+        let mut file = self.rest.clone();
+        if let Some(language) = &self.language {
+            file.insert("language".into(), language.clone().into());
+        }
+        file.insert("theme".into(), self.look.name().into());
+        file.insert("uploadImmediately".into(), self.upload_immediately.into());
+        file.insert("enableUpload".into(), self.upload_enabled.into());
+        file.insert("startMode".into(), self.start_mode.name().into());
+        file.insert("hideOwnWindows".into(), self.hide_own_windows.into());
+        file.insert("barHideSeconds".into(), self.bar_hide_seconds.into());
+        file.insert("barRevealArea".into(), self.bar_reveal_area.to_value());
+        file.insert("showCrosshair".into(), self.show_crosshair.into());
+        file.insert("saveOnCapture".into(), self.save_on_capture.into());
+        file.insert(
+            "deleteSavedOnDiscard".into(),
+            self.delete_saved_on_discard.into(),
+        );
+        file.insert("saveOnCaptureCustom".into(), self.as_taken_custom.into());
+        file.insert(
+            "saveOnCaptureFormats".into(),
+            self.as_taken_formats
+                .iter()
+                .map(|kind| Value::from(kind.name()))
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        file.insert(
+            "saveOnCaptureFit".into(),
+            self.as_taken_fit.unwrap_or(0).into(),
+        );
+        file.insert("copyToClipboard".into(), self.copy_to_clipboard.into());
+        file.insert(
+            "clearClipboardOnDiscard".into(),
+            self.clear_clipboard_on_discard.into(),
+        );
+        if let Some(directory) = &self.save_directory {
+            file.insert(
+                "saveDirectory".into(),
+                directory.to_string_lossy().into_owned().into(),
+            );
+        }
+        file.insert("askWhereToSave".into(), self.ask_where_to_save.into());
+        file.insert("shortcut".into(), self.shortcut.clone().into());
+        for leaves in Leaves::ALL {
+            let output = self.output(leaves);
+            file.insert(
+                format!("{}Format", leaves.name()),
+                output.format.name().into(),
+            );
+            file.insert(
+                format!("{}Fit", leaves.name()),
+                output.fit.unwrap_or(0).into(),
+            );
+        }
+        file.insert(
+            "saveFormats".into(),
+            self.save_formats
+                .iter()
+                .map(|kind| Value::from(kind.name()))
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        file.insert("quality".into(), self.quality.name().into());
+        file.insert("toursSeen".into(), self.tours_seen().into());
+        if let Some(version) = &self.skipped_version {
+            file.insert("skippedVersion".into(), version.clone().into());
+        }
+        file.insert("takeSnipping".into(), self.take_snipping.into());
+        file.insert("openFromExplorer".into(), self.open_from_explorer.into());
+        file.insert("noticeSeconds".into(), self.notice_seconds.into());
+        file.insert("noticeCorner".into(), self.notice_corner.name().into());
+        file.insert("noticeSound".into(), self.notice_sound.name().into());
+        file.insert("afterCapture".into(), self.after_capture.name().into());
+        file.insert("defaultHider".into(), self.default_hider.name().into());
+        file.insert("previewSeconds".into(), self.preview_seconds.into());
+        file.insert("previewCorner".into(), self.preview_corner.name().into());
+        file.insert("captureSound".into(), self.capture_sound.name().into());
+        if let Some(sound) = &self.capture_sound_file {
+            file.insert(
+                "captureSoundFile".into(),
+                sound.to_string_lossy().into_owned().into(),
+            );
+        }
+        if let Some(sound) = &self.notice_sound_file {
+            file.insert(
+                "noticeSoundFile".into(),
+                sound.to_string_lossy().into_owned().into(),
+            );
+        }
+        file
+    }
+}
+
+/// A tour was seen to the end, or put away: it is not shown again on its own. A name that is no
+/// tour's is let go of.
+pub fn tour_seen(path: &Path, settings: &Mutex<Settings>, tour: &str) {
+    if let Some(tour) = Tour::from_name(tour) {
+        update(path, settings, |settings| settings.saw(tour));
+    }
+}
+
+/// The application's identifier (the Tauri one's `tauri.conf.json` has it too): the name of the
+/// folder its settings are in. Kept as it is so that both interfaces find the same file.
+pub const IDENTIFIER: &str = "dev.f2a.perora";
+
+/// The folder the application keeps what it remembers in, the user's folder for settings as the system
+/// names it (on Windows, `%APPDATA%`) and the application's identifier in it. `None` when the system
+/// names no such folder.
+pub fn config_directory() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join(IDENTIFIER))
+}
+
+/// Where the settings are written: `settings.json` in [`config_directory`].
+pub fn settings_path() -> Option<PathBuf> {
+    Some(config_directory()?.join("settings.json"))
+}
+
+/// The settings as the file has them, found without the application running (it is not started for
+/// `--uninstalling`): in the place [`settings_path`] names. `None` when there is no file, or nothing
+/// in it that is settings.
+pub fn read_without_app() -> Option<Settings> {
+    read_in(&dirs::config_dir()?)
+}
+
+/// The settings in the application's folder in that folder for settings.
+fn read_in(config: &Path) -> Option<Settings> {
+    parse(&std::fs::read(config.join(IDENTIFIER).join("settings.json")).ok()?)
+}
+
+/// The settings as the file has them: for the start, before anything else knows them. As they come
+/// without a file, when there is none, or nothing in it that is settings.
+pub fn read(path: &Path) -> Settings {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| parse(&bytes))
+        .unwrap_or_default()
+}
+
+/// `None` for what is not a JSON object at all.
+pub fn parse(bytes: &[u8]) -> Option<Settings> {
+    serde_json::from_slice(bytes).ok().map(Settings::from_file)
+}
+
+/// One writer of the file at a time: two would share the file written beside it, and the later of
+/// them could write down the older settings.
+static WRITING: Mutex<()> = Mutex::new(());
+
+/// Changes the settings the application runs with (`settings`): from now on for the running
+/// application, and written down in `path` for the next run. Writing is best effort: a choice that
+/// cannot be written still holds until Perora quits.
+pub fn update(path: &Path, settings: &Mutex<Settings>, change: impl FnOnce(&mut Settings)) {
+    change(&mut settings.lock().unwrap());
+
+    // What is written is the settings as they are when it is this change's turn to write, not as
+    // they were when it was made: whoever writes last writes what the application runs with. The
+    // settings themselves are not held meanwhile; they are read all the time.
+    let _writing = WRITING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let settings = settings.lock().unwrap().clone();
+    let _ = write(path, &settings);
+}
+
+/// Writes the settings the application runs with, on top of whatever the file holds besides them.
+pub fn write(path: &Path, settings: &Settings) -> std::io::Result<()> {
+    let mut merged = settings.clone();
+    merged.rest = match std::fs::read(path) {
+        Ok(bytes) => match parse(&bytes) {
+            Some(on_disk) => on_disk.rest,
+            // Something is there that is not settings (cut short, edited into nonsense): kept beside
+            // the new file rather than written over.
+            None => {
+                let _ = std::fs::rename(path, path.with_extension("json.unreadable"));
+                Map::new()
+            }
+        },
+        Err(_) => Map::new(),
+    };
+
+    if let Some(directory) = path.parent() {
+        std::fs::create_dir_all(directory)?;
+    }
+    // Written beside the file and moved over it, so that the file is never half of one.
+    let new = path.with_extension("json.new");
+    std::fs::write(&new, serde_json::to_vec_pretty(&merged.to_file())?)?;
+    std::fs::rename(new, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings_default_save() -> Vec<Format> {
+        Settings::default().save_formats
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("perora-settings-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        directory.join("settings.json")
+    }
+
+    #[test]
+    fn without_a_file_everything_is_as_perora_comes() {
+        let settings = parse(b"{}").unwrap();
+
+        assert_eq!(settings, Settings::default());
+        assert_eq!(settings.language, None);
+        assert_eq!(settings.look, Look::System);
+        assert_eq!(parse(br#"{"theme": "dark"}"#).unwrap().look, Look::Dark);
+        assert_eq!(parse(br#"{"theme": "light"}"#).unwrap().look, Look::Light);
+        assert_eq!(parse(br#"{"theme": "sepia"}"#).unwrap().look, Look::System);
+        assert!(!settings.upload_immediately);
+        assert!(!settings.upload_enabled);
+        assert_eq!(settings.start_mode, Mode::Smart);
+        assert!(settings.copy_to_clipboard);
+        assert!(!settings.clear_clipboard_on_discard);
+        assert_eq!(settings.save_directory, None);
+        assert!(!settings.ask_where_to_save);
+        assert_eq!(settings.shortcut, "Ctrl+Shift+H");
+        for leaves in Leaves::ALL {
+            assert_eq!(settings.output(leaves), Output::default(), "{leaves:?}");
+        }
+        assert_eq!(Output::default().format, Format::Png);
+        assert_eq!(Output::default().quality, Quality::High);
+        assert_eq!(Output::default().fit, None);
+        assert!(!settings.take_snipping);
+        assert!(parse(br#"{"takeSnipping": true}"#).unwrap().take_snipping);
+        // The file manager offers to open images with Perora unless the user said otherwise.
+        assert!(settings.open_from_explorer);
+        assert!(
+            !parse(br#"{"openFromExplorer": false}"#)
+                .unwrap()
+                .open_from_explorer
+        );
+        assert!(
+            parse(br#"{"openFromExplorer": "no"}"#)
+                .unwrap()
+                .open_from_explorer
+        );
+        // Perora's own windows are out of the picture unless the user wants them in it.
+        assert!(parse(b"{}").unwrap().hide_own_windows);
+        assert!(
+            !parse(br#"{"hideOwnWindows": false}"#)
+                .unwrap()
+                .hide_own_windows
+        );
+        // The mode bar slides away after 0.75 seconds, or never; the + is drawn unless switched off.
+        assert_eq!(settings.bar_hide_seconds, 0.75);
+        let hide = |file: &[u8]| parse(file).unwrap().bar_hide_seconds;
+        assert_eq!(hide(br#"{"barHideSeconds": 0}"#), 0.0);
+        assert_eq!(hide(br#"{"barHideSeconds": 10}"#), 10.0);
+        assert_eq!(hide(br#"{"barHideSeconds": 1.5}"#), 1.5);
+        assert_eq!(hide(br#"{"barHideSeconds": -1}"#), 0.75);
+        // It comes back with the pointer in a part of the monitor: a strip at the top, or one drawn.
+        assert_eq!(settings.bar_reveal_area, Zone::BAR_REVEAL);
+        let drawn = parse(br#"{"barRevealArea": {"x": 0.1, "y": 0, "width": 0.8, "height": 0.2}}"#)
+            .unwrap();
+        assert_eq!(
+            drawn.bar_reveal_area,
+            Zone {
+                x: 0.1,
+                y: 0.0,
+                width: 0.8,
+                height: 0.2
+            }
+        );
+        for odd in [
+            r#"{"x": 0.5, "y": 0, "width": 0.6, "height": 0.1}"#,
+            r#"{"x": -0.1, "y": 0, "width": 0.5, "height": 0.1}"#,
+            r#"{"x": 0.1, "y": 0, "width": 0, "height": 0.1}"#,
+            r#"{"x": 0.1, "y": 0, "width": 0.5}"#,
+            r#""top""#,
+        ] {
+            let file = format!(r#"{{"barRevealArea": {odd}}}"#);
+            assert_eq!(
+                parse(file.as_bytes()).unwrap().bar_reveal_area,
+                Zone::BAR_REVEAL,
+                "{odd}"
+            );
+        }
+        assert!(settings.show_crosshair);
+        assert!(
+            !parse(br#"{"showCrosshair": false}"#)
+                .unwrap()
+                .show_crosshair
+        );
+        // Captures are not saved unless the user asks for that; nor is what was saved taken away.
+        assert!(!settings.save_on_capture);
+        assert!(!settings.delete_saved_on_discard);
+        let saving = parse(br#"{"saveOnCapture": true, "deleteSavedOnDiscard": true}"#).unwrap();
+        assert!(saving.save_on_capture && saving.delete_saved_on_discard);
+        // Saved then as "save" has it, unless the user gave it kinds and a size of its own.
+        let mut saving = parse(br#"{"saveFormats": ["jpg", "webp"], "saveFit": 2048}"#).unwrap();
+        assert_eq!(saving.as_taken().0, [Format::Jpeg, Format::WebP]);
+        assert_eq!(saving.as_taken().1.fit, Some(2048));
+        saving.as_taken_custom = true;
+        assert_eq!(saving.as_taken().0, [Format::Png]);
+        assert_eq!(saving.as_taken().1, Output::default());
+        let mut own = parse(
+            br#"{"saveOnCaptureCustom": true, "saveOnCaptureFormats": ["webp", "png", "gif"], "saveOnCaptureFit": 1280}"#,
+        )
+        .unwrap();
+        assert_eq!(own.as_taken().0, [Format::Png, Format::WebP]);
+        assert_eq!(
+            (own.as_taken().1.format, own.as_taken().1.fit),
+            (Format::Png, Some(1280))
+        );
+        own.save_as_taken_as(&[]);
+        assert_eq!(own.as_taken_formats, [Format::Png, Format::WebP]);
+        own.save_as_taken_as(&[Format::Jpeg]);
+        assert_eq!(own.as_taken_formats, [Format::Jpeg]);
+        assert_eq!(settings.notice_seconds, 7.0);
+        assert_eq!(settings.notice_corner, Corner::BottomRight);
+        assert_eq!(
+            settings.notice_sound,
+            Sound::System("Windows Notify System Generic".into())
+        );
+        assert_eq!(settings.notice_sound_file, None);
+        assert_eq!(settings.after_capture, After::Preview);
+        // The editor starts with the way used last, unless the user always wants one.
+        assert_eq!(settings.default_hider, Hider::Last);
+        assert_eq!(
+            parse(br#"{"defaultHider": "mosaic"}"#)
+                .unwrap()
+                .default_hider,
+            Hider::Mosaic
+        );
+        assert_eq!(
+            parse(br#"{"defaultHider": "blur"}"#).unwrap().default_hider,
+            Hider::Blur
+        );
+        assert_eq!(
+            parse(br#"{"defaultHider": "smudge"}"#)
+                .unwrap()
+                .default_hider,
+            Hider::Last
+        );
+        assert_eq!(settings.preview_seconds, 0.0);
+        assert_eq!(settings.preview_corner, Corner::BottomRight);
+        assert_eq!(settings.capture_sound, Sound::default());
+        assert_eq!(settings.capture_sound_file, None);
+        assert!(settings.tours_seen.is_empty());
+    }
+
+    #[test]
+    fn each_setting_is_read_on_its_own() {
+        let known = parse(
+            br#"{"language": "ja", "uploadImmediately": true, "startMode": "rectangle",
+                 "copyToClipboard": false, "saveDirectory": "D:\\shots", "shortcut": "Alt+F9",
+                 "enableUpload": true, "noticeCorner": "topLeft", "noticeSound": "system:ding",
+                 "noticeSoundFile": "D:\\sounds\\pop.mp3"}"#,
+        )
+        .unwrap();
+        assert_eq!(known.language.as_deref(), Some("ja"));
+        assert!(known.upload_immediately);
+        assert!(known.upload_enabled);
+        assert_eq!(known.start_mode, Mode::Rectangle);
+        assert!(!known.copy_to_clipboard);
+        assert_eq!(known.save_directory, Some(PathBuf::from("D:\\shots")));
+        assert_eq!(known.shortcut, "Alt+F9");
+        assert_eq!(known.notice_corner, Corner::TopLeft);
+        assert_eq!(known.notice_sound, Sound::System("ding".into()));
+        let capture = parse(
+            br#"{"previewCorner": "topRight", "captureSound": "custom",
+                 "captureSoundFile": "D:\\sounds\\click.wav"}"#,
+        )
+        .unwrap();
+        assert_eq!(capture.preview_corner, Corner::TopRight);
+        assert_eq!(capture.capture_sound, Sound::Custom);
+        assert_eq!(
+            capture.capture_sound_file,
+            Some(PathBuf::from("D:\\sounds\\click.wav"))
+        );
+        assert_eq!(
+            known.notice_sound_file,
+            Some(PathBuf::from("D:\\sounds\\pop.mp3"))
+        );
+        assert_eq!(
+            parse(br#"{"noticeSound": "none"}"#).unwrap().notice_sound,
+            Sound::None
+        );
+        assert_eq!(
+            parse(br#"{"noticeSound": "custom"}"#).unwrap().notice_sound,
+            Sound::Custom
+        );
+
+        // (Notices could once be switched off: a file that says so is read as any other, and
+        // what it says of that is not written back.)
+        let notices = parse(br#"{"noticeEnabled": false, "noticeSeconds": 0}"#).unwrap();
+        assert_eq!(notices.notice_seconds, 0.0);
+        assert!(!notices.to_file().contains_key("noticeEnabled"));
+        assert_eq!(
+            parse(br#"{"noticeSeconds": 45}"#).unwrap().notice_seconds,
+            45.0
+        );
+        let leaving = parse(
+            br#"{"copyFormat": "jpg", "uploadFormat": "webp", "uploadFit": 2048, "saveFit": 1280,
+                 "quality": "light", "copyFit": 2000, "saveFormat": "gif"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            leaving.output(Leaves::Copy),
+            Output {
+                format: Format::Jpeg,
+                quality: Quality::Light,
+                fit: None
+            }
+        );
+        assert_eq!(
+            leaving.output(Leaves::Upload),
+            Output {
+                format: Format::WebP,
+                quality: Quality::Light,
+                fit: Some(2048)
+            }
+        );
+        assert_eq!(
+            leaving.output(Leaves::Save),
+            Output {
+                format: Format::Png,
+                quality: Quality::Light,
+                fit: Some(1280)
+            }
+        );
+        // Saved as several kinds at once: each once, in their order; the first is "the" kind.
+        assert_eq!(settings_default_save(), [Format::Png]);
+        assert_eq!(leaving.save_formats, [Format::Png]);
+        let both = parse(br#"{"saveFormat": "webp", "saveFormats": ["jpg", "png", "jpg", "gif"]}"#)
+            .unwrap();
+        assert_eq!(both.save_formats, [Format::Png, Format::Jpeg]);
+        assert_eq!(both.output(Leaves::Save).format, Format::Png);
+        let one = parse(br#"{"saveFormat": "webp", "saveFormats": []}"#).unwrap();
+        assert_eq!(one.save_formats, [Format::WebP]);
+        let mut changed = one.clone();
+        changed.save_as(&[]);
+        assert_eq!(changed, one);
+        changed.save_as(&[Format::WebP, Format::Jpeg]);
+        assert_eq!(changed.save_formats, [Format::Jpeg, Format::WebP]);
+        assert_eq!(changed.output(Leaves::Save).format, Format::Jpeg);
+        // (What was once "no preview" is "to the clipboard only", until something else is chosen.)
+        let previews = parse(br#"{"previewEnabled": false, "previewSeconds": 20}"#).unwrap();
+        assert_eq!(previews.after_capture, After::Copy);
+        assert_eq!(previews.preview_seconds, 20.0);
+        assert!(!previews.to_file().contains_key("previewEnabled"));
+        let edits = parse(br#"{"previewEnabled": false, "afterCapture": "edit"}"#).unwrap();
+        assert_eq!(edits.after_capture, After::Edit);
+        assert_eq!(
+            parse(br#"{"afterCapture": "print"}"#)
+                .unwrap()
+                .after_capture,
+            After::Preview
+        );
+        assert_eq!(
+            parse(br#"{"previewSeconds": 3601, "previewEnabled": 0}"#).unwrap(),
+            Settings::default()
+        );
+        // (Parts of a second are seconds too; what is not a number of them, below 0, or more than can
+        // be chosen, is none.)
+        assert_eq!(
+            parse(br#"{"noticeSeconds": 2.5}"#).unwrap().notice_seconds,
+            2.5
+        );
+        for seconds in ["\"5\"", "-1", "-0.5", "0.05", "3600.5", "true"] {
+            let file = format!(r#"{{"noticeSeconds": {seconds}}}"#);
+            let odd = parse(file.as_bytes()).unwrap();
+            assert_eq!(odd.notice_seconds, 7.0, "{seconds}");
+        }
+
+        // A value of the wrong kind, or one that means nothing, costs that setting, not the others.
+        let mixed = parse(
+            br#"{"language": "ja", "uploadImmediately": "true", "startMode": "sideways",
+                 "copyToClipboard": 0, "shortcut": "", "enableUpload": 1, "noticeCorner": "middle",
+                 "noticeSound": "loud"}"#,
+        )
+        .unwrap();
+        assert_eq!(mixed.language.as_deref(), Some("ja"));
+        assert!(!mixed.upload_immediately);
+        assert!(!mixed.upload_enabled);
+        assert_eq!(mixed.start_mode, Mode::Smart);
+        assert!(mixed.copy_to_clipboard);
+        assert_eq!(mixed.shortcut, "Ctrl+Shift+H");
+        assert_eq!(mixed.notice_corner, Corner::BottomRight);
+        assert_eq!(mixed.notice_sound, Sound::default());
+
+        // (The tours seen: each once, in their order; a name of none, or not a name, is let go of.)
+        let toured = parse(br#"{"toursSeen": ["editor", "map", 3, "capture", "editor"]}"#).unwrap();
+        assert_eq!(toured.tours_seen, [Tour::Capture, Tour::Editor]);
+        assert!(
+            parse(br#"{"toursSeen": "editor"}"#)
+                .unwrap()
+                .tours_seen
+                .is_empty()
+        );
+        let mut seeing = Settings::default();
+        seeing.saw(Tour::Editor);
+        seeing.saw(Tour::Preview);
+        seeing.saw(Tour::Editor);
+        assert_eq!(seeing.tours_seen, [Tour::Preview, Tour::Editor]);
+        assert_eq!(seeing.tours_seen(), ["preview", "editor"]);
+
+        // (The version skipped: a name, or none; and written back as it was read.)
+        let skipped = parse(br#"{"skippedVersion": "0.2.0"}"#).unwrap();
+        assert_eq!(skipped.skipped_version.as_deref(), Some("0.2.0"));
+        assert_eq!(
+            skipped.to_file().get("skippedVersion"),
+            Some(&Value::from("0.2.0"))
+        );
+        assert_eq!(
+            parse(br#"{"skippedVersion": 2}"#).unwrap().skipped_version,
+            None
+        );
+        assert_eq!(
+            parse(br#"{"skippedVersion": ""}"#).unwrap().skipped_version,
+            None
+        );
+        assert!(!Settings::default().to_file().contains_key("skippedVersion"));
+
+        assert_eq!(parse(b"not json"), None);
+        assert_eq!(parse(b"[1, 2]"), None);
+    }
+
+    #[test]
+    fn writing_keeps_what_this_version_does_not_know() {
+        let path = scratch("unknown");
+        std::fs::write(&path, br#"{"language": "en", "somethingNew": {"a": 1}}"#).unwrap();
+
+        let mut settings = parse(&std::fs::read(&path).unwrap()).unwrap();
+        settings.upload_immediately = true;
+        settings.start_mode = Mode::Monitor;
+        settings.saw(Tour::Capture);
+        write(&path, &settings).unwrap();
+
+        let written: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["language"], "en");
+        assert_eq!(written["uploadImmediately"], true);
+        assert_eq!(written["enableUpload"], false);
+        assert_eq!(written["startMode"], "monitor");
+        assert_eq!(written["hideOwnWindows"], true);
+        assert_eq!(written["barHideSeconds"], 0.75);
+        assert_eq!(written["barRevealArea"]["width"], 0.4);
+        assert_eq!(written["showCrosshair"], true);
+        assert_eq!(written["saveOnCapture"], false);
+        assert_eq!(written["deleteSavedOnDiscard"], false);
+        assert_eq!(written["saveOnCaptureCustom"], false);
+        assert_eq!(written["saveOnCaptureFormats"], serde_json::json!(["png"]));
+        assert_eq!(written["saveOnCaptureFit"], 0);
+        assert_eq!(written["noticeSeconds"], 7.0);
+        assert_eq!(written["uploadFormat"], "png");
+        assert_eq!(written["uploadFit"], 0);
+        assert_eq!(written["quality"], "high");
+        assert_eq!(written["afterCapture"], "preview");
+        assert_eq!(written["defaultHider"], "last");
+        assert_eq!(written["previewSeconds"], 0.0);
+        assert_eq!(written["toursSeen"], serde_json::json!(["capture"]));
+        assert_eq!(written["somethingNew"]["a"], 1);
+        assert!(!path.with_extension("json.new").exists());
+        assert_eq!(
+            parse(&std::fs::read(&path).unwrap()).unwrap().start_mode,
+            Mode::Monitor
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_settings_is_put_aside_not_written_over() {
+        let path = scratch("unreadable");
+        std::fs::write(&path, b"{ \"language\": \"ja\", ").unwrap();
+
+        let settings = Settings {
+            language: Some("en".into()),
+            ..Settings::default()
+        };
+        write(&path, &settings).unwrap();
+
+        let written = parse(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written.language.as_deref(), Some("en"));
+        assert_eq!(
+            std::fs::read(path.with_extension("json.unreadable")).unwrap(),
+            b"{ \"language\": \"ja\", "
+        );
+    }
+
+    #[test]
+    fn settings_are_found_without_the_application() {
+        let config = scratch("without-app").with_file_name("config");
+        assert_eq!(read_in(&config), None);
+        let folder = config.join(IDENTIFIER);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("settings.json"), b"{ \"takeSnipping\": true }").unwrap();
+        assert!(read_in(&config).unwrap().take_snipping);
+        std::fs::write(folder.join("settings.json"), b"not settings").unwrap();
+        assert_eq!(read_in(&config), None);
+    }
+
+    #[test]
+    fn the_folder_named_is_the_application_s() {
+        // (The first interface names the folder in its own configuration; while it is in the
+        // repository, the two must agree. Once it is gone, the name is only kept here.)
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/tauri.conf.json");
+        let Ok(config) = std::fs::read(path) else {
+            return;
+        };
+        let config: Value = serde_json::from_slice(&config).unwrap();
+        assert_eq!(config["identifier"], IDENTIFIER);
+    }
+
+    #[test]
+    fn a_change_holds_for_the_running_application_and_is_written_down() {
+        let path = scratch("update");
+        let running = Mutex::new(Settings::default());
+
+        update(&path, &running, |settings| settings.upload_enabled = true);
+        tour_seen(&path, &running, "editor");
+        tour_seen(&path, &running, "no such tour");
+
+        assert!(running.lock().unwrap().upload_enabled);
+        assert_eq!(running.lock().unwrap().tours_seen, [Tour::Editor]);
+        let written = parse(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.upload_enabled);
+        assert_eq!(written.tours_seen, [Tour::Editor]);
+        assert_eq!(read(&path), written);
+        assert_eq!(
+            read(&path.with_file_name("missing.json")),
+            Settings::default()
+        );
+    }
+
+    #[test]
+    fn the_first_write_creates_the_file_and_its_directory() {
+        let path = scratch("first")
+            .with_file_name("deeper")
+            .join("settings.json");
+
+        write(&path, &Settings::default()).unwrap();
+
+        assert_eq!(
+            parse(&std::fs::read(&path).unwrap()),
+            Some(Settings::default())
+        );
+    }
+}
