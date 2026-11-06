@@ -1128,7 +1128,9 @@ impl Small {
             .child(t("preview.save"))
             .on_click(move |_, _, cx| cx.defer(move |cx| save(id, cx)));
 
-        let copy = base("copy")
+        // (Named after what it says: GPUI keeps a tooltip that is up as it was made, and one that
+        // says "copy" after the copy is done is made anew.)
+        let copy = base(if look.copied { "copied" } else { "copy" })
             .w(px(34.0))
             .rounded_r(px(6.0))
             .hover(|style| style.border_color(accent))

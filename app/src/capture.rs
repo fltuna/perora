@@ -181,6 +181,7 @@ fn arrived(
     cx: &mut App,
 ) {
     cx.global_mut::<Capturing>().busy = false;
+    let was_up = before.is_some();
     if let Some(before) = before {
         selection::close(&before, cx);
     }
@@ -195,7 +196,11 @@ fn arrived(
             come_back(cx);
             gpu::release_soon(cx);
             notice::say(message, Lasting::Long, None, cx);
-            preview::restore(cx);
+            // (What was being previewed is back, when it was put out of the way: left in the
+            // picture, it never was.)
+            if hide || was_up {
+                preview::restore(cx);
+            }
             return;
         }
     };

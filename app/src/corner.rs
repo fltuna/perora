@@ -159,7 +159,8 @@ async fn come_in(
 
 /// A window that is on screen already, put in its place at once, at its size, and wholly seen
 /// (should it have been on its way in, it is there now). From a task of its own, as
-/// `appear_when_drawn` has it.
+/// `appear_when_drawn` has it. (One that has not drawn yet stays out of sight: that is seen once
+/// it has, by `appear_when_drawn`, where this put it.)
 pub fn put(window: &Window, to: Rect, cx: &mut App) {
     let Some(handle) = hwnd::of(window) else {
         return;
@@ -168,7 +169,6 @@ pub fn put(window: &Window, to: Rect, cx: &mut App) {
     cx.spawn(async move |cx| {
         hwnd::place(handle, to);
         platform::set_opacity(handle, None);
-        platform::set_cloaked(handle, false);
         cx.update(|cx| redraw(window, cx));
     })
     .detach();
