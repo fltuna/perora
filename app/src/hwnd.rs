@@ -47,7 +47,6 @@ pub fn never_active(window: WindowId) {
     }
 }
 
-/// Back on screen, as it was.
 /// Shown, without being made the window in front.
 pub fn show_behind(window: WindowId) {
     unsafe {
@@ -60,6 +59,7 @@ pub fn in_front(window: WindowId) -> bool {
     unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == hwnd(window) }
 }
 
+/// Back on screen, as it was.
 pub fn show(window: WindowId) {
     unsafe {
         let _ = ShowWindow(hwnd(window), SW_SHOW);

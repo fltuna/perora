@@ -110,14 +110,18 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
         id,
         picture: Rc::new(picture),
     };
-    cx.default_global::<Large>().awaiting = false;
+    let large = cx.default_global::<Large>();
+    large.awaiting = false;
+    large.put_aside = None;
     open(Some(capture), cx);
 }
 
 /// The window with no capture in it, waiting for an image to be dropped on it, chosen or taken from
 /// the clipboard: opened, or brought back and to the front.
 pub fn await_image(cx: &mut App) {
-    cx.default_global::<Large>().awaiting = true;
+    let large = cx.default_global::<Large>();
+    large.awaiting = true;
+    large.put_aside = None;
     if let Some(window) = cx.default_global::<Large>().window {
         let _ = window.update(cx, |editor, window, cx| {
             if let Some(handle) = hwnd::of(window) {

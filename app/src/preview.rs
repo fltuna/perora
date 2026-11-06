@@ -566,6 +566,11 @@ pub fn relanguage(cx: &mut App) {
     if let Some(window) = cx.default_global::<Previews>().window {
         let _ = window.update(cx, |small, _, cx| {
             small.language = language;
+            // (The tour too, on the step it is on.)
+            let steps = small.tour.is_some().then(|| small.tour_steps());
+            if let (Some(tour), Some(steps)) = (small.tour.as_mut(), steps) {
+                tour.set_steps(steps);
+            }
             cx.notify();
         });
     }
@@ -1009,9 +1014,18 @@ impl Small {
     /// The tour of the window, from its first step. (Shown, something is being done about the
     /// capture: it is not given up on its own meanwhile.)
     fn start_tour(&mut self, cx: &mut Context<Self>) {
+        self.tour = Some(Tour::new(self.tour_steps(), self.moves, true));
+        self.choose(None);
+        let id = self.id;
+        cx.defer(move |cx| touch(id, cx));
+        cx.notify();
+    }
+
+    /// The steps of the tour, in the user's language.
+    fn tour_steps(&self) -> Vec<Step> {
         let t = |key: &str| self.language.text(key, &[]);
         let offers_upload = false;
-        let steps = vec![
+        vec![
             Step::new(At::Mark("picture"), t("tour.preview.picture")),
             Step::new(
                 At::Mark("actions"),
@@ -1024,12 +1038,7 @@ impl Small {
             Step::new(At::Mark("as"), t("tour.preview.as")),
             Step::new(At::Mark("menu"), t("tour.choice")),
             Step::new(At::Mark("guide"), t("tour.again")),
-        ];
-        self.tour = Some(Tour::new(steps, self.moves, true));
-        self.choose(None);
-        let id = self.id;
-        cx.defer(move |cx| touch(id, cx));
-        cx.notify();
+        ]
     }
 
     /// One of the tour's buttons pressed.
