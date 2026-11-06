@@ -26,7 +26,7 @@ pub trait Tool {
     fn go_on(&mut self, press: &Press);
     /// What is taking shape, drawn over the rest until it is done.
     fn shaping(&self) -> Option<Edit>;
-    /// The button was let go: what was drawn, if anything.
+    /// The button was let go: what was drawn, if anything (as it was shown last).
     fn end(&mut self, press: &Press) -> Option<Edit>;
     /// What was begun is given up (Esc).
     fn give_up(&mut self);

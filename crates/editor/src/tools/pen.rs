@@ -59,8 +59,8 @@ impl Tool for Pen {
         })
     }
 
-    fn end(&mut self, press: &Press) -> Option<Edit> {
-        self.go_on(press);
+    fn end(&mut self, _press: &Press) -> Option<Edit> {
+        // (As it was shown last, as in the Tauri version.)
         let shaped = self.shaping();
         self.drawing = None;
         shaped

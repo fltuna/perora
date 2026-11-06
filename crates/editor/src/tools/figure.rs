@@ -92,8 +92,8 @@ impl Tool for Figures {
         Some(self.edit(from, to, width))
     }
 
-    fn end(&mut self, press: &Press) -> Option<Edit> {
-        self.go_on(press);
+    fn end(&mut self, _press: &Press) -> Option<Edit> {
+        // (As it was shown last: letting go of Shift a moment before the button does not change it.)
         let shaped = self.shaping.take()?;
         // (A press without a drag is nothing: there is no shape in it.)
         (shaped.0 != shaped.1).then(|| self.edit(shaped.0, shaped.1, shaped.2))

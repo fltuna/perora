@@ -587,7 +587,10 @@ impl Editor {
                     let mut edits = self.drawing.edits().to_vec();
                     edits.push(edit);
                     self.change(edits, cx);
-                    self.just_drawn = !self.full;
+                    // (Not when the drawing took no more: the one before is still the last.)
+                    if !self.full {
+                        self.just_drawn = true;
+                    }
                 }
                 cx.notify();
             }
