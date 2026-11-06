@@ -107,6 +107,21 @@ fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             Part::line("M2.5 8a5.5 4.5 0 1 0 11 0a5.5 4.5 0 1 0-11 0z"),
             colour,
         )],
+        Kind::Marker => {
+            let mut parts = vec![
+                Part::line("M5.2 9.2l5.5-6 2.6 2.4-5.5 6zM5.2 9.2l-1.4 3 3.9-.7")
+                    .placed(PEN_PLACED),
+            ];
+            if let Some(colour) = colour {
+                parts.push(
+                    Part::solid("M5.2 9.2l-1.4 3 3.9-.7z")
+                        .placed(PEN_PLACED)
+                        .in_colour(colour),
+                );
+                parts.push(underline(colour));
+            }
+            parts
+        }
         Kind::Pen => {
             let mut parts = vec![
                 Part::line(

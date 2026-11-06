@@ -12,10 +12,12 @@ use crate::paint::Painter;
 use crate::view::Area;
 
 mod line;
+mod marker;
 mod pen;
 mod shape;
 
 pub use line::head;
+pub use marker::{SEEN_THROUGH, WIDER};
 
 /// Where something selected can be taken hold of to change its size: an end of a line; a corner or a
 /// side of the frame around a shape (-1 the left or top one, 1 the right or bottom one).
@@ -64,6 +66,7 @@ pub trait Mark: Sync {
 pub fn mark_of(edit: &Edit) -> Option<&'static dyn Mark> {
     match edit {
         Edit::Pen { .. } => Some(&pen::Pen),
+        Edit::Marker { .. } => Some(&marker::Marker),
         Edit::Rectangle { .. } | Edit::Ellipse { .. } => Some(&shape::Shape),
         Edit::Line { .. } | Edit::Arrow { .. } => Some(&line::Line),
         _ => None,

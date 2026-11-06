@@ -29,6 +29,7 @@ use crate::tools::Kind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Panel {
     Pen,
+    Marker,
     Stroke,
     Fill,
     Outline,
@@ -54,6 +55,17 @@ pub(super) enum Set {
     Inside(Option<Colour>),
     /// How solid a shape's inside is (more than 0).
     Solid(f32),
+}
+
+impl Panel {
+    /// The panel of the pen or the marker, under its button.
+    pub(super) fn of_stroke(kind: Kind) -> Self {
+        if kind == Kind::Marker {
+            Panel::Marker
+        } else {
+            Panel::Pen
+        }
+    }
 }
 
 impl Set {
@@ -168,7 +180,7 @@ impl Editor {
     /// The second bar there is to have, open or not.
     pub(super) fn offered(&self) -> Option<Offered> {
         match self.chosen_edit() {
-            Some(Edit::Pen { .. }) => Some(Offered::Stroke),
+            Some(Edit::Pen { .. } | Edit::Marker { .. }) => Some(Offered::Stroke),
             Some(Edit::Rectangle { .. } | Edit::Ellipse { .. }) => Some(Offered::Shape),
             Some(Edit::Line { .. } | Edit::Arrow { .. }) => Some(Offered::Line),
             Some(_) => None,
@@ -196,6 +208,7 @@ impl Editor {
         let second = self.second();
         let open = match self.asked? {
             Panel::Pen => self.tool == Kind::Pen && self.chosen().is_none(),
+            Panel::Marker => self.tool == Kind::Marker && self.chosen().is_none(),
             Panel::Stroke => second == Some(Offered::Stroke),
             Panel::Fill => self.fills(),
             Panel::Outline => matches!(
@@ -222,12 +235,20 @@ impl Editor {
         self.was = (self.tool, chosen);
     }
 
-    /// The colour and size of the pen's strokes: what it draws next, or the one selected.
-    pub(super) fn stroke_now(&self) -> (Colour, u32) {
-        match self.chosen_edit() {
-            Some(Edit::Pen { color, width, .. }) => (*color, self.step_of(*width)),
-            _ => (self.pen.colour, self.pen.step),
+    /// The colour and size of the strokes of the pen (or the `marker`): what it draws next, or the
+    /// one selected.
+    pub(super) fn stroke_now(&self, marker: bool) -> (Colour, u32) {
+        match (self.chosen_edit(), marker) {
+            (Some(Edit::Pen { color, width, .. }), false)
+            | (Some(Edit::Marker { color, width, .. }), true) => (*color, self.step_of(*width)),
+            (_, false) => (self.pen.colour, self.pen.step),
+            (_, true) => (self.marker.colour, self.marker.step),
         }
+    }
+
+    /// Whether the stroke selected is the marker's.
+    pub(super) fn chosen_is_marker(&self) -> bool {
+        matches!(self.chosen_edit(), Some(Edit::Marker { .. }))
     }
 
     /// The outline of shapes and lines: what is drawn next, or the one selected.
@@ -269,11 +290,23 @@ impl Editor {
         (width / self.unit()).round().max(1.0) as u32
     }
 
-    /// A setting of the pen: for what it draws next, and for what the settings are about.
-    pub(super) fn set_stroke(&mut self, set: Set, dragged: bool, cx: &mut Context<Self>) {
+    /// A setting of the pen (or the `marker`): for what it draws next, and for what the settings are
+    /// about.
+    pub(super) fn set_stroke(
+        &mut self,
+        marker: bool,
+        set: Set,
+        dragged: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let tool = if marker {
+            &mut self.marker
+        } else {
+            &mut self.pen
+        };
         match set {
-            Set::Colour(colour) => self.pen.colour = colour,
-            Set::Step(step) => self.pen.step = step,
+            Set::Colour(colour) => tool.colour = colour,
+            Set::Step(step) => tool.step = step,
             _ => return,
         }
         let unit = self.unit();
@@ -281,24 +314,22 @@ impl Editor {
             cx.notify();
             return;
         };
-        if let Some(Edit::Pen {
-            points,
-            color,
-            width,
-        }) = self.drawing.edits().get(index).cloned()
-        {
-            let (color, width) = match set {
-                Set::Colour(colour) => (colour, width),
-                Set::Step(step) => (color, step as f32 * unit),
-                _ => (color, width),
-            };
-            let next = Edit::Pen {
-                points,
-                color,
-                width,
-            };
-            self.alter(index, next, set, dragged, cx);
+        let mut next = match self.drawing.edits().get(index) {
+            Some(edit @ Edit::Pen { .. }) if !marker => edit.clone(),
+            Some(edit @ Edit::Marker { .. }) if marker => edit.clone(),
+            _ => {
+                cx.notify();
+                return;
+            }
+        };
+        if let Edit::Pen { color, width, .. } | Edit::Marker { color, width, .. } = &mut next {
+            match set {
+                Set::Colour(colour) => *color = colour,
+                Set::Step(step) => *width = step as f32 * unit,
+                _ => {}
+            }
         }
+        self.alter(index, next, set, dragged, cx);
         cx.notify();
     }
 
@@ -385,8 +416,8 @@ impl Editor {
         cx.notify();
     }
 
-    /// The pen's tool button records where it is: its panel opens under it.
-    pub(super) fn pen_opener(&self) -> impl IntoElement + use<> {
-        recorded(&self.openers, Panel::Pen)
+    /// The pen's (or the marker's) tool button records where it is: its panel opens under it.
+    pub(super) fn stroke_opener(&self, kind: Kind) -> impl IntoElement + use<> {
+        recorded(&self.openers, Panel::of_stroke(kind))
     }
 }

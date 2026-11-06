@@ -108,6 +108,7 @@ pub struct Editor {
     shown: Rc<Vec<Edit>>,
     tool: Kind,
     pen: tools::pen::Pen,
+    marker: tools::pen::Pen,
     figures: tools::figure::Figures,
     /// The last thing in the list was just drawn, with the tool still in hand: a shape is taken
     /// hold of there to be put right (owner: 「図形は描画直後は直前のやつを描画モードでも掴めるように」).
@@ -180,6 +181,7 @@ impl Editor {
             shown: Rc::new(Vec::new()),
             tool: Kind::Select,
             pen: tools::pen::Pen::default(),
+            marker: tools::pen::Pen::marker(),
             figures: tools::figure::Figures::default(),
             just_drawn: false,
             looking: Looking::default(),
@@ -217,6 +219,7 @@ impl Editor {
         self.shown = Rc::new(Vec::new());
         self.tool = Kind::Select;
         self.pen = tools::pen::Pen::default();
+        self.marker = tools::pen::Pen::marker();
         self.figures = tools::figure::Figures::default();
         self.just_drawn = false;
         self.looking = Looking::default();
@@ -325,6 +328,7 @@ impl Editor {
         match self.tool {
             Kind::Select => None,
             Kind::Pen => Some(&mut self.pen),
+            Kind::Marker => Some(&mut self.marker),
             Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&mut self.figures),
         }
     }
@@ -333,6 +337,7 @@ impl Editor {
         match self.tool {
             Kind::Select => None,
             Kind::Pen => Some(&self.pen),
+            Kind::Marker => Some(&self.marker),
             Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&self.figures),
         }
     }
@@ -781,11 +786,12 @@ impl Editor {
         if self.gesture.is_some() {
             return;
         }
-        if kind == self.tool && kind == Kind::Pen && self.chosen().is_none() {
-            self.asked = if self.panel() == Some(Panel::Pen) {
+        if kind == self.tool && kind.is_stroke() && self.chosen().is_none() {
+            let panel = Panel::of_stroke(kind);
+            self.asked = if self.panel() == Some(panel) {
                 None
             } else {
-                Some(Panel::Pen)
+                Some(panel)
             };
             cx.notify();
             return;
@@ -931,6 +937,7 @@ impl Editor {
 fn kind_of(edit: &Edit) -> Option<Kind> {
     match edit {
         Edit::Pen { .. } => Some(Kind::Pen),
+        Edit::Marker { .. } => Some(Kind::Marker),
         Edit::Rectangle { .. } => Some(Kind::Rectangle),
         Edit::Ellipse { .. } => Some(Kind::Ellipse),
         Edit::Line { .. } => Some(Kind::Line),
@@ -996,9 +1003,13 @@ impl Editor {
             bars::button(id, current, enabled, theme)
         };
         let mut bar = div().flex().items_center().gap(px(4.0));
-        for kind in [Kind::Select, Kind::Pen] {
-            let pen = kind == Kind::Pen;
-            let colour = pen.then(|| paint::colour(self.pen.colour));
+        for kind in [Kind::Select, Kind::Pen, Kind::Marker] {
+            let pen = kind.is_stroke();
+            let colour = match kind {
+                Kind::Pen => Some(paint::colour(self.pen.colour)),
+                Kind::Marker => Some(paint::colour(self.marker.colour)),
+                _ => None,
+            };
             let named = format!("{} ({})", t(kind.name()), kind.key().to_uppercase());
             bar = bar.child(
                 button(kind.name().into(), self.tool == kind, true)
@@ -1009,7 +1020,8 @@ impl Editor {
                         16.0,
                         theme.text,
                     ))
-                    // In hand, the pen says it has a panel of its own: pressed again, it opens.
+                    // In hand, the pen (or the marker) says it has a panel of its own: pressed again,
+                    // it opens.
                     .when(pen && self.tool == kind, |button| {
                         button.child(
                             div()
@@ -1022,7 +1034,7 @@ impl Editor {
                                 .child(icons::caret(theme.text)),
                         )
                     })
-                    .when(pen, |button| button.child(self.pen_opener())),
+                    .when(pen, |button| button.child(self.stroke_opener(kind))),
             );
         }
         // The shapes and lines: one button, which takes up the last of them taken; drawn in their

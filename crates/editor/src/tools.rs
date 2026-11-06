@@ -38,6 +38,7 @@ pub trait Tool {
 pub enum Kind {
     Select,
     Pen,
+    Marker,
     Rectangle,
     Ellipse,
     Line,
@@ -45,9 +46,10 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 6] = [
+    pub const ALL: [Kind; 7] = [
         Kind::Select,
         Kind::Pen,
+        Kind::Marker,
         Kind::Rectangle,
         Kind::Ellipse,
         Kind::Line,
@@ -59,6 +61,7 @@ impl Kind {
         match self {
             Kind::Select => "v",
             Kind::Pen => "p",
+            Kind::Marker => "m",
             Kind::Rectangle => "r",
             Kind::Ellipse => "e",
             Kind::Line => "l",
@@ -71,11 +74,17 @@ impl Kind {
         match self {
             Kind::Select => "editor.tool.select",
             Kind::Pen => "editor.tool.pen",
+            Kind::Marker => "editor.tool.marker",
             Kind::Rectangle => "editor.tool.rectangle",
             Kind::Ellipse => "editor.tool.ellipse",
             Kind::Line => "editor.tool.line",
             Kind::Arrow => "editor.tool.arrow",
         }
+    }
+
+    /// The pen or the marker: a tool with a panel of its own under its button (no second bar).
+    pub fn is_stroke(self) -> bool {
+        matches!(self, Kind::Pen | Kind::Marker)
     }
 
     /// One of the shapes and lines (one button on the first bar, one bar of their own).

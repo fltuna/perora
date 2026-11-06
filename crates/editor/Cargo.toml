@@ -9,6 +9,9 @@ publish = false
 [dependencies]
 gpui = { workspace = true }
 image = { version = "0.25", default-features = false }
+# A marker is seen through, as solid everywhere: its stroke is made one shape (no part over another)
+# before it is drawn (GPUI lays the parts of a path over one another, darker where they meet).
+i_overlay = "9"
 # GPUI's paths are lyon's: the ends and corners of a line are named in lyon's terms, and the icons
 # (the Tauri version's SVG drawings) are read with its parser.
 lyon = { version = "1.0", features = ["extra"] }

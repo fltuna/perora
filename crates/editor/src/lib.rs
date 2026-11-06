@@ -5,6 +5,7 @@
 pub mod editor;
 pub mod icons;
 pub mod marks;
+pub mod outline;
 pub mod paint;
 pub mod picture;
 pub mod selecting;

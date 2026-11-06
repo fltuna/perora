@@ -1,6 +1,8 @@
-//! The pen: a line where the pointer goes with the button down, in its colour and width. Its colour
-//! and size are its own (the marker has others).
+//! The pen: a line where the pointer goes with the button down, in its colour and width. The marker
+//! is drawn the same way (wider and seen through, as its mark draws it). Each has a colour and a size
+//! of its own (owner: 「ペンとマーカーは色とサイズを別々に覚える」).
 
+use perora_core::colours::MARKERS;
 use perora_core::edit::{Colour, Edit, Place};
 
 use super::{Press, Tool};
@@ -16,6 +18,8 @@ pub const RED: Colour = Colour {
 pub const FIRST_STEP: u32 = 4;
 
 pub struct Pen {
+    /// The marker, not the pen.
+    pub marker: bool,
     pub colour: Colour,
     pub step: u32,
     /// The line taking shape, and how wide it is drawn (as it was when it was begun).
@@ -25,9 +29,21 @@ pub struct Pen {
 impl Default for Pen {
     fn default() -> Self {
         Self {
+            marker: false,
             colour: RED,
             step: FIRST_STEP,
             drawing: None,
+        }
+    }
+}
+
+impl Pen {
+    /// The marker: yellow to start with.
+    pub fn marker() -> Self {
+        Self {
+            marker: true,
+            colour: MARKERS[0],
+            ..Self::default()
         }
     }
 }
@@ -52,10 +68,19 @@ impl Tool for Pen {
 
     fn shaping(&self) -> Option<Edit> {
         let (points, width) = self.drawing.as_ref()?;
-        Some(Edit::Pen {
-            points: points.clone(),
-            color: self.colour,
-            width: *width,
+        let (points, color, width) = (points.clone(), self.colour, *width);
+        Some(if self.marker {
+            Edit::Marker {
+                points,
+                color,
+                width,
+            }
+        } else {
+            Edit::Pen {
+                points,
+                color,
+                width,
+            }
         })
     }
 

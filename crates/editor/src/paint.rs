@@ -135,6 +135,36 @@ pub fn stroke_through(
     }
 }
 
+/// A line through the places as `stroke_through` draws it, but as one shape (no part over another):
+/// as solid everywhere when it is seen through (a marker's, `outline`).
+pub fn seen_through(
+    window: &mut Window,
+    painter: &Painter,
+    points: &[Place],
+    width: f32,
+    colour: Hsla,
+) {
+    let Some(first) = points.first() else {
+        return;
+    };
+    let triangles = crate::outline::of(points, width);
+    let corner = |at: u32| {
+        let [x, y] = triangles.corners[at as usize];
+        painter.at([first[0] + x, first[1] + y])
+    };
+    let Some(start) = triangles.indices.first() else {
+        return;
+    };
+    let mut path = gpui::Path::new(corner(*start));
+    for three in triangles.indices.chunks_exact(3) {
+        path.push_triangle(
+            (corner(three[0]), corner(three[1]), corner(three[2])),
+            (point(0., 1.), point(0., 1.), point(0., 1.)),
+        );
+    }
+    window.paint_path(path, colour);
+}
+
 /// The inside of a polygon (places of the image), in one colour (as solid as it says).
 pub fn fill_polygon(window: &mut Window, painter: &Painter, places: &[Place], colour: Hsla) {
     let [first, rest @ ..] = places else {

@@ -18,7 +18,7 @@ use gpui::{
     IntoElement, MouseDownEvent, ParentElement, Pixels, Point, SharedString,
     StatefulInteractiveElement, Styled, Window, anchored, deferred, div, point, px,
 };
-use perora_core::colours::{Hsv, NONE_TAKES, PALETTE};
+use perora_core::colours::{Hsv, MARKERS, NONE_TAKES, PALETTE};
 use perora_core::edit::Colour;
 use perora_core::platform;
 use perora_ui::motion::{self, Curve};
@@ -68,6 +68,8 @@ pub(super) struct PanelLook {
     /// Its corner in the window.
     at: Point<Pixels>,
     offered: Vec<Option<Colour>>,
+    /// Of the marker (its size is shown as a marker's).
+    marker: bool,
     /// The colour in use (none: no colour), and where mixing starts while there is none.
     colour: Option<Colour>,
     fallback: Colour,
@@ -168,8 +170,14 @@ impl Editor {
     /// while there is none.
     fn colours_of(&self, panel: Panel) -> (Vec<Option<Colour>>, Option<Colour>, Colour) {
         let palette = || PALETTE.iter().copied().map(Some).collect::<Vec<_>>();
+        let markers = || MARKERS.iter().copied().map(Some).collect::<Vec<_>>();
         match panel {
-            Panel::Pen | Panel::Stroke => (palette(), Some(self.stroke_now().0), RED),
+            Panel::Pen => (palette(), Some(self.stroke_now(false).0), RED),
+            Panel::Marker => (markers(), Some(self.stroke_now(true).0), MARKERS[0]),
+            Panel::Stroke if self.chosen_is_marker() => {
+                (markers(), Some(self.stroke_now(true).0), MARKERS[0])
+            }
+            Panel::Stroke => (palette(), Some(self.stroke_now(false).0), RED),
             Panel::Outline => (palette(), Some(self.outline_now().0), RED),
             Panel::Fill => {
                 let (colour, fill) = self.inside_now();
@@ -198,13 +206,19 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         match (panel, colour) {
-            (Panel::Pen | Panel::Stroke, Some(colour)) => {
-                self.set_stroke(Set::Colour(colour), dragged, cx)
+            (Panel::Pen | Panel::Marker | Panel::Stroke, Some(colour)) => {
+                let marker = self.marks_with_marker(panel);
+                self.set_stroke(marker, Set::Colour(colour), dragged, cx)
             }
             (Panel::Outline, Some(colour)) => self.set_outline(Set::Colour(colour), dragged, cx),
             (Panel::Fill, colour) => self.set_inside(Set::Inside(colour), dragged, cx),
             _ => {}
         }
+    }
+
+    /// Whether a panel sets the marker (not the pen).
+    fn marks_with_marker(&self, panel: Panel) -> bool {
+        panel == Panel::Marker || (panel == Panel::Stroke && self.chosen_is_marker())
     }
 
     /// A colour mixed in the field of shades or by its hue.
@@ -318,7 +332,7 @@ impl Editor {
             outline: self.outline_now().0,
             inside: self.inside_now(),
             fills: self.fills(),
-            stroke: self.stroke_now().0,
+            stroke: self.stroke_now(self.chosen_is_marker()).0,
             open: self.panel(),
         }
     }
@@ -494,8 +508,9 @@ impl Editor {
     fn panel_look(&self, panel: Panel) -> Option<PanelLook> {
         let under = *self.openers.borrow().get(&panel)?;
         let (offered, colour, fallback) = self.colours_of(panel);
+        let marker = self.marks_with_marker(panel);
         let step = match panel {
-            Panel::Pen | Panel::Stroke => self.stroke_now().1,
+            Panel::Pen | Panel::Marker | Panel::Stroke => self.stroke_now(marker).1,
             Panel::Outline => self.outline_now().1,
             Panel::Fill => 0,
         };
@@ -503,6 +518,7 @@ impl Editor {
             panel,
             at: point(under.center().x - px(PANEL / 2.0), under.bottom() + px(8.0)),
             offered,
+            marker,
             colour,
             fallback,
             step,
@@ -549,7 +565,8 @@ impl Editor {
                 .into_any_element(),
         ];
         match panel {
-            Panel::Pen | Panel::Stroke | Panel::Outline => {
+            Panel::Pen | Panel::Marker | Panel::Stroke | Panel::Outline => {
+                let marker = look.marker;
                 let (sample, set): (&'static str, SetStep) = if panel == Panel::Outline {
                     (
                         LINE_SAMPLE,
@@ -560,14 +577,14 @@ impl Editor {
                 } else {
                     (
                         PEN_SAMPLE,
-                        Rc::new(|this: &mut Editor, step, cx: &mut Context<Editor>| {
-                            this.set_stroke(Set::Step(step), true, cx)
+                        Rc::new(move |this: &mut Editor, step, cx: &mut Context<Editor>| {
+                            this.set_stroke(marker, Set::Step(step), true, cx)
                         }),
                     )
                 };
                 let colour = look.colour.unwrap_or(look.fallback);
                 settings.push(
-                    self.size(sample, colour, look.step, leaving, theme, cx, set)
+                    self.size(sample, marker, colour, look.step, leaving, theme, cx, set)
                         .into_any_element(),
                 );
             }
@@ -907,6 +924,7 @@ impl Editor {
     fn size(
         &self,
         sample: &'static str,
+        marker: bool,
         colour: Colour,
         step: u32,
         leaving: bool,
@@ -915,8 +933,15 @@ impl Editor {
         set: SetStep,
     ) -> impl IntoElement + use<> {
         let t = |key: &str| SharedString::from(self.language.text(key, &[]));
-        // On the screen, a step is about a pixel.
-        let wide = (step as f32 * 1.2 + 1.0).min(40.0);
+        // On the screen, a step is about a pixel; a marker is as much wider as it is drawn, and seen
+        // through (a little less than it is: on the panel's grey, it would hardly show).
+        let wider = if marker { crate::marks::WIDER } else { 1.0 };
+        let wide = (step as f32 * wider * 1.2 + 1.0).min(40.0);
+        let solid = if marker {
+            crate::marks::SEEN_THROUGH + 0.3
+        } else {
+            1.0
+        };
         let this = cx.entity().downgrade();
         let shown = step.clamp(STEPS.0, STEPS.1);
         div()
@@ -934,8 +959,8 @@ impl Editor {
                         sample,
                         wide,
                         paint::colour(colour),
-                        1.0,
-                        false,
+                        solid,
+                        marker,
                     )],
                     (240.0, 64.0),
                     theme.text,
