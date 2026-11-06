@@ -574,7 +574,7 @@ impl Editor {
             };
             match self.typing_hit(&painter, event.position) {
                 Some(false) => {
-                    self.press_in_field(press.at, event.modifiers.shift, cx);
+                    self.press_in_field(press.at, event.modifiers.shift, event.click_count, cx);
                     return;
                 }
                 Some(true) => {

@@ -166,6 +166,38 @@ impl Typing {
             .map_or(at, |letter| at + letter.len())
     }
 
+    /// Where the words begin (what is not space between them).
+    fn word_starts(&self) -> impl Iterator<Item = usize> + '_ {
+        self.text
+            .split_word_bound_indices()
+            .filter(|(_, part)| !part.trim().is_empty())
+            .map(|(index, _)| index)
+    }
+
+    /// The beginning of the word before `at` (of the one it is in): what Ctrl+← goes to.
+    fn word_before(&self, at: usize) -> usize {
+        self.word_starts()
+            .take_while(|&start| start < at)
+            .last()
+            .unwrap_or(0)
+    }
+
+    /// The beginning of the word after `at`, or the end: what Ctrl+→ goes to.
+    fn word_after(&self, at: usize) -> usize {
+        self.word_starts()
+            .find(|&start| start > at)
+            .unwrap_or(self.text.len())
+    }
+
+    /// The word (or the space between words) at `at`.
+    fn word_at(&self, at: usize) -> Range<usize> {
+        self.text
+            .split_word_bound_indices()
+            .map(|(index, part)| index..index + part.len())
+            .find(|word| word.contains(&at) || (word.end == at && at == self.text.len()))
+            .unwrap_or(at..at)
+    }
+
     /// The line a byte is on, and where that line begins.
     fn line_of(&self, at: usize) -> (usize, usize) {
         let before = &self.text[..at];
@@ -443,7 +475,13 @@ impl Editor {
         }
         let shift = modifiers.shift;
         let caret = typing.caret();
+        // (With Ctrl: by words, and to the very beginning and end.)
+        let word = modifiers.control && !modifiers.alt && !modifiers.platform;
         let moved = match key {
+            "left" if word => Some(typing.word_before(caret)),
+            "right" if word => Some(typing.word_after(caret)),
+            "home" if word => Some(0),
+            "end" if word => Some(typing.text.len()),
             "left" if alone => Some(if typing.selected.is_empty() || shift {
                 typing.before(caret)
             } else {
@@ -499,6 +537,20 @@ impl Editor {
             return Keyed::Taken;
         };
         match key {
+            "backspace" | "delete" if word => {
+                let range = if !typing.selected.is_empty() {
+                    typing.selected.clone()
+                } else if key == "backspace" {
+                    typing.word_before(caret)..caret
+                } else {
+                    caret..typing.word_after(caret)
+                };
+                if !range.is_empty() {
+                    typing.replace(range, "");
+                    cx.notify();
+                }
+                Keyed::Taken
+            }
             "backspace" | "delete" if alone => {
                 let range = if !typing.selected.is_empty() {
                     typing.selected.clone()
@@ -646,6 +698,36 @@ impl Editor {
                 ));
             }
         }
+        // What the system's input is still putting together: a line under it, line by line (as a
+        // field of the browser had it).
+        if let Some(marked) = typing.marked.clone().filter(|marked| !marked.is_empty()) {
+            let colour = if self.letters.fill >= 0.4 {
+                paint::colour(self.letters.color)
+            } else {
+                paint::colour(self.letters.outline.unwrap_or(self.letters.color))
+            };
+            let below = painter.length(self.letters.size * 0.6);
+            let lines = typing.text.split('\n').count();
+            for line in 0..lines {
+                let range = typing.line_range(line);
+                let from = marked.start.max(range.start);
+                let to = marked.end.min(range.end);
+                if from >= to {
+                    continue;
+                }
+                let (Some(left), Some(right)) = (self.place_of(from), self.place_of(to)) else {
+                    continue;
+                };
+                let (start, end) = (painter.at(left), painter.at(right));
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(start.x, start.y + below),
+                        size(end.x - start.x, px(1.5)),
+                    ),
+                    colour,
+                ));
+            }
+        }
         if focused
             && typing.selected.is_empty()
             && let Some(place) = self.place_of(typing.caret())
@@ -735,15 +817,33 @@ impl Editor {
     }
 
     /// A press in the field: the caret there (with Shift, what is selected goes as far); held, the
-    /// pointer selects.
-    pub(super) fn press_in_field(&mut self, at: Place, shift: bool, cx: &mut Context<Self>) {
+    /// pointer selects. Pressed twice, the word there is selected; three times, all of it.
+    pub(super) fn press_in_field(
+        &mut self,
+        at: Place,
+        shift: bool,
+        presses: usize,
+        cx: &mut Context<Self>,
+    ) {
         let Some(index) = self.index_at(at) else {
             return;
         };
         if let Some(typing) = self.typing.as_mut() {
             typing.held = false;
-            typing.move_to(index, shift);
-            typing.selecting = true;
+            match presses {
+                2 if !shift => {
+                    typing.selected = typing.word_at(index);
+                    typing.reversed = false;
+                }
+                3.. if !shift => {
+                    typing.selected = 0..typing.text.len();
+                    typing.reversed = false;
+                }
+                _ => {
+                    typing.move_to(index, shift);
+                    typing.selecting = true;
+                }
+            }
             cx.notify();
         }
     }
