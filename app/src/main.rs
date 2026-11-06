@@ -20,7 +20,6 @@ mod hwnd;
 mod instance;
 mod large;
 mod main_window;
-mod motion;
 mod notice;
 mod preview;
 mod selection;

@@ -42,7 +42,8 @@ pub struct Colour {
 }
 
 impl Colour {
-    fn parse(text: &str) -> Option<Self> {
+    /// `#rrggbb` (or `#RRGGBB`), as a colour; nothing else is one.
+    pub fn parse(text: &str) -> Option<Self> {
         let digits = text.strip_prefix('#')?;
         if digits.len() != 6 || !digits.bytes().all(|digit| digit.is_ascii_hexdigit()) {
             return None;
@@ -56,12 +57,16 @@ impl Colour {
     }
 }
 
+impl Colour {
+    /// The colour as the window writes it: `#rrggbb`, in small letters.
+    pub fn written(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.red, self.green, self.blue)
+    }
+}
+
 impl Serialize for Colour {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&format!(
-            "#{:02x}{:02x}{:02x}",
-            self.red, self.green, self.blue
-        ))
+        serializer.serialize_str(&self.written())
     }
 }
 

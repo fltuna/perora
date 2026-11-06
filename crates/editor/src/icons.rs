@@ -30,6 +30,8 @@ pub struct Part {
     pub colour: Option<Hsla>,
     pub solid: f32,
     pub placed: Option<(f32, f32, f32)>,
+    /// A line ends square where it ends (a marker's), not round.
+    pub butt: bool,
 }
 
 impl Part {
@@ -40,6 +42,7 @@ impl Part {
             colour: None,
             solid: 1.0,
             placed: None,
+            butt: false,
         }
     }
 
@@ -50,6 +53,7 @@ impl Part {
             colour: None,
             solid: 1.0,
             placed: None,
+            butt: false,
         }
     }
 
@@ -71,8 +75,24 @@ impl Part {
 /// The pen drawn smaller, to leave the line under it its room (`withLine`).
 const PEN_PLACED: (f32, f32, f32) = (1.5, 0.0, 0.82);
 
-/// The parts of a tool's icon. `colour`: what it draws in, shown on its tip and in a line under it.
-pub fn of_tool(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
+/// The parts of a tool's icon. `colour`: what it draws in, shown on its tip and in a line under it
+/// (or as the outline of a shape); `inside`: a shape's inside, its colour and how solid it is.
+pub fn of_tool(kind: Kind, colour: Option<Hsla>, inside: Option<(Hsla, f32)>) -> Vec<Part> {
+    let mut parts = shaped(kind, colour);
+    if let (Some((fill, solid)), Kind::Rectangle | Kind::Ellipse) = (inside, kind) {
+        let outline = parts[0];
+        parts.insert(
+            0,
+            Part {
+                solid,
+                ..Part::solid(outline.d).in_colour(fill)
+            },
+        );
+    }
+    parts
+}
+
+fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
     match kind {
         Kind::Select => vec![Part::solid("M4 2.5v10.2l2.9-2.6 1.9 4.1 1.6-.7-1.9-4h3.8z")],
         Kind::Line => vec![tinted(Part::line("M3 13L13 3"), colour)],
@@ -145,6 +165,7 @@ fn underline(colour: Hsla) -> Part {
         colour: Some(colour),
         solid: 1.0,
         placed: None,
+        butt: false,
     }
 }
 
@@ -153,15 +174,59 @@ pub fn icon(parts: Vec<Part>, side: f32, colour: Hsla) -> impl gpui::IntoElement
     use gpui::Styled;
     canvas(
         |_, _, _| {},
-        move |bounds, _, window, _| paint(window, bounds, &parts, colour),
+        move |bounds, _, window, _| paint(window, bounds, (16.0, 16.0), &parts, colour),
     )
     .size(px(side))
     .flex_none()
 }
 
-fn paint(window: &mut Window, bounds: Bounds<Pixels>, parts: &[Part], colour: Hsla) {
-    let scale = bounds.size.width.as_f32() / 16.0;
-    let origin = bounds.origin;
+/// An element that draws parts made for a box `view` across and down (an SVG's `viewBox`), as large
+/// as it fits in the element and in its middle (as an SVG does by default). Its size is the caller's.
+pub fn drawing(parts: Vec<Part>, view: (f32, f32), colour: Hsla) -> gpui::Canvas<()> {
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| paint(window, bounds, view, &parts, colour),
+    )
+}
+
+/// A stroke as wide as it would be drawn, to show a size by (`Size`): `d` in a box 240 by 64, as
+/// wide as `width` there, in `colour` as solid as `solid`.
+pub fn sample(d: &'static str, width: f32, colour: Hsla, solid: f32, butt: bool) -> Part {
+    Part {
+        ink: Ink::Line(width),
+        colour: Some(colour),
+        solid,
+        butt,
+        ..Part::line(d)
+    }
+}
+
+/// The mark that there is more: a small V (`Caret`), 8 by 5.
+pub fn caret(colour: Hsla) -> impl gpui::IntoElement {
+    use gpui::Styled;
+    let part = Part {
+        ink: Ink::Line(1.2),
+        ..Part::line("M1 1l3 3 3-3")
+    };
+    drawing(vec![part], (8.0, 5.0), colour)
+        .w(px(8.0))
+        .h(px(5.0))
+        .flex_none()
+}
+
+fn paint(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    view: (f32, f32),
+    parts: &[Part],
+    colour: Hsla,
+) {
+    let (wide, tall) = (bounds.size.width.as_f32(), bounds.size.height.as_f32());
+    let scale = (wide / view.0).min(tall / view.1);
+    let origin = gpui::point(
+        bounds.origin.x + px((wide - view.0 * scale) / 2.0),
+        bounds.origin.y + px((tall - view.1 * scale) / 2.0),
+    );
     for part in parts {
         let Some(path) = read(part.d) else {
             continue;
@@ -182,7 +247,11 @@ fn paint(window: &mut Window, bounds: Bounds<Pixels>, parts: &[Part], colour: Hs
                 &path,
                 &StrokeOptions::default()
                     .with_line_width(width * scale)
-                    .with_line_cap(LineCap::Round)
+                    .with_line_cap(if part.butt {
+                        LineCap::Butt
+                    } else {
+                        LineCap::Round
+                    })
                     .with_line_join(LineJoin::Round)
                     .with_tolerance(0.02),
                 &mut BuffersBuilder::new(&mut buffers, |vertex: StrokeVertex| vertex.position()),

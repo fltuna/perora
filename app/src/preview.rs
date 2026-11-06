@@ -38,11 +38,11 @@ use perora_core::platform::{self, Desktop, Frame};
 use perora_core::preview::{Discarded, Once, Pending, picture_size, small_size};
 use perora_core::settings::{Leaves, Settings};
 use perora_core::{copying, saving};
-use perora_ui::{Theme, Tip};
+use perora_ui::{Theme, Tip, motion};
 
 use crate::notice::{self, Lasting};
 use crate::state::Perora;
-use crate::{burn, capture, corner, display, gpu, hwnd, large, motion};
+use crate::{burn, capture, corner, display, gpu, hwnd, large};
 
 /// How often a preview whose time is over looks whether the pointer has left it.
 const POINTED_AT: Duration = Duration::from_millis(250);

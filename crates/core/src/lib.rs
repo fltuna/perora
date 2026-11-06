@@ -3,6 +3,7 @@
 //! that it can be tested and tried on its own.
 
 pub mod account;
+pub mod colours;
 pub mod config;
 #[cfg(windows)]
 pub mod copying;

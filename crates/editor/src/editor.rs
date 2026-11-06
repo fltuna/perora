@@ -4,11 +4,14 @@
 //! it what was asked (`Event`), and the window makes the image with the same drawing (`paint`).
 //!
 //! P4 of docs/gpui-rewrite.md: the picture, looking closer and moving it, undo and redo, the pen,
-//! selecting what is drawn and moving it (`selecting`). The other tools, the second bar and its
-//! panels come next.
+//! the shapes and lines, selecting what is drawn and moving it (`selecting`), and the settings of
+//! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
-use std::cell::Cell;
+mod bars;
+
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -30,6 +33,7 @@ use crate::picture::Picture;
 use crate::selecting::{self, Pressed};
 use crate::tools::{self, Kind, Press, Tool};
 use crate::view::{self, Area, Looking};
+use bars::{Openers, Panel, Set};
 
 /// A capture to draw on.
 pub struct Capture {
@@ -121,6 +125,19 @@ pub struct Editor {
     full: bool,
     /// While the capture leaves: nothing is drawn, no key does anything.
     frozen: bool,
+    /// The second bar is put away: at first, and whenever a tool is taken otherwise than by its
+    /// button, or something comes to be selected or no longer is (`follow`).
+    shut: bool,
+    /// The tool whose button was pressed, until it is in hand.
+    by_button: Option<Kind>,
+    /// The panel asked for (open while it still belongs to what is in hand: `panel`).
+    asked: Option<Panel>,
+    /// The tool and the one selected as the bars last followed them.
+    was: (Kind, Option<usize>),
+    /// How solid a shape's inside was the last time it was any: what it is again when it is given
+    /// a colour.
+    solid: f32,
+    openers: Openers,
     focus: FocusHandle,
     language: Language,
     /// What the window puts at the top right (what the capture leaves as) and under the picture at
@@ -166,6 +183,12 @@ impl Editor {
             pointing: None,
             full: false,
             frozen: false,
+            shut: true,
+            by_button: None,
+            asked: None,
+            was: (Kind::Select, None),
+            solid: 1.0,
+            openers: Rc::new(RefCell::new(Default::default())),
             focus: cx.focus_handle(),
             language,
             top_right: None,
@@ -194,6 +217,11 @@ impl Editor {
         self.pointing = None;
         self.full = false;
         self.frozen = false;
+        self.shut = true;
+        self.by_button = None;
+        self.asked = None;
+        self.was = (Kind::Select, None);
+        self.solid = 1.0;
         cx.notify();
     }
 
@@ -344,6 +372,8 @@ impl Editor {
         if event.button != MouseButton::Left {
             return;
         }
+        // (The picture is pressed on: the bar of the tool, there since its button was pressed, goes.)
+        self.shut = true;
         let Some(press) = self.press(event.position, event.modifiers, window) else {
             return;
         };
@@ -640,6 +670,47 @@ impl Editor {
         cx.notify();
     }
 
+    /// The drawing, changed by a setting being dragged (a slider): one step with the changes of the
+    /// same setting of the same thing just before it.
+    fn change_dragged(&mut self, edits: Vec<Edit>, what: &str, cx: &mut Context<Self>) {
+        match self.drawing.change_dragged(edits, what, Instant::now()) {
+            Ok(changed) => {
+                self.full = false;
+                if changed {
+                    self.drawn(cx);
+                }
+            }
+            Err(_) => self.full = true,
+        }
+        cx.notify();
+    }
+
+    /// What the settings are about: what is selected (one alone); or, with nothing selected, what was
+    /// just drawn while the tool that drew it is still in hand (set right at a look, without being
+    /// selected first). Otherwise they are only for what is drawn next.
+    fn about(&self) -> Option<usize> {
+        if !self.selected.is_empty() {
+            return self.chosen();
+        }
+        let last = self.drawing.edits().len().checked_sub(1)?;
+        (self.just_drawn && kind_of(&self.drawing.edits()[last]) == Some(self.tool)).then_some(last)
+    }
+
+    /// The one at `index` set so: one step to undo (with the steps of the same setting just before
+    /// it, when it is dragged). Set to what it is already, nothing to undo.
+    fn alter(&mut self, index: usize, next: Edit, set: Set, dragged: bool, cx: &mut Context<Self>) {
+        let mut edits = self.drawing.edits().to_vec();
+        match edits.get_mut(index) {
+            Some(edit) if *edit != next => *edit = next,
+            _ => return,
+        }
+        if dragged {
+            self.change_dragged(edits, &format!("{index}:{}", set.name()), cx);
+        } else {
+            self.change(edits, cx);
+        }
+    }
+
     fn drawn(&mut self, cx: &mut Context<Self>) {
         self.shown = Rc::new(self.drawing.edits().to_vec());
         cx.emit(Event::Changed);
@@ -683,13 +754,46 @@ impl Editor {
         self.change(edits, cx);
     }
 
-    /// Takes up a tool (by its button or its key). The one in hand again does nothing (P4 later:
-    /// its second bar), unless something is selected; another than the select tool lets go of what
-    /// is selected.
+    /// Takes up a tool by its key: the tool and nothing else (no bar comes down, no panel opens).
+    /// The one in hand again does nothing, unless something is selected.
     fn take(&mut self, kind: Kind, cx: &mut Context<Self>) {
         if self.gesture.is_some() || (kind == self.tool && self.selected.is_empty()) {
             return;
         }
+        self.by_button = None;
+        self.hold(kind, cx);
+    }
+
+    /// A tool's button is pressed: the tool is taken, with its second bar. The one in hand pressed
+    /// again: its bar goes, or comes back (and the pen's panel opens or goes); with something
+    /// selected, the select button does that for the bar of what is selected.
+    fn pick(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        if self.gesture.is_some() {
+            return;
+        }
+        if kind == self.tool && kind == Kind::Pen && self.chosen().is_none() {
+            self.asked = if self.panel() == Some(Panel::Pen) {
+                None
+            } else {
+                Some(Panel::Pen)
+            };
+            cx.notify();
+            return;
+        }
+        if kind == self.tool && self.offered().is_some() {
+            self.asked = None;
+            self.shut = !self.shut;
+            cx.notify();
+            return;
+        }
+        if kind != self.tool {
+            self.by_button = Some(kind);
+        }
+        self.hold(kind, cx);
+    }
+
+    /// The tool is in hand. Another than the select tool lets go of what is selected.
+    fn hold(&mut self, kind: Kind, cx: &mut Context<Self>) {
         self.tool = kind;
         self.pointing = None;
         self.just_drawn = false;
@@ -699,15 +803,21 @@ impl Editor {
         if kind != Kind::Select {
             self.selected.clear();
         }
+        self.asked = None;
         cx.notify();
     }
 
-    /// Esc lets go of one thing at a time: what the pointer is doing, what is selected, then the
-    /// tool. With nothing drawn, it throws the capture away; with something drawn, it does not (that
-    /// is the bin's).
+    /// Esc lets go of one thing at a time: what the pointer is doing, the panel that is open, what
+    /// is selected, then the tool. With nothing drawn, it throws the capture away; with something
+    /// drawn, it does not (that is the bin's).
     fn escape(&mut self, cx: &mut Context<Self>) {
         if self.gesture.is_some() {
             self.give_up_gesture();
+            cx.notify();
+            return;
+        }
+        if self.panel().is_some() {
+            self.asked = None;
             cx.notify();
             return;
         }
@@ -718,8 +828,8 @@ impl Editor {
             return;
         }
         if self.tool != Kind::Select {
-            self.tool = Kind::Select;
-            cx.notify();
+            self.by_button = None;
+            self.hold(Kind::Select, cx);
             return;
         }
         if self.drawing.is_empty() {
@@ -863,35 +973,36 @@ impl Editor {
     fn tools_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let t = |key: &str| self.language.text(key, &[]);
         let button = |id: SharedString, current: bool, enabled: bool| {
-            div()
-                .id(id)
-                .w(px(36.0))
-                .h(px(34.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(theme.radius_small)
-                .border_1()
-                .border_color(if current {
-                    theme.accent
-                } else {
-                    gpui::transparent_black()
-                })
-                .when(current, |button| button.bg(theme.surface))
-                .when(!enabled, |button| button.opacity(0.4))
-                .when(enabled && !current, |button| {
-                    button.hover(|style| style.bg(theme.surface_hover))
-                })
+            bars::button(id, current, enabled, theme)
         };
-        let mut bar = div().flex().items_center().gap(px(2.0));
+        let mut bar = div().flex().items_center().gap(px(4.0));
         for kind in [Kind::Select, Kind::Pen] {
-            let colour = (kind == Kind::Pen).then(|| paint::colour(self.pen.colour));
+            let pen = kind == Kind::Pen;
+            let colour = pen.then(|| paint::colour(self.pen.colour));
             let named = format!("{} ({})", t(kind.name()), kind.key().to_uppercase());
             bar = bar.child(
                 button(kind.name().into(), self.tool == kind, true)
                     .tooltip(tip(named))
-                    .on_click(cx.listener(move |this, _, _, cx| this.take(kind, cx)))
-                    .child(icons::icon(icons::of_tool(kind, colour), 16.0, theme.text)),
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick(kind, cx)))
+                    .child(icons::icon(
+                        icons::of_tool(kind, colour, None),
+                        16.0,
+                        theme.text,
+                    ))
+                    // In hand, the pen says it has a panel of its own: pressed again, it opens.
+                    .when(pen && self.tool == kind, |button| {
+                        button.child(
+                            div()
+                                .absolute()
+                                .bottom(px(2.0))
+                                .left_0()
+                                .right_0()
+                                .flex()
+                                .justify_center()
+                                .child(icons::caret(theme.text)),
+                        )
+                    })
+                    .when(pen, |button| button.child(self.pen_opener())),
             );
         }
         // The shapes and lines: one button, which takes up the last of them taken; drawn in their
@@ -903,7 +1014,14 @@ impl Editor {
         bar = bar.child(
             button("figures".into(), self.tool.is_figure(), true)
                 .tooltip(tip(t("editor.tool.shapes")))
-                .on_click(cx.listener(move |this, _, _, cx| this.take(last, cx)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let kind = if this.tool.is_figure() {
+                        this.tool
+                    } else {
+                        last
+                    };
+                    this.pick(kind, cx)
+                }))
                 .child(icons::icon(
                     icons::shapes(paint::colour(figures.colour), inside),
                     16.0,
@@ -916,7 +1034,7 @@ impl Editor {
             self.drawing.can_redo() && !typing,
         );
         let can_delete = !self.selected.is_empty() && !typing;
-        bar.child(div().w(px(1.0)).h(px(20.0)).mx(px(6.0)).bg(theme.border))
+        bar.child(bars::rule(theme))
             .child(
                 button("undo".into(), false, can_undo)
                     .tooltip(tip(format!("{} (Ctrl+Z)", t("editor.undo"))))
@@ -1130,8 +1248,11 @@ impl Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.follow();
         let theme = Theme::get(cx).clone();
         let tools = self.tools_bar(&theme, cx);
+        let second = self.second_bar(&theme, cx);
+        let panel = self.panel_view(&theme, cx);
         let stage = self.stage(cx);
         let zoom = self.zoom(&theme, window, cx);
         let text: Hsla = theme.text;
@@ -1140,6 +1261,7 @@ impl Render for Editor {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(Self::key_up))
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -1174,5 +1296,7 @@ impl Render for Editor {
                     .child(div().flex_1().min_w_0().children(self.below.clone()))
                     .child(zoom),
             )
+            .children(second)
+            .children(panel)
     }
 }
