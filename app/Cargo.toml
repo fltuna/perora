@@ -14,6 +14,8 @@ name = "perora-gpui"
 path = "src/main.rs"
 
 [dependencies]
+# What is on the clipboard, to open in the editor: a file copied in the file manager, or an image.
+arboard = "3"
 async-channel = "2"
 global-hotkey = "0.8"
 gpui = { workspace = true }

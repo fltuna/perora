@@ -15,5 +15,5 @@ pub mod tools;
 pub mod view;
 pub mod writing;
 
-pub use editor::{Capture, Editor, Event, Leave};
+pub use editor::{Capture, Editor, Event, Leave, Open};
 pub use picture::Picture;

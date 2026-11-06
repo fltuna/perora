@@ -138,6 +138,8 @@ fn main() {
             });
             let _ = sender.try_send(Signal::Asked(first));
             cx.set_global(perora);
+            // "Open with Perora" on images, with this program, as the settings say.
+            opening::keep_explorer_entry(cx);
             cx.set_global(Kept {
                 _instance: instance,
                 _tray: tray,

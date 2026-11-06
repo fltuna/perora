@@ -269,6 +269,18 @@ pub fn read_image(
     windows::imaging::read(path, most, longest)
 }
 
+/// Lets the user choose an image file to open, over `owner` (which cannot be used meanwhile); `images`
+/// and `all` name the lists of files offered (the kinds of image first). Waits for the answer: not to be
+/// called where the windows are drawn. `None` when no file was chosen.
+#[cfg(windows)]
+pub fn choose_image(
+    owner: Option<WindowId>,
+    images: &str,
+    all: &str,
+) -> std::result::Result<Option<std::path::PathBuf>, String> {
+    windows::choosing::choose_image(owner.map(|owner| owner.0), &IMAGE_KINDS, images, all)
+}
+
 /// What Perora is started with to open a file in its editor: the file follows.
 #[cfg(windows)]
 pub const OPEN_ARGUMENT: &str = windows::explorer::OPEN;

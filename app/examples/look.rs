@@ -2,24 +2,29 @@
 //! never seen, takes no input from the user), driven by a script of presses and keys sent to the
 //! window itself, and drawn into PNG files to look at.
 //!
-//! `cargo run -p perora-app --profile fast --example look -- <script> <out-dir> [en|ja]`
+//! `cargo run -p perora-app --profile fast --example look -- <script> <out-dir> [en|ja] [--empty]`
+//! (`--empty`: the editor with no image, as the main window asks for it.)
 //!
 //! The script, a line each (logical pixels of the window, which is 1200 x 800; `#` begins a remark):
 //! - `move X Y`, `down X Y`, `up X Y`, `click X Y` (down and up), `twice X Y` (a double click), `drag X Y X2 Y2 [STEPS]`, with
 //!   `shift`, `ctrl` after them for those held (`right`, `middle` for those buttons)
 //! - `wheel X Y LINES` (up is more than 0: closer)
+//! - `file X Y PATH` (a file dragged in from outside, over there), `drop X Y` (and let go of there),
+//!   `leave` (taken out of the window again)
 //! - `key K` (a key as GPUI names it: `r`, `escape`, `ctrl-z`), `type TEXT`
 //! - `wait MS` (the window draws meanwhile, as it does on screen)
 //! - `shot NAME` (the window, as it is now, into `<out-dir>/NAME.png`)
+//!
+//! What the editor asks of its window is written out as it asks (`look: event ...`).
 
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    AnyWindowHandle, App, AppContext, Keystroke, Modifiers, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PlatformInput, Point, WindowBackgroundAppearance, WindowBounds,
-    WindowKind, WindowOptions, point, px,
+    AnyWindowHandle, App, AppContext, ExternalPaths, FileDropEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, Point,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point, px,
 };
 use perora_core::geometry::Rect;
 use perora_core::language::Languages;
@@ -40,7 +45,12 @@ fn main() {
     let script = std::fs::read_to_string(script).expect("the script can be read");
     let out = PathBuf::from(out);
     std::fs::create_dir_all(&out).expect("the out directory can be made");
-    let code = arguments.get(2).cloned().unwrap_or_else(|| "ja".into());
+    let code = arguments
+        .get(2)
+        .filter(|code| !code.starts_with("--"))
+        .cloned()
+        .unwrap_or_else(|| "ja".into());
+    let empty = arguments.iter().any(|argument| argument == "--empty");
     // What the editor remembers (the font last written in) is kept beside the shots: not where the
     // user's Perora keeps it.
     // SAFETY: nothing else runs yet to read the environment meanwhile.
@@ -80,8 +90,12 @@ fn main() {
             .expect("the window opens");
         let handle = handle.expect("the window has a handle");
         let any: AnyWindowHandle = window.into();
+        if let Ok(editor) = window.update(cx, |_, _, cx| cx.entity()) {
+            cx.subscribe(&editor, |_, event, _| eprintln!("look: event {event:?}"))
+                .detach();
+        }
         let (script, out) = (script.clone(), out.clone());
-        cx.spawn(async move |cx| play(script, out, window, any, handle, cx).await)
+        cx.spawn(async move |cx| play(script, out, window, any, handle, empty, cx).await)
             .detach();
     });
 }
@@ -92,6 +106,7 @@ async fn play(
     window: gpui::WindowHandle<Editor>,
     any: AnyWindowHandle,
     handle: WindowId,
+    empty: bool,
     cx: &mut gpui::AsyncApp,
 ) {
     {
@@ -106,13 +121,15 @@ async fn play(
         eprintln!("look: the window is {across}x{down} at {scale}");
         let picture = Picture::new(&test_frame(1920, 1080)).expect("a picture");
         let _ = window.update(cx, |editor, window, cx| {
-            editor.show(
-                Capture {
-                    id: 1,
-                    picture: Rc::new(picture),
-                },
-                cx,
-            );
+            if !empty {
+                editor.show(
+                    Capture {
+                        id: 1,
+                        picture: Rc::new(picture),
+                    },
+                    cx,
+                );
+            }
             window.focus(&gpui::Focusable::focus_handle(editor, cx), cx);
         });
         let mut held = None::<MouseButton>;
@@ -209,6 +226,24 @@ async fn play(
                         ..Default::default()
                     }));
                 }
+                "file" => {
+                    at = place(0);
+                    let path = words.get(3).map(PathBuf::from).unwrap_or_default();
+                    events.push(PlatformInput::FileDrop(FileDropEvent::Entered {
+                        position: at,
+                        paths: ExternalPaths(vec![path].into()),
+                    }));
+                    events.push(PlatformInput::FileDrop(FileDropEvent::Pending {
+                        position: at,
+                    }));
+                }
+                "drop" => {
+                    at = place(0);
+                    events.push(PlatformInput::FileDrop(FileDropEvent::Submit {
+                        position: at,
+                    }));
+                }
+                "leave" => events.push(PlatformInput::FileDrop(FileDropEvent::Exited)),
                 "key" | "type" | "wait" | "shot" => {}
                 other => eprintln!("look: line {}: what is {other}?", number + 1),
             }

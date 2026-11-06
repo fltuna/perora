@@ -4,6 +4,7 @@
 //! otherwise Windows hands out scaled coordinates and stretched pixels for monitors whose scaling differs
 //! from the primary one's. [`ensure_dpi_awareness`] sees to that.
 
+pub mod choosing;
 pub mod clipboard;
 pub mod desktop;
 pub mod explorer;

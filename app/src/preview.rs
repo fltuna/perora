@@ -162,13 +162,55 @@ pub fn present(shown: Shown, cx: &mut App) {
 }
 
 /// Puts the capture being previewed back on screen, if there is one: after a selection screen that
-/// came to nothing, or one that was up when the preview wanted to appear. It has its time anew.
+/// came to nothing, or one that was up when the preview wanted to appear. It has its time anew. (With
+/// none, the large window that was waiting for an image is back, waiting still: not over a selection
+/// screen, where it would be in the way and in the picture.)
 pub fn restore(cx: &mut App) {
     if cx.default_global::<Previews>().pending.is_none() {
+        if large::awaiting(cx) && !capture::busy(cx) {
+            large::await_image(cx);
+        }
         return;
     }
     show(cx);
     leave_to_its_time(cx);
+}
+
+/// Puts an image the user opened (a file, the clipboard) in the large window, to be drawn on: as a
+/// capture is that is drawn on at once, but with none of what becomes of a capture as it is taken
+/// (not copied, saved or uploaded: what it leaves as is what the user chooses there). `picture` is
+/// the editor's, made on the way.
+pub fn present_opened(frame: Frame, picture: perora_editor::Picture, cx: &mut App) {
+    let id = ask(cx);
+    let copied_as = Perora::get(cx).settings().output(Leaves::Copy);
+    present(
+        Shown {
+            id,
+            frame: Arc::new(frame),
+            png: None,
+            copied: None,
+            copied_as,
+            picture: None,
+            touched: true,
+            large: true,
+            editor_picture: Some(picture),
+        },
+        cx,
+    );
+}
+
+/// The editor, from the main window: the capture being previewed, in the large window; or, when there
+/// is none, the large window with no image, for one to be dropped on it, chosen or pasted.
+pub fn open_editor(cx: &mut App) {
+    let previewed = cx
+        .default_global::<Previews>()
+        .pending
+        .as_ref()
+        .map(|pending| pending.id);
+    match previewed {
+        Some(id) => enlarge(id, cx),
+        None => large::await_image(cx),
+    }
 }
 
 /// Takes the preview off the screen for a capture (the capture being previewed stays until the new

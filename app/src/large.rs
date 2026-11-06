@@ -6,9 +6,10 @@
 //! The window is opened as the capture comes and closed as it goes (the GPU is held while it is
 //! open), and only hidden while a capture is taken, so that what was drawn stays.
 //!
-//! P4 of docs/gpui-rewrite.md, first part. Not yet: the choice of what it leaves as this once (⌄),
-//! uploading (P5), the fade it opened with in the Tauri version, asking before a new capture takes
-//! the place of a drawing, the tour's i (P6).
+//! Asked for from the main window with no capture to show, it opens empty and waits for an image
+//! (`await_image`): dropped on it, chosen, or from the clipboard (`opening`).
+//!
+//! P4 and P5 of docs/gpui-rewrite.md. Not yet: uploading, the tour's i (P6).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use perora_core::settings::Leaves;
 use perora_core::edit::Edit;
 use perora_core::language::Language;
 use perora_core::platform::{self, Frame, WindowId};
-use perora_editor::{Capture, Editor, Event, Leave, Picture};
+use perora_editor::{Capture, Editor, Event, Leave, Open, Picture};
 use perora_ui::{Theme, Tip};
 
 use crate::state::Perora;
@@ -45,6 +46,9 @@ struct Large {
     window: Option<WindowHandle<Editor>>,
     /// Which showing is the last: a picture made for an earlier one is not shown.
     showing: u64,
+    /// The window was asked for with no capture in it, and waits for an image: it comes back so
+    /// after a capture that came to nothing.
+    awaiting: bool,
     _subscription: Option<Subscription>,
 }
 
@@ -98,12 +102,44 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
         id,
         picture: Rc::new(picture),
     };
+    cx.default_global::<Large>().awaiting = false;
+    open(Some(capture), cx);
+}
+
+/// The window with no capture in it, waiting for an image to be dropped on it, chosen or taken from
+/// the clipboard: opened, or brought back and to the front.
+pub fn await_image(cx: &mut App) {
+    cx.default_global::<Large>().awaiting = true;
+    if let Some(window) = cx.default_global::<Large>().window {
+        let _ = window.update(cx, |editor, window, cx| {
+            if let Some(handle) = hwnd::of(window) {
+                platform::set_cloaked(handle, false);
+                hwnd::show(handle);
+            }
+            window.activate_window();
+            window.focus(&editor.focus_handle(cx), cx);
+        });
+        return;
+    }
+    open(None, cx);
+}
+
+/// Whether the window waits for an image (on screen, or out of the way of a capture).
+pub fn awaiting(cx: &mut App) -> bool {
+    cx.default_global::<Large>().awaiting
+}
+
+/// The window with the capture (or with none, waiting for an image), opened when it is not, and in
+/// front.
+fn open(capture: Option<Capture>, cx: &mut App) {
     // (Which way to make a part unreadable the editor starts with, as the settings say.)
     let hider = Perora::get(cx).settings().default_hider;
     if let Some(window) = cx.default_global::<Large>().window {
         let _ = window.update(cx, move |editor, window, cx| {
             editor.set_default_hider(hider);
-            editor.show(capture, cx);
+            if let Some(capture) = capture {
+                editor.show(capture, cx);
+            }
             if let Some(handle) = hwnd::of(window) {
                 fade_in(handle, cx);
                 platform::set_cloaked(handle, false);
@@ -128,15 +164,23 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
         ..Default::default()
     };
     let opened = cx.open_window(options, |window, cx| {
-        // Closed (its button, Alt+F4): thrown away, as the bin does.
+        // Closed (its button, Alt+F4): thrown away, as the bin does. (Waiting for an image: closed.)
         window.on_window_should_close(cx, |_, cx| {
-            cx.defer(|cx| preview::discard_by_user(None, cx));
+            cx.defer(|cx| {
+                if shows_nothing(cx) {
+                    close(cx);
+                } else {
+                    preview::discard_by_user(None, cx);
+                }
+            });
             false
         });
         let editor = cx.new(|cx| {
             let mut editor = Editor::new(language.clone(), window, cx);
             editor.set_default_hider(hider);
-            editor.show(capture, cx);
+            if let Some(capture) = capture {
+                editor.show(capture, cx);
+            }
             editor
         });
         let actions = cx.new(|cx| Actions::new(language.clone(), &editor, cx));
@@ -160,7 +204,9 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
             let subscription = window
                 .update(cx, |_, _, cx| cx.entity())
                 .ok()
-                .map(|editor| cx.subscribe(&editor, |editor, event, cx| asked(editor, *event, cx)));
+                .map(|editor| {
+                    cx.subscribe(&editor, |editor, event, cx| asked(editor, event.clone(), cx))
+                });
             let large = cx.default_global::<Large>();
             large.window = Some(window);
             large._subscription = subscription;
@@ -191,20 +237,52 @@ fn fade_in(handle: WindowId, cx: &mut App) {
 
 /// What the editor asks of the window.
 fn asked(editor: Entity<Editor>, event: Event, cx: &mut App) {
+    // (An image to open: whether there is one in the window now or not.)
+    match event {
+        Event::Open(Open::File(file)) => return crate::opening::open_file(file, cx),
+        Event::Open(Open::Choose) => return crate::opening::choose_file(cx),
+        Event::Open(Open::Clipboard) => return crate::opening::open_clipboard(cx),
+        _ => {}
+    }
     let Some(id) = editor.read(cx).capture_id() else {
+        // Waiting for an image: Esc and its button close it.
+        if event == Event::Discard {
+            close(cx);
+        }
         return;
     };
     match event {
         Event::Changed => changed(cx),
         Event::Leave(Leave::Save) => preview::save(id, cx),
         Event::Discard => preview::discard_by_user(Some(id), cx),
+        Event::Open(_) => {}
     }
 }
 
-/// Closes the window (its capture is gone).
+/// Whether the window is there with no capture in it (waiting for an image).
+fn shows_nothing(cx: &mut App) -> bool {
+    let Some(window) = cx.default_global::<Large>().window else {
+        return false;
+    };
+    window
+        .read_with(cx, |editor, _| editor.capture_id().is_none())
+        .unwrap_or(false)
+}
+
+/// The window, for the system's choice of a file to be over (it cannot be used meanwhile).
+pub fn handle(cx: &mut App) -> Option<WindowId> {
+    let window = cx.default_global::<Large>().window?;
+    window
+        .update(cx, |_, window, _| hwnd::of(window))
+        .ok()
+        .flatten()
+}
+
+/// Closes the window (its capture is gone, or it waited for an image and is given up).
 pub fn close(cx: &mut App) {
     let large = cx.default_global::<Large>();
     large.showing += 1;
+    large.awaiting = false;
     large._subscription = None;
     let Some(window) = large.window.take() else {
         return;
@@ -272,25 +350,39 @@ pub fn drawing_of(id: u64, cx: &mut App) -> Option<Vec<Edit>> {
         .flatten()
 }
 
-/// When something is drawn in the window: asks whether it may be given up for a new capture (going
-/// ahead is the first answer). None when nothing is drawn (or there is no window).
-pub fn ask_over_drawing(cx: &mut App) -> Option<impl std::future::Future<Output = Option<usize>> + use<>> {
+/// The capture in the window, when something is drawn on it: what a new capture or an image opened
+/// would take the place of.
+pub fn drawn_on(cx: &mut App) -> Option<u64> {
+    let window = cx.default_global::<Large>().window?;
+    window
+        .read_with(cx, |editor, _| {
+            editor
+                .capture_id()
+                .filter(|_| !editor.edits().is_empty())
+        })
+        .ok()
+        .flatten()
+}
+
+/// When something is drawn in the window: asks whether it may be given up for what comes next
+/// (`said` says what that is; going ahead, `go`, is the first answer). None when nothing is drawn
+/// (or there is no window).
+pub fn ask_over_drawing(
+    said: &str,
+    go: String,
+    cx: &mut App,
+) -> Option<impl std::future::Future<Output = Option<usize>> + use<>> {
     let window = cx.default_global::<Large>().window?;
     let language = Perora::get(cx).language();
-    let drawn = window
-        .read_with(cx, |editor, _| !editor.edits().is_empty())
-        .unwrap_or(false);
-    if !drawn {
-        return None;
-    }
+    drawn_on(cx)?;
     window
         .update(cx, |_, window, cx| {
             window.prompt(
                 gpui::PromptLevel::Warning,
-                &language.capture_over_drawing(),
+                said,
                 None,
                 &[
-                    gpui::PromptButton::ok(language.capture_anyway()),
+                    gpui::PromptButton::ok(go),
                     gpui::PromptButton::cancel(language.keep_drawing()),
                 ],
                 cx,

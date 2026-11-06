@@ -7,6 +7,7 @@
 //! the shapes and lines, selecting what is drawn and moving it (`selecting`), and the settings of
 //! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
+mod awaiting;
 mod bars;
 mod copying;
 mod cropping;
@@ -22,11 +23,11 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, App, Bounds, Context, CursorStyle, DispatchPhase, EventEmitter, FocusHandle,
-    Focusable, Hsla, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent, Modifiers,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
-    Render, ScrollDelta, ScrollEvent, SharedString, StatefulInteractiveElement, Styled, Window,
-    canvas, div, point, px,
+    AnyView, App, Bounds, Context, CursorStyle, DispatchPhase, EventEmitter, ExternalPaths,
+    FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, KeyDownEvent, KeyUpEvent,
+    Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
+    Point, Render, ScrollDelta, ScrollEvent, SharedString, StatefulInteractiveElement, Styled,
+    Window, canvas, div, point, px,
 };
 use perora_core::drawing::{Drawing, unit};
 use perora_core::edit::{Edit, Place};
@@ -58,14 +59,28 @@ pub enum Leave {
     Save,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// The drawing changed.
     Changed,
     /// A key asks for the capture to leave.
     Leave(Leave),
-    /// Esc, with nothing to let go of and nothing drawn: the capture is thrown away.
+    /// Esc, with nothing to let go of and nothing drawn: the capture is thrown away. (With no image
+    /// in the editor: it is closed.)
     Discard,
+    /// An image is asked to be opened here.
+    Open(Open),
+}
+
+/// Where an image to open in the editor comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Open {
+    /// A file dropped on the window.
+    File(std::path::PathBuf),
+    /// One the user is to choose.
+    Choose,
+    /// What is on the clipboard.
+    Clipboard,
 }
 
 /// What the pointer is doing with a button held.
@@ -1757,11 +1772,32 @@ impl Render for Editor {
         let stage = self.stage(cx);
         let zoom = self.zoom(&theme, window, cx);
         let text: Hsla = theme.text;
+        // (An image dragged over the window: the only things dragged into it are files.)
+        let dropping = cx.has_active_drag();
+        let dropped = cx.listener(|_, paths: &ExternalPaths, _, cx| {
+            if let Some(file) = awaiting::first_of(paths) {
+                cx.emit(Event::Open(Open::File(file)));
+            }
+        });
+        if self.capture.is_none() {
+            return div()
+                .key_context("Editor")
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(Self::awaiting_key))
+                .on_drop(dropped)
+                .size_full()
+                .bg(theme.background)
+                .font_family(theme.font.clone())
+                .text_size(theme.text_size_small)
+                .child(self.awaiting_view(&theme, dropping, cx))
+                .into_any_element();
+        }
         div()
             .key_context("Editor")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_key_up(cx.listener(Self::key_up))
+            .on_drop(dropped)
             .relative()
             .size_full()
             .flex()
@@ -1801,5 +1837,7 @@ impl Render for Editor {
             .children(turned)
             .children(lettering)
             .children(panel)
+            .when(dropping, |editor| editor.child(self.dropping_view(&theme)))
+            .into_any_element()
     }
 }

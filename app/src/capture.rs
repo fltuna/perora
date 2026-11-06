@@ -56,7 +56,15 @@ pub fn start(cx: &mut App) {
     // screen is up (agreed to already, and the question would be behind it).
     let to_preview = Perora::get(cx).settings().after_capture != After::Copy;
     let selecting = cx.global::<Capturing>().current.is_some();
-    if to_preview && !selecting && let Some(answer) = large::ask_over_drawing(cx) {
+    let language = Perora::get(cx).language();
+    if to_preview
+        && !selecting
+        && let Some(answer) = large::ask_over_drawing(
+            &language.capture_over_drawing(),
+            language.capture_anyway(),
+            cx,
+        )
+    {
         cx.global_mut::<Capturing>().busy = true;
         cx.spawn(async move |cx| {
             let go = answer.await == Some(0);
