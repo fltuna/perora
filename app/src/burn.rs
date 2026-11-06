@@ -53,7 +53,15 @@ impl Render for Tile {
                         offset: [area.x as f32, area.y as f32],
                         scale: 1.0 / window.scale_factor(),
                     };
-                    paint::draw_all(window, &painter, view, base.as_slice(), &edits, None);
+                    paint::draw_all(
+                        window,
+                        &painter,
+                        view,
+                        base.as_slice(),
+                        &edits,
+                        None,
+                        &Default::default(),
+                    );
                 },
             )
             .size_full(),
@@ -61,9 +69,55 @@ impl Render for Tile {
     }
 }
 
-/// The capture (`frame`, its pixels as taken) with `edits` drawn on it, as large as it is. (P4
-/// later: cut down to what the last crop leaves.)
+/// The capture (`frame`, its pixels as taken) with `edits` drawn on it, as large as it is. In the
+/// order they were drawn: a part made unreadable is made so from all that was drawn before it (drawn
+/// up to it, and made unreadable here, on the pixels), and what is drawn after it is not. (P4 later:
+/// cut down to what the last crop leaves.)
 pub async fn burn(frame: Arc<Frame>, edits: Vec<Edit>, cx: &mut AsyncApp) -> Result<Frame, String> {
+    let mut base = frame;
+    let mut from = 0;
+    for (index, edit) in edits.iter().enumerate() {
+        if !matches!(edit, Edit::Blur { .. } | Edit::Mosaic { .. }) {
+            continue;
+        }
+        if from < index {
+            base = Arc::new(draw_over(base, edits[from..index].to_vec(), cx).await?);
+        }
+        base = Arc::new(hidden(&base, edit));
+        from = index + 1;
+    }
+    if from < edits.len() {
+        base = Arc::new(draw_over(base, edits[from..].to_vec(), cx).await?);
+    }
+    Ok(Arc::try_unwrap(base).unwrap_or_else(|shared| Frame {
+        area: shared.area,
+        rgba: shared.rgba.clone(),
+    }))
+}
+
+/// A part of the image made unreadable, on its pixels as they are drawn so far.
+fn hidden(frame: &Frame, edit: &Edit) -> Frame {
+    use perora_editor::hidden::{self, Part};
+    let (width, height) = (frame.width(), frame.height());
+    let mut rgba = frame.rgba.clone();
+    let area = perora_editor::marks::box_of(edit);
+    if let Some(part) = Part::of(area, width, height) {
+        let cut = hidden::cut(&rgba, width, part);
+        let done = match edit {
+            Edit::Blur { radius, .. } => hidden::blurred(&cut, part.width, part.height, *radius),
+            Edit::Mosaic { cell, .. } => hidden::mosaicked(&cut, part.width, part.height, *cell),
+            _ => cut,
+        };
+        hidden::put(&mut rgba, width, part, &done);
+    }
+    Frame {
+        area: frame.area,
+        rgba,
+    }
+}
+
+/// `edits` drawn over the picture (`frame`), a tile at a time.
+async fn draw_over(frame: Arc<Frame>, edits: Vec<Edit>, cx: &mut AsyncApp) -> Result<Frame, String> {
     let started = Instant::now();
     let (width, height) = (frame.width(), frame.height());
     let view = Area::new(0.0, 0.0, width as f32, height as f32);

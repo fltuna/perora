@@ -5,6 +5,7 @@
 use perora_core::edit::{Edit, Place};
 
 pub mod figure;
+pub mod hide;
 pub mod pen;
 pub mod stamp;
 
@@ -48,10 +49,12 @@ pub enum Kind {
     Arrow,
     Text,
     Stamp,
+    Blur,
+    Mosaic,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 9] = [
+    pub const ALL: [Kind; 11] = [
         Kind::Select,
         Kind::Pen,
         Kind::Marker,
@@ -61,6 +64,8 @@ impl Kind {
         Kind::Arrow,
         Kind::Text,
         Kind::Stamp,
+        Kind::Blur,
+        Kind::Mosaic,
     ];
 
     /// The key that takes it up.
@@ -75,6 +80,8 @@ impl Kind {
             Kind::Arrow => "a",
             Kind::Text => "t",
             Kind::Stamp => "n",
+            Kind::Blur => "b",
+            Kind::Mosaic => "x",
         }
     }
 
@@ -90,12 +97,19 @@ impl Kind {
             Kind::Arrow => "editor.tool.arrow",
             Kind::Text => "editor.tool.text",
             Kind::Stamp => "editor.tool.stamp",
+            Kind::Blur => "editor.tool.blur",
+            Kind::Mosaic => "editor.tool.mosaic",
         }
     }
 
     /// The pen or the marker: a tool with a panel of its own under its button (no second bar).
     pub fn is_stroke(self) -> bool {
         matches!(self, Kind::Pen | Kind::Marker)
+    }
+
+    /// One of the two ways to make a part unreadable (one button on the first bar).
+    pub fn is_hider(self) -> bool {
+        matches!(self, Kind::Blur | Kind::Mosaic)
     }
 
     /// One of the shapes and lines (one button on the first bar, one bar of their own).

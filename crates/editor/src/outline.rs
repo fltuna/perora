@@ -52,8 +52,10 @@ pub fn of(points: &[Place], width: f32) -> Rc<Triangles> {
         let mut hasher = DefaultHasher::new();
         width.to_bits().hash(&mut hasher);
         for place in points {
-            (place[0] - first[0]).to_bits().hash(&mut hasher);
-            (place[1] - first[1]).to_bits().hash(&mut hasher);
+            // (To a tenth, as places are kept: moved, the differences are the same tenths, not the
+            // same bits.)
+            (((place[0] - first[0]) * 10.0).round() as i64).hash(&mut hasher);
+            (((place[1] - first[1]) * 10.0).round() as i64).hash(&mut hasher);
         }
         hasher.finish()
     };

@@ -3,6 +3,7 @@
 //! (`paint`), and the editor that puts them together (`editor`).
 
 pub mod editor;
+pub mod hidden;
 pub mod icons;
 pub mod letters;
 pub mod marks;

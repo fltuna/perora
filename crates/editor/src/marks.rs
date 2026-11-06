@@ -11,10 +11,11 @@ use perora_core::edit::{Edit, Place};
 use crate::paint::Painter;
 use crate::view::Area;
 
+mod hidden;
 mod line;
 mod marker;
 mod pen;
-mod shape;
+pub mod shape;
 pub mod stamp;
 mod text;
 
@@ -77,6 +78,7 @@ pub fn mark_of(edit: &Edit) -> Option<&'static dyn Mark> {
         Edit::Marker { .. } => Some(&marker::Marker),
         Edit::Stamp { .. } => Some(&stamp::Stamp),
         Edit::Text { .. } => Some(&text::Text),
+        Edit::Blur { .. } | Edit::Mosaic { .. } => Some(&hidden::Hidden),
         Edit::Rectangle { .. } | Edit::Ellipse { .. } => Some(&shape::Shape),
         Edit::Line { .. } | Edit::Arrow { .. } => Some(&line::Line),
         _ => None,

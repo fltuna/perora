@@ -60,6 +60,10 @@ pub(super) enum Offered {
     Stroke,
     /// The numbers: of the tool in hand, or of the one selected.
     Stamps,
+    /// The two ways to make a part unreadable and how strongly (of the tool in hand); how strongly
+    /// alone (of the one selected).
+    Hiding,
+    Hidden,
 }
 
 /// A setting, as a panel changes it.
@@ -201,9 +205,11 @@ impl Editor {
             Some(Edit::Rectangle { .. } | Edit::Ellipse { .. }) => Some(Offered::Shape),
             Some(Edit::Line { .. } | Edit::Arrow { .. }) => Some(Offered::Line),
             Some(Edit::Stamp { .. }) => Some(Offered::Stamps),
+            Some(Edit::Blur { .. } | Edit::Mosaic { .. }) => Some(Offered::Hidden),
             Some(_) => None,
             None if self.tool.is_figure() => Some(Offered::Figures),
             None if self.tool == Kind::Stamp => Some(Offered::Stamps),
+            None if self.tool.is_hider() => Some(Offered::Hiding),
             None => None,
         }
     }

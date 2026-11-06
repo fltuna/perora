@@ -203,7 +203,11 @@ impl Mark for Shape {
             };
         }
         let mut edit = edit.clone();
-        if let Edit::Rectangle { from, to, .. } | Edit::Ellipse { from, to, .. } = &mut edit {
+        if let Edit::Rectangle { from, to, .. }
+        | Edit::Ellipse { from, to, .. }
+        | Edit::Blur { from, to, .. }
+        | Edit::Mosaic { from, to, .. } = &mut edit
+        {
             *from = [tenth(left), tenth(top)];
             *to = [tenth(right), tenth(bottom)];
         }

@@ -265,6 +265,10 @@ impl TextField {
         else {
             return 0;
         };
+        // (Laid out for what was there before: the end, which is surely a letter's edge.)
+        if line.text != self.content {
+            return self.content.len();
+        }
         line.closest_index_for_x(position.x - self.line_left(bounds, line))
     }
 

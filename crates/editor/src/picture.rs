@@ -63,6 +63,23 @@ impl Picture {
         })
     }
 
+    /// The pixels of the image (blue first), its width and its height; or of a half of it (`level`,
+    /// each half the size of the one before).
+    pub fn pixels(&self, level: usize) -> Option<(&[u8], u32, u32)> {
+        let image = self.levels.get(level)?;
+        let size = image.size(0);
+        Some((
+            image.as_bytes(0)?,
+            size.width.0 as u32,
+            size.height.0 as u32,
+        ))
+    }
+
+    /// How many halves it has (the image itself the first).
+    pub fn level_count(&self) -> usize {
+        self.levels.len()
+    }
+
     pub fn whole(&self) -> Area {
         Area::new(0.0, 0.0, self.width as f32, self.height as f32)
     }

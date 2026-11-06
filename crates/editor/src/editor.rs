@@ -8,6 +8,7 @@
 //! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
 mod bars;
+mod hiding;
 mod lettering;
 mod panels;
 mod typing;
@@ -164,6 +165,11 @@ pub struct Editor {
     pub below: Option<AnyView>,
     /// Pictures no longer shown: the GPU lets go of them at the next drawing.
     retired: Vec<Rc<Picture>>,
+    retired_images: Vec<std::sync::Arc<gpui::RenderImage>>,
+    /// The ways to make a part unreadable, how strongly each, and what was made of the parts.
+    hiders: tools::hide::Hiders,
+    hidden_kept: hiding::Kept,
+    default_hider: perora_core::settings::Hider,
 }
 
 impl EventEmitter<Event> for Editor {}
@@ -225,6 +231,13 @@ impl Editor {
             top_right: None,
             below: None,
             retired: Vec::new(),
+            retired_images: Vec::new(),
+            hiders: {
+                let kept = perora_core::editor_settings::EditorSettings::load();
+                tools::hide::Hiders::new(Kind::Blur, kept.blur, kept.mosaic)
+            },
+            hidden_kept: hiding::Kept::default(),
+            default_hider: perora_core::settings::Hider::Last,
         }
     }
 
@@ -247,6 +260,9 @@ impl Editor {
         self.pen = tools::pen::Pen::default();
         self.marker = tools::pen::Pen::marker();
         self.figures = tools::figure::Figures::default();
+        // (How strongly each way, as kept; the way to start with, as the settings say.)
+        let kept = perora_core::editor_settings::EditorSettings::load();
+        self.hiders = tools::hide::Hiders::new(self.first_hider(), kept.blur, kept.mosaic);
         self.stamps = tools::stamp::Stamps::default();
         self.just_drawn = false;
         self.looking = Looking::default();
@@ -366,6 +382,7 @@ impl Editor {
             Kind::Pen => Some(&mut self.pen),
             Kind::Marker => Some(&mut self.marker),
             Kind::Stamp => Some(&mut self.stamps),
+            Kind::Blur | Kind::Mosaic => Some(&mut self.hiders),
             Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&mut self.figures),
         }
     }
@@ -376,6 +393,7 @@ impl Editor {
             Kind::Pen => Some(&self.pen),
             Kind::Marker => Some(&self.marker),
             Kind::Stamp => Some(&self.stamps),
+            Kind::Blur | Kind::Mosaic => Some(&self.hiders),
             Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&self.figures),
         }
     }
@@ -881,7 +899,7 @@ impl Editor {
     }
 
     fn undo(&mut self, cx: &mut Context<Self>) {
-        if self.gesture.is_none() && self.drawing.undo() {
+        if self.gesture.is_none() && !self.frozen && self.drawing.undo() {
             self.full = false;
             self.just_drawn = false;
             self.selected.clear();
@@ -891,7 +909,7 @@ impl Editor {
     }
 
     fn redo(&mut self, cx: &mut Context<Self>) {
-        if self.gesture.is_none() && self.drawing.redo() {
+        if self.gesture.is_none() && !self.frozen && self.drawing.redo() {
             self.just_drawn = false;
             self.selected.clear();
             self.pointing = None;
@@ -901,7 +919,7 @@ impl Editor {
 
     /// What is selected is taken away.
     fn remove(&mut self, cx: &mut Context<Self>) {
-        if self.gesture.is_some() || self.selected.is_empty() {
+        if self.gesture.is_some() || self.frozen || self.selected.is_empty() {
             return;
         }
         let edits = self
@@ -969,6 +987,10 @@ impl Editor {
         self.just_drawn = false;
         if kind.is_figure() {
             self.figures.figure = kind;
+        }
+        if kind.is_hider() {
+            self.hiders.kind = kind;
+            self.keep_hider(kind);
         }
         if kind != Kind::Select {
             self.selected.clear();
@@ -1119,6 +1141,8 @@ fn kind_of(edit: &Edit) -> Option<Kind> {
         Edit::Pen { .. } => Some(Kind::Pen),
         Edit::Marker { .. } => Some(Kind::Marker),
         Edit::Stamp { .. } => Some(Kind::Stamp),
+        Edit::Blur { .. } => Some(Kind::Blur),
+        Edit::Mosaic { .. } => Some(Kind::Mosaic),
         Edit::Rectangle { .. } => Some(Kind::Rectangle),
         Edit::Ellipse { .. } => Some(Kind::Ellipse),
         Edit::Line { .. } => Some(Kind::Line),
@@ -1278,6 +1302,29 @@ impl Editor {
                     theme.text,
                 )),
         );
+        // The two ways to make a part unreadable: one button, which takes up the last of them taken.
+        let hider = if self.tool.is_hider() {
+            self.tool
+        } else {
+            self.hiders.kind
+        };
+        bar = bar.child(
+            button("hide".into(), self.tool.is_hider(), true)
+                .tooltip(tip(t("editor.tool.hide")))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let kind = if this.tool.is_hider() {
+                        this.tool
+                    } else {
+                        this.hiders.kind
+                    };
+                    this.pick(kind, cx)
+                }))
+                .child(icons::icon(
+                    icons::of_tool(hider, None, None),
+                    16.0,
+                    theme.text,
+                )),
+        );
         let typing = false;
         let (can_undo, can_redo) = (
             self.drawing.can_undo() && !typing,
@@ -1336,6 +1383,20 @@ impl Editor {
             _ => None,
         };
         let shaping = self.tool_ref().and_then(|tool| tool.shaping());
+        // What the parts made unreadable show (the one being dragged, made at once).
+        let dragged = match &self.gesture {
+            Some(Gesture::Move { indices, .. }) if indices.len() == 1 => Some(indices[0]),
+            Some(Gesture::Resize { index, .. }) => Some(*index),
+            _ => None,
+        };
+        let hiding = self.hiding(&edits, dragged);
+        let shaping_hiding = match &shaping {
+            Some(edit @ (Edit::Blur { .. } | Edit::Mosaic { .. })) => {
+                self.hiding(std::slice::from_ref(edit), Some(0))
+            }
+            _ => Default::default(),
+        };
+        let retired_images = std::mem::take(&mut self.retired_images);
         let retired = std::mem::take(&mut self.retired);
         let cursor = if self.grabbing || matches!(self.gesture, Some(Gesture::Pan { .. })) {
             CursorStyle::OpenHand
@@ -1359,6 +1420,9 @@ impl Editor {
                 for picture in retired {
                     picture.let_go(window);
                 }
+                for image in retired_images {
+                    let _ = window.drop_image(image);
+                }
                 let dense = window.scale_factor();
                 // (On a whole pixel of the screen: what is shown at a pixel to a pixel is the image.)
                 let origin = point(
@@ -1380,7 +1444,7 @@ impl Editor {
                     };
                     let bases = picture.bases(&look, size, dense, window);
                     window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                        paint::draw_all(window, &painter, view, &bases, &edits, rewritten);
+                        paint::draw_all(window, &painter, view, &bases, &edits, rewritten, &hiding);
                         if let Some(shaping) = &shaping {
                             paint::draw_all(
                                 window,
@@ -1389,6 +1453,7 @@ impl Editor {
                                 &[],
                                 std::slice::from_ref(shaping),
                                 None,
+                                &shaping_hiding,
                             );
                         }
                         // What is selected, framed (not cut to the picture: it may reach beside

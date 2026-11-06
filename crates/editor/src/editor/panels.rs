@@ -61,6 +61,8 @@ pub(super) struct BarLook {
     fills: bool,
     stroke: Colour,
     stamps: Colour,
+    /// How strongly a part is made unreadable.
+    strength: u32,
     open: Option<Panel>,
 }
 
@@ -287,7 +289,8 @@ impl Editor {
             format!("#{text}")
         };
         let colour = Colour::parse(&written);
-        self.mixing.hex_of = Some(colour.unwrap_or(value));
+        // (A colour written whole is written anew as a colour is: `#rrggbb`.)
+        self.mixing.hex_of = if colour.is_some() { None } else { Some(value) };
         if colour.is_some() {
             self.pick_for(panel, colour, false, cx);
         }
@@ -322,7 +325,7 @@ impl Editor {
             }),
             _ => None,
         };
-        self.mixing.parts_of = Some(colour.unwrap_or(value));
+        self.mixing.parts_of = if colour.is_some() { None } else { Some(value) };
         if let Some(colour) = colour
             && colour != value
         {
@@ -381,6 +384,7 @@ impl Editor {
             fills: self.fills(),
             stroke: self.stroke_now(self.chosen_is_marker()).0,
             stamps: self.stamps_now().0,
+            strength: self.strength_now(),
             open: self.panel(),
         }
     }
@@ -454,6 +458,84 @@ impl Editor {
             bar = bar.child(rule(theme));
         }
         match look.offered {
+            Offered::Hiding | Offered::Hidden => {
+                // The two ways (each a word beside its icon), then how strongly.
+                if look.offered == Offered::Hiding {
+                    for kind in [Kind::Blur, Kind::Mosaic] {
+                        let current = look.tool == kind;
+                        bar = bar.child(
+                            div()
+                                .id(SharedString::from(format!("second-{}", kind.name())))
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .gap(px(6.0))
+                                .h(px(34.0))
+                                .px(px(10.0))
+                                .rounded(theme.radius_small)
+                                .border_1()
+                                .border_color(if current {
+                                    theme.accent
+                                } else {
+                                    gpui::transparent_black()
+                                })
+                                .when(current, |button| button.bg(theme.surface))
+                                .when(!current, |button| {
+                                    button.hover(|style| style.bg(theme.surface_hover))
+                                })
+                                .tooltip(tip(format!(
+                                    "{} ({})",
+                                    t(kind.name()),
+                                    kind.key().to_uppercase()
+                                )))
+                                .when(!leaving, |button| {
+                                    button.on_click(
+                                        cx.listener(move |this, _, _, cx| this.pick(kind, cx)),
+                                    )
+                                })
+                                .child(icons::icon(
+                                    icons::of_tool(kind, None, None),
+                                    16.0,
+                                    theme.text,
+                                ))
+                                .child(t(kind.name())),
+                        );
+                    }
+                    bar = bar.child(rule(theme));
+                }
+                let this = cx.entity().downgrade();
+                bar = bar.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .px(px(6.0))
+                        .text_color(theme.muted)
+                        .child(t("editor.strength"))
+                        .child(
+                            div().w(px(120.0)).child(
+                                Slider::new(
+                                    "strength",
+                                    look.strength as f32,
+                                    crate::hidden::STRENGTHS.0 as f32,
+                                    crate::hidden::STRENGTHS.1 as f32,
+                                )
+                                .inert(leaving)
+                                .on_change(move |value, _, cx| {
+                                    let _ = this.update(cx, |this, cx| {
+                                        this.set_hiding(value.round() as u32, cx)
+                                    });
+                                }),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .min_w(px(20.0))
+                                .text_color(theme.text)
+                                .child(look.strength.to_string()),
+                        ),
+                );
+            }
             Offered::Stamps => {
                 bar = bar.child(self.opener(
                     Panel::Stamps,
@@ -1037,9 +1119,20 @@ impl Editor {
             .text_color(theme.muted)
             .hover(|style| style.bg(theme.surface_hover))
             .when(!leaving, |more| {
-                more.on_click(cx.listener(|this, _, _, cx| {
+                more.on_click(cx.listener(|this, _, window, cx| {
                     this.mixing.open = !this.mixing.open;
-                    this.mixing.slid = Some(Instant::now());
+                    // (Turned back while it slides: back from where it is, not from the end.)
+                    let now = Instant::now();
+                    let gone = this
+                        .mixing
+                        .slid
+                        .map_or(SLIDING, |since| now.duration_since(since).min(SLIDING));
+                    this.mixing.slid = Some(now - (SLIDING - gone));
+                    // (Put away, what is out of sight is out of reach of the keyboard too, as
+                    // `inert` had it.)
+                    if !this.mixing.open && this.mixing.has_keyboard(window, cx) {
+                        window.focus(&this.focus, cx);
+                    }
                     cx.notify();
                 }))
             })
@@ -1162,7 +1255,7 @@ impl Editor {
                             .flex_1()
                             .min_w_0()
                             .tooltip(tip(t("editor.colours.written")))
-                            .child(self.mixing.hex.clone()),
+                            .child(boxed(&self.mixing.hex, leaving, theme, cx)),
                     )
                     .children(self.mixing.parts.iter().enumerate().map(|(index, field)| {
                         div()
@@ -1173,7 +1266,7 @@ impl Editor {
                             .text_color(theme.muted)
                             .tooltip(tip(t(names[index])))
                             .child(letters[index])
-                            .child(div().w(px(44.0)).child(field.clone()))
+                            .child(div().w(px(44.0)).child(boxed(field, leaving, theme, cx)))
                     })),
             )
     }
@@ -1251,4 +1344,31 @@ impl Editor {
                     ),
             )
     }
+}
+
+/// A box to write in; on its way out, what it says alone (not to be pressed, nor to take the
+/// keyboard, as what is put away is not).
+pub(super) fn boxed(
+    field: &Entity<TextField>,
+    leaving: bool,
+    theme: &Theme,
+    cx: &gpui::App,
+) -> AnyElement {
+    if !leaving {
+        return field.clone().into_any_element();
+    }
+    div()
+        .h(px(28.0))
+        .w_full()
+        .flex()
+        .items_center()
+        .px(px(8.0))
+        .overflow_hidden()
+        .rounded(theme.radius_small)
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+        .text_color(theme.text)
+        .child(field.read(cx).text().to_string())
+        .into_any_element()
 }

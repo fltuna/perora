@@ -107,6 +107,29 @@ fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             Part::line("M2.5 8a5.5 4.5 0 1 0 11 0a5.5 4.5 0 1 0-11 0z"),
             colour,
         )],
+        Kind::Blur => vec![
+            Part::line("M8 2.2C6 5 4.2 7.2 4.2 9.6a3.8 3.8 0 0 0 7.6 0C11.8 7.2 10 5 8 2.2z"),
+            Part {
+                solid: 0.6,
+                ..Part::line("M6.6 10.4a1.6 1.6 0 0 0 1.5 1.3")
+            },
+        ],
+        Kind::Mosaic => vec![
+            Part::line(
+                "M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z",
+            ),
+            Part {
+                solid: 0.35,
+                ..Part::solid(
+                    "M2.5 6.2h3.7V2.5M9.8 2.5v3.7h3.7M2.5 9.8h3.7v3.7M9.8 13.5V9.8h3.7M6.2 6.2h3.6v3.6H6.2z",
+                )
+            },
+            Part {
+                ink: Ink::Line(0.8),
+                solid: 0.6,
+                ..Part::line("M6.2 2.5v11M9.8 2.5v11M2.5 6.2h11M2.5 9.8h11")
+            },
+        ],
         // A letter, with a line under it in the colour it is written in.
         Kind::Text => {
             let mut parts = vec![Part::line("M4 4.2V2.8h8v1.4M8 2.8v8.4M6.4 11.2h3.2")];

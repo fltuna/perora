@@ -96,8 +96,11 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
         id,
         picture: Rc::new(picture),
     };
+    // (Which way to make a part unreadable the editor starts with, as the settings say.)
+    let hider = Perora::get(cx).settings().default_hider;
     if let Some(window) = cx.default_global::<Large>().window {
         let _ = window.update(cx, move |editor, window, cx| {
+            editor.set_default_hider(hider);
             editor.show(capture, cx);
             if let Some(handle) = hwnd::of(window) {
                 platform::set_cloaked(handle, false);
@@ -129,6 +132,7 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
         });
         let editor = cx.new(|cx| {
             let mut editor = Editor::new(language.clone(), window, cx);
+            editor.set_default_hider(hider);
             editor.show(capture, cx);
             editor
         });

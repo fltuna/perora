@@ -707,12 +707,9 @@ impl Editor {
             .flex()
             .flex_col()
             .gap(px(6.0))
-            .child(
-                div()
-                    .id("seek")
-                    .tooltip(tip(t("editor.font.seek")))
-                    .child(self.lettering.sought.clone()),
-            )
+            .child(div().id("seek").tooltip(tip(t("editor.font.seek"))).child(
+                super::panels::boxed(&self.lettering.sought, leaving, theme, cx),
+            ))
             .child(list)
             .when(count == 0, |list| {
                 list.child(

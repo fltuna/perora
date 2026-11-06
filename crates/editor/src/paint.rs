@@ -56,8 +56,13 @@ pub struct Base {
     pub area: Area,
 }
 
+/// What parts made unreadable show, by their place in the list: made apart (`hidden`), from what is
+/// under them.
+pub type Hiding = std::collections::HashMap<usize, Base>;
+
 /// The picture (`view`: all of the image, or what it is cut down to) with what was drawn on it, in
 /// its turn, cut to the picture. `skip`: one of the list not drawn (being written anew elsewhere).
+/// The parts made unreadable show what `hiding` has of them (nothing, without it).
 pub fn draw_all(
     window: &mut Window,
     painter: &Painter,
@@ -65,6 +70,7 @@ pub fn draw_all(
     base: &[Base],
     edits: &[Edit],
     skip: Option<usize>,
+    hiding: &Hiding,
 ) {
     let mask = ContentMask {
         bounds: painter.bounds(view),
@@ -85,6 +91,18 @@ pub fn draw_all(
         }
         for (index, edit) in edits.iter().enumerate() {
             if Some(index) == skip {
+                continue;
+            }
+            if let Some(hidden) = hiding.get(&index) {
+                let bounds = painter.bounds(hidden.area);
+                let _ = window.paint_image(
+                    bounds,
+                    bounds,
+                    Corners::default(),
+                    hidden.image.clone(),
+                    0,
+                    false,
+                );
                 continue;
             }
             if let Some(mark) = marks::mark_of(edit) {
