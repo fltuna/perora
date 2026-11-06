@@ -38,6 +38,8 @@ use perora_core::language::Language;
 use perora_core::platform::{self, Desktop, Frame, Monitor, ScreenCapture, ScreenLayout, WindowId};
 use perora_core::selection::{Choice, Mode, Session, without_edge};
 
+mod touring;
+
 use crate::bar::{self, Bar};
 use crate::state::Perora;
 use crate::window_list::{self, List};
@@ -91,6 +93,9 @@ pub struct Selection {
     handles: Vec<WindowId>,
     /// Chosen, given up, or taken anew: nothing more is done with it.
     finished: bool,
+    /// The tour of the screen, while it is on; where the things it shows are on the bar.
+    touring: Option<touring::Touring>,
+    marks: perora_ui::tour::Marks,
     /// When the shortcut was pressed, for the times in the log.
     asked: Instant,
 }
@@ -149,6 +154,53 @@ impl Selection {
 
     pub fn bar(&self) -> &Bar {
         &self.bar
+    }
+
+    /// Where the things the tour shows are on the bar.
+    pub fn marks(&self) -> &perora_ui::tour::Marks {
+        &self.marks
+    }
+
+    /// The tour, from its first step: what was half pressed is let go of, and the bar stays.
+    pub fn start_tour(&mut self, cx: &mut Context<Self>) {
+        if self.finished || self.touring.is_some() {
+            return;
+        }
+        if self.pressed {
+            self.pressed = false;
+            self.session.release();
+        }
+        let home = self.home_monitor().clone();
+        let settings = Perora::get(cx).settings();
+        self.touring = Some(touring::steps(
+            &home,
+            self.session.windows(),
+            settings.bar_hide_seconds,
+            settings.bar_reveal_area,
+            &self.language,
+        ));
+        self.bar.kept = true;
+        self.bar_changed(cx);
+        cx.notify();
+    }
+
+    /// The tour is over: seen (to the end, or put away), it does not come on its own again.
+    fn end_tour(&mut self, cx: &mut Context<Self>) {
+        if self.touring.take().is_none() {
+            return;
+        }
+        self.bar.kept = false;
+        self.bar_changed(cx);
+        cx.defer(touring::saw);
+        cx.notify();
+    }
+
+    /// One of the tour's buttons, or a key that is the tour's.
+    fn tour_asked(&mut self, asked: perora_ui::tour::Asked, cx: &mut Context<Self>) {
+        match asked {
+            perora_ui::tour::Asked::End => self.end_tour(cx),
+            perora_ui::tour::Asked::Moved => cx.notify(),
+        }
     }
 
     fn home_monitor(&self) -> &Monitor {
@@ -329,6 +381,8 @@ pub fn open(
             overlays: Vec::new(),
             handles: Vec::new(),
             finished: false,
+            touring: None,
+            marks: Default::default(),
             asked,
         };
         selection.pointer_at(pointer, cx);
@@ -585,6 +639,12 @@ impl Overlay {
             if selection.finished {
                 return None;
             }
+            // While the tour is on nothing is chosen: the + only follows the pointer.
+            if selection.touring.is_some() {
+                selection.pointer_at(at, cx);
+                cx.notify();
+                return None;
+            }
             // (What happens on the bar is the bar's, unless it is a press of the screen held on.)
             let screens = selection.pressed || !over_bar;
             let choice = match press {
@@ -629,6 +689,23 @@ impl Overlay {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        // The keys are the tour's while it is on.
+        let taken = self.selection.update(cx, |selection, cx| {
+            let touring = selection.touring.as_mut()?;
+            match touring.tour.key(event) {
+                perora_ui::tour::Keyed::NotMine => None,
+                perora_ui::tour::Keyed::Taken(asked) => {
+                    if let Some(asked) = asked {
+                        selection.tour_asked(asked, cx);
+                    }
+                    Some(())
+                }
+            }
+        });
+        if taken.is_some() {
+            cx.stop_propagation();
+            return;
+        }
         if event.is_held {
             return;
         }
@@ -659,7 +736,8 @@ impl Render for Overlay {
         let viewport = window.viewport_size();
         let entity = self.selection.clone();
         let selection = self.selection.read(cx);
-        let highlight = selection.session.highlight();
+        let touring = selection.touring.is_some();
+        let highlight = selection.session.highlight().filter(|_| !touring);
         let mode = selection.session.mode();
         let home = selection.home == self.monitor;
 
@@ -674,6 +752,22 @@ impl Render for Overlay {
                 window.on_next_frame(move |window, cx| {
                     if let Some(handle) = hwnd::of(window) {
                         platform::set_cloaked(handle, false);
+                    }
+                    // The tour comes on its own a moment later, on the monitor with the bar.
+                    if let Some(selection) = pressing.upgrade()
+                        && selection.read(cx).home == monitor
+                        && !touring::seen(cx)
+                    {
+                        let later = selection.downgrade();
+                        cx.spawn(async move |cx| {
+                            cx.background_executor().timer(touring::COMES_AFTER).await;
+                            let _ = later.update(cx, |selection, cx| {
+                                if !touring::seen(cx) {
+                                    selection.start_tour(cx);
+                                }
+                            });
+                        })
+                        .detach();
                     }
                     if pressing
                         .upgrade()
@@ -776,12 +870,14 @@ impl Render for Overlay {
                     );
                 }
             }
+            // (While the tour is on, it is what dims the screen.)
+            None if touring => {}
             None => root = root.child(div().absolute().size_full().bg(shade)),
         }
 
         if home {
             let windows = selection.session.windows();
-            let listed = mode == Mode::Window;
+            let listed = mode == Mode::Window && !touring;
             if selection.bar.sliding() || (listed && selection.list.moving(windows.len())) {
                 window.request_animation_frame();
             }
@@ -795,8 +891,39 @@ impl Render for Overlay {
                     accent,
                 ));
             }
+            selection.marks.turn();
             root = root.child(bar::element(selection, &entity, mode, &selection.language));
         }
+        // The tour, on the monitor with the bar: what the step shows on the screen, then the tour.
+        if home && touring {
+            let language = selection.language.clone();
+            let words = crate::preview::tour_words(&language);
+            let marks = selection.marks.clone();
+            let theme = perora_ui::Theme::get(cx).clone();
+            let tour = self.selection.update(cx, |selection, _| {
+                let touring = selection.touring.as_mut()?;
+                let art = touring::art(touring, &language);
+                let pressed = entity.downgrade();
+                let view = touring.tour.view(&marks, &words, &theme, window, move |button, _, cx| {
+                    let _ = pressed.update(cx, |selection, cx| {
+                        let Some(touring) = selection.touring.as_mut() else {
+                            return;
+                        };
+                        let asked = match button {
+                            perora_ui::tour::Button::Skip => perora_ui::tour::Asked::End,
+                            perora_ui::tour::Button::Back => touring.tour.back(),
+                            perora_ui::tour::Button::Next => touring.tour.next(),
+                        };
+                        selection.tour_asked(asked, cx);
+                    });
+                });
+                Some((art, view))
+            });
+            if let Some((art, view)) = tour {
+                root = root.children(art).child(view);
+            }
+        }
+        let selection = self.selection.read(cx);
 
         // The + over everything, where the pointer is on this monitor: not over the bar, where the
         // system's pointer is shown. The window the pointer is over says whether the system's is.

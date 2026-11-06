@@ -58,6 +58,8 @@ pub struct Bar {
     slid_at: Option<Instant>,
     animates: bool,
     pub drawn: Rc<Cell<Option<Drawn>>>,
+    /// The tour is on: the bar stays.
+    pub kept: bool,
 }
 
 impl Bar {
@@ -74,6 +76,7 @@ impl Bar {
             slid_at: None,
             animates: perora_core::platform::animations_enabled(),
             drawn: Rc::default(),
+            kept: false,
         }
     }
 
@@ -136,8 +139,8 @@ impl Bar {
     pub fn update(&mut self, dragging: bool) -> Option<(u64, f64)> {
         // (Not kept back by a frame being dragged up there: it would be in the way of that.)
         let pointed_at = self.near && !dragging;
-        let stays = pointed_at || self.seconds <= 0.0;
-        let dragged_away = dragging && self.seconds > 0.0;
+        let stays = pointed_at || self.seconds <= 0.0 || self.kept;
+        let dragged_away = dragging && self.seconds > 0.0 && !self.kept;
         let set_for = (stays, dragged_away, self.shown);
         if self.set_for == Some(set_for) {
             return None;
@@ -222,6 +225,34 @@ pub fn element(
                 cx.defer(move |cx| selection::finish(&entity, None, cx));
             })
             .child(language.text("overlay.cancel", &[]))
+            .relative()
+            .child(selection.marks().mark("cancel"))
+    };
+    // The tour, shown again: last on the bar.
+    let guide = {
+        let entity = entity.clone();
+        div()
+            .id("guide")
+            .relative()
+            .flex()
+            .items_center()
+            .h(px(32.0))
+            .px(px(9.0))
+            .rounded(px(6.0))
+            .cursor(CursorStyle::PointingHand)
+            .text_color(rgba(0x9aa1_adff))
+            .hover(|button| button.text_color(rgba(0xecee_f2ff)))
+            .on_click(move |_, _, cx| {
+                let entity = entity.clone();
+                cx.defer(move |cx| entity.update(cx, |selection, cx| selection.start_tour(cx)));
+            })
+            .child(
+                div()
+                    .font_family("Segoe Fluent Icons")
+                    .text_size(px(16.0))
+                    .child("\u{E946}"),
+            )
+            .child(selection.marks().mark("guide"))
     };
     let hint_key = format!("overlay.hint.{}", mode.name());
     let hint = language.text(&hint_key, &[]);
@@ -268,9 +299,11 @@ pub fn element(
                             inset: false,
                         }])
                         .children(modes)
-                        .child(cancel),
+                        .child(cancel)
+                        .child(guide),
                 )
                 .children(hint)
+                .child(selection.marks().mark("modes"))
                 // Where it is, for the pointer to be told against (its place without the slide).
                 .child(
                     canvas(
