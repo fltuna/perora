@@ -16,11 +16,12 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, BoxShadow, Context, CursorStyle, FocusHandle, FontWeight, Global,
-    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ObjectFit, ParentElement, Pixels, Point, Render, RenderImage, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, point, px, rgba,
+    App, AppContext, BoxShadow, Context, CursorStyle, DispatchPhase, FocusHandle, FontWeight,
+    Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Point, Render, RenderImage,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas, div,
+    img, point, px, rgba,
 };
 use perora_core::language::Language;
 use perora_core::platform::{self, Desktop, Frame, Monitor, ScreenCapture, WindowId};
@@ -712,7 +713,23 @@ impl Render for AreaScreen {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::pressed))
-            .on_mouse_move(cx.listener(Self::moved))
+            // (Every move of the pointer over the window, over the buttons too: a part being drawn
+            // follows the pointer wherever it goes, as the Tauri version's pointer capture had it.)
+            .child({
+                let screen = cx.entity();
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                screen.update(cx, |screen, cx| screen.moved(event, window, cx));
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_0()
+            })
             .on_mouse_up(MouseButton::Left, cx.listener(Self::let_go))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::let_go))
             .child(stage)

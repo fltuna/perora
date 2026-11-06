@@ -124,7 +124,7 @@ impl RenderOnce for Button {
             .bg(background)
             .text_color(text)
             .whitespace_nowrap()
-            .when(!self.enabled, |button| button.opacity(0.5))
+            .when(!pressable, |button| button.opacity(0.5))
             .when(pressable, |button| {
                 let hover_border = theme.muted;
                 let accent = self.accent;
