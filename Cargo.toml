@@ -1,6 +1,17 @@
 [workspace]
 resolver = "3"
-members = ["src-tauri", "crates/core"]
+members = ["crates/core", "crates/ui", "crates/editor", "app"]
+# The Tauri version stays out of this workspace on the `gpui` branch: its Linux dependencies (GTK)
+# pin `toml_datetime =0.6.3`, which GPUI's build tools cannot share one lock file with. It is built
+# from `main` until P7 removes it (built here, it is a package of its own).
+exclude = ["src-tauri"]
+
+# GPUI from Perora's fork of Zed (`perora` branch: Zed's main with Perora's changes to GPUI, kept up
+# to date by .github/workflows/zed-fork.yml). The commit is moved by hand, after trying it: GPUI is
+# not 1.0 and changes under its users.
+[workspace.dependencies]
+gpui = { git = "https://github.com/fltuna/zed", rev = "7d62e902a17dcc7eb724aa268a7fd2558230ba7c", features = ["test-support"] }
+gpui_platform = { git = "https://github.com/fltuna/zed", rev = "7d62e902a17dcc7eb724aa268a7fd2558230ba7c", features = ["test-support"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 # Packing a capture of several monitors into a PNG takes seconds without optimization; these are the
@@ -26,3 +37,13 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# For working on the GPUI app: optimized like a release (GPUI is slow unoptimized), without the long
+# link. `cargo build -p perora-app --profile fast`.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+panic = "unwind"
+strip = false

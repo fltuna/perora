@@ -1,0 +1,37 @@
+[package]
+name = "perora-app"
+version = "0.1.0"
+description = "Perora on GPUI: the application (tray, shortcut, windows)"
+license = "MIT"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+# `perora-gpui.exe` while the Tauri version (`perora.exe`) is still in the repository; P7 of
+# docs/gpui-rewrite.md renames it to `perora.exe`, which installed copies and the registry depend on.
+[[bin]]
+name = "perora-gpui"
+path = "src/main.rs"
+
+[dependencies]
+async-channel = "2"
+global-hotkey = "0.8"
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+perora-core = { path = "../crates/core" }
+perora-ui = { path = "../crates/ui" }
+# Without its defaults: they bring GTK for Linux (libappindicator), which Windows does not use and
+# whose pins clash with GPUI's build tools in the lock file.
+tray-icon = { version = "0.25", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-resource = "3"

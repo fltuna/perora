@@ -1,0 +1,12 @@
+[package]
+name = "perora-editor"
+version = "0.1.0"
+description = "Perora's editor on GPUI: the image, the marks drawn on it and the tools that draw them"
+license = "MIT"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui = { workspace = true }
+perora-core = { path = "../core" }
+perora-ui = { path = "../ui" }
