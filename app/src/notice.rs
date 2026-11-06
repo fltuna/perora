@@ -11,9 +11,11 @@
 //! own when its time is over, or when it is clicked. The window never takes the keyboard.
 //!
 //! The window is made when a notice appears and closed when it leaves: while it is open, the GPU is
-//! held. (P3: the slide into its corner, and keeping clear of the small preview.)
+//! held. It comes into its corner as the small preview does, and keeps clear of that preview when
+//! both are in one corner.
 
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,18 +24,15 @@ use gpui::{
     Render, RenderImage, StatefulInteractiveElement, Styled, Window, WindowBackgroundAppearance,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, px,
 };
-use perora_core::geometry::Rect;
 use perora_core::notice::Sound;
-use perora_core::platform::{self, ScreenCapture};
+use perora_core::platform;
 use perora_ui::Theme;
 
 use crate::state::Perora;
-use crate::{capture, display, gpu, hwnd, main_window};
+use crate::{capture, corner, display, gpu, hwnd, main_window, preview};
 
 /// The window, in logical pixels: as wide as the small preview, which it lines up with.
-const SIZE: (f32, f32) = (360.0, 76.0);
-/// How far from the edges of the work area (logical pixels).
-const MARGIN: f32 = 16.0;
+const SIZE: (f64, f64) = (360.0, 76.0);
 /// How often a notice that waits for a capture to be over looks whether it is.
 const WAITS: Duration = Duration::from_millis(50);
 
@@ -83,6 +82,9 @@ struct Notices {
     /// leaves) does not happen to the one that took its place.
     turn: u64,
     window: Option<WindowHandle<Notice>>,
+    /// Which showing of the window is the last: one that comes into its corner stops where a later
+    /// showing put it.
+    placing: u64,
     icon: Option<Arc<RenderImage>>,
 }
 
@@ -166,6 +168,7 @@ fn taken_away(the_one: impl FnOnce(&Notices) -> bool, cx: &mut App) -> (bool, Op
     }
     // Whatever was still to happen to it does not.
     notices.turn += 1;
+    notices.placing += 1;
     let click = notices.click.take();
     let was = notices.message.take().is_some();
     if let Some(window) = notices.window.take() {
@@ -185,7 +188,14 @@ fn taken_away(the_one: impl FnOnce(&Notices) -> bool, cx: &mut App) -> (bool, Op
 /// place meanwhile, that one stays, unread, and nothing is shown.
 fn dismiss(turn: u64, cx: &mut App) {
     let (was, click) = taken_away(|notices| notices.turn == turn, cx);
-    eprintln!("notice {turn}: clicked ({}, {click:?})", if was { "put away" } else { "another took its place" });
+    eprintln!(
+        "notice {turn}: clicked ({}, {click:?})",
+        if was {
+            "put away"
+        } else {
+            "another took its place"
+        }
+    );
     match click {
         Some(Click::Reveal(file)) => {
             std::thread::spawn(move || {
@@ -200,48 +210,37 @@ fn dismiss(turn: u64, cx: &mut App) {
 }
 
 /// On screen, in the corner the user chose of the primary monitor's work area (clear of the
-/// taskbar).
+/// taskbar; and of the small preview, when that is on screen in the same corner). One that is on
+/// screen already is put there at once; one that was not comes into its place (`corner`).
 fn show(cx: &mut App) {
-    if cx.default_global::<Notices>().window.is_some() {
-        return;
-    }
     let corner = Perora::get(cx).settings().notice_corner;
-    let Some(monitor) = platform::screen_capture().layout().ok().and_then(|layout| {
-        layout
-            .primary()
-            .or(layout.monitors.first())
-            .cloned()
-    }) else {
+    let Some(monitor) = corner::monitor() else {
         return;
     };
+    let clear_of = preview::in_its_corner(cx)
+        .filter(|(its, _)| *its == corner)
+        .map(|(_, tall)| tall);
+    let to = corner::spot(&monitor, corner, SIZE, clear_of);
+    let notices = cx.default_global::<Notices>();
+    notices.placing += 1;
+    let placing = notices.placing;
+    if let Some(window) = notices.window {
+        let _ = window.update(cx, |_, window, cx| {
+            corner::put(window, to, cx);
+        });
+        return;
+    }
     let Some(screen) = display::of(&monitor, cx) else {
         return;
     };
-    let scale = monitor.scale;
-    let (width, height) = (
-        (f64::from(SIZE.0) * scale).round() as i32,
-        (f64::from(SIZE.1) * scale).round() as i32,
-    );
-    let margin = (f64::from(MARGIN) * scale).round() as i32;
-    let area = monitor.work_area;
-    let place = Rect::new(
-        if corner.is_right() {
-            area.right() - width - margin
-        } else {
-            area.x + margin
-        },
-        if corner.is_bottom() {
-            area.bottom() - height - margin
-        } else {
-            area.y + margin
-        },
-        width as u32,
-        height as u32,
-    );
+    let from = corner::from(&monitor, corner, to);
 
     gpu::attach(cx);
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(display::bounds_on(&monitor, place))),
+        window_bounds: Some(WindowBounds::Windowed(display::bounds_on(
+            &monitor,
+            from.unwrap_or(to),
+        ))),
         titlebar: None,
         focus: false,
         show: true,
@@ -253,13 +252,21 @@ fn show(cx: &mut App) {
         window_background: WindowBackgroundAppearance::Opaque,
         ..Default::default()
     };
+    let still: Rc<dyn Fn(&App) -> bool> = Rc::new(move |cx: &App| {
+        cx.try_global::<Notices>()
+            .is_some_and(|notices| notices.placing == placing && notices.window.is_some())
+    });
     let opened = cx.open_window(options, |window, cx| {
         if let Some(handle) = hwnd::of(window) {
             platform::without_transitions(handle);
             // Never takes the keyboard: not when it appears, not when it is clicked.
             hwnd::never_active(handle);
+            platform::set_cloaked(handle, true);
         }
-        cx.new(|_| Notice { turn: 0 })
+        cx.new(|_| Notice {
+            turn: 0,
+            appearing: Some(corner::Appearing { to, from, still }),
+        })
     });
     match opened {
         Ok(window) => cx.default_global::<Notices>().window = Some(window),
@@ -284,7 +291,8 @@ fn icon(cx: &mut App) -> Option<Arc<RenderImage>> {
     let notices = cx.default_global::<Notices>();
     if notices.icon.is_none() {
         let file = include_bytes!("../../src-tauri/icons/128x128.png");
-        notices.icon = platform::Frame::from_png(file, 1 << 20).and_then(crate::selection::drawable);
+        notices.icon =
+            platform::Frame::from_png(file, 1 << 20).and_then(crate::selection::drawable);
     }
     notices.icon.clone()
 }
@@ -292,10 +300,14 @@ fn icon(cx: &mut App) -> Option<Arc<RenderImage>> {
 struct Notice {
     /// The turn of what it shows: a click says which notice it was on.
     turn: u64,
+    appearing: Option<corner::Appearing>,
 }
 
 impl Render for Notice {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(appearing) = self.appearing.take() {
+            corner::appear_when_drawn(appearing, window);
+        }
         let icon = icon(cx);
         let notices = cx.default_global::<Notices>();
         self.turn = notices.turn;
@@ -324,8 +336,22 @@ impl Render for Notice {
             })
             .on_click(move |_, _, cx| cx.defer(move |cx| dismiss(turn, cx)))
             // The edge, and down the left of it the accent colour.
-            .child(div().absolute().inset_0().border_1().border_color(theme.border))
-            .child(div().absolute().left_0().top_0().bottom_0().w(px(3.0)).bg(theme.accent))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .border_1()
+                    .border_color(theme.border),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(3.0))
+                    .bg(theme.accent),
+            )
             .children(message.map(|message| {
                 div()
                     .flex_1()

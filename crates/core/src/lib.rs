@@ -14,6 +14,7 @@ pub mod notice;
 pub mod oidc;
 pub mod output;
 pub mod platform;
+pub mod preview;
 pub mod saving;
 pub mod selection;
 pub mod settings;

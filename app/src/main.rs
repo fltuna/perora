@@ -3,21 +3,24 @@
 //! P1: the settings and the language, the icon in the notification area, the shortcut, one Perora at
 //! a time (later starts hand their arguments over), and the GPU let go of while no window is open.
 //! P2: the selection screen (its mode bar, its +, the list of windows); what is chosen copied and
-//! saved as the settings say, and the notice that says so. (Until P3 there is no preview: every
-//! capture goes as when the user chose to have none.)
+//! saved as the settings say, and the notice that says so.
+//! P3: the small preview in its corner, and how it and the notice come into it.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod arguments;
 mod bar;
 mod capture;
+mod corner;
 mod cursor;
 mod display;
 mod gpu;
 mod hwnd;
 mod instance;
 mod main_window;
+mod motion;
 mod notice;
+mod preview;
 mod selection;
 mod shortcut;
 mod state;

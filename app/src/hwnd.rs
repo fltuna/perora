@@ -2,12 +2,14 @@
 //! keeping it out of sight until it has drawn, its look in the system's animations.
 
 use gpui::Window;
+use perora_core::geometry::Rect;
 use perora_core::platform::WindowId;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, IsIconic, IsWindowVisible, SW_HIDE, SW_SHOW,
-    SetWindowLongPtrW, ShowWindow, WS_EX_NOACTIVATE,
+    GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible, SW_HIDE, SW_SHOW,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    WS_EX_NOACTIVATE,
 };
 
 pub fn of(window: &Window) -> Option<WindowId> {
@@ -49,5 +51,47 @@ pub fn never_active(window: WindowId) {
 pub fn show(window: WindowId) {
     unsafe {
         let _ = ShowWindow(hwnd(window), SW_SHOW);
+    }
+}
+
+/// Where the window is, in physical pixels of the virtual screen.
+pub fn rect(window: WindowId) -> Option<Rect> {
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(hwnd(window), &mut rect) }.ok()?;
+    Some(Rect::new(
+        rect.left,
+        rect.top,
+        (rect.right - rect.left).max(0) as u32,
+        (rect.bottom - rect.top).max(0) as u32,
+    ))
+}
+
+/// Moves the window there (physical pixels), as large as it is.
+pub fn move_to(window: WindowId, x: i32, y: i32) {
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd(window),
+            None,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Puts the window there, at that size (physical pixels).
+pub fn place(window: WindowId, area: Rect) {
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd(window),
+            None,
+            area.x,
+            area.y,
+            area.width as i32,
+            area.height as i32,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 }

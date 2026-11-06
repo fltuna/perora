@@ -15,13 +15,13 @@ use perora_core::language::Language;
 use perora_core::notice::Sound;
 use perora_core::platform::{self, Desktop, Frame, ScreenCapture, WindowId};
 use perora_core::selection::Mode;
-use perora_core::settings::Leaves;
+use perora_core::settings::{After, Leaves, Settings};
 use perora_core::{copying, saving};
 
 use crate::notice::{self, Lasting};
 use crate::selection::{self, Selection, Taken};
 use crate::state::Perora;
-use crate::{gpu, main_window};
+use crate::{corner, gpu, main_window, preview};
 
 /// How long a window that was just hidden may still be on screen: the compositor draws the next
 /// frame without it only after a moment. The main window and the notice (as in the Tauri version),
@@ -64,16 +64,24 @@ pub fn start(cx: &mut App) {
     // (Pressed again while a selection screen is up, they were put out of the way for that one
     // already.)
     let noticed = notice::put_away(cx);
-    let put_aside = if hide { main_window::step_aside(cx) } else { None };
+    let previewed = hide && preview::put_away(cx);
+    let put_aside = if hide {
+        main_window::step_aside(cx)
+    } else {
+        None
+    };
     if put_aside.is_some() {
         cx.global_mut::<Capturing>().put_aside = put_aside;
     }
     let own: Vec<WindowId> = if hide {
         Vec::new()
     } else {
-        main_window::on_screen_now(cx).into_iter().collect()
+        main_window::on_screen_now(cx)
+            .into_iter()
+            .chain(preview::on_screen_now(cx))
+            .collect()
     };
-    let settle = if put_aside.is_some() || noticed {
+    let settle = if put_aside.is_some() || noticed || previewed {
         Some(SETTLE_MAIN)
     } else {
         before.is_some().then_some(SETTLE)
@@ -187,6 +195,7 @@ fn arrived(
             come_back(cx);
             gpu::release_soon(cx);
             notice::say(message, Lasting::Long, None, cx);
+            preview::restore(cx);
             return;
         }
     };
@@ -199,8 +208,11 @@ fn arrived(
     }
     // Perora's own windows were left in the picture: out of the way now, under the selection
     // screen (which shows them as they were), and back as that is done with.
-    if !hide && let Some(window) = main_window::step_aside(cx) {
-        cx.global_mut::<Capturing>().put_aside = Some(window);
+    if !hide {
+        preview::put_away(cx);
+        if let Some(window) = main_window::step_aside(cx) {
+            cx.global_mut::<Capturing>().put_aside = Some(window);
+        }
     }
     let id = {
         let capturing = cx.global_mut::<Capturing>();
@@ -216,6 +228,7 @@ fn arrived(
             eprintln!("selection {id}: no window could be opened");
             come_back(cx);
             gpu::release_soon(cx);
+            preview::restore(cx);
         }
     }
 }
@@ -250,14 +263,12 @@ fn come_back(cx: &mut App) {
     }
 }
 
-/// What the user chose, as P2 has it: there is no preview yet (P3) nor upload (P5), so every capture
-/// goes as when the user chose to have no preview: to the clipboard (as copies are made: the kind of
-/// file, and how large at most), saved as well when the user has every capture saved, and one notice
-/// says what became of it. And the capture's sound, the moment there is a capture.
+/// What becomes of a capture, as the user has it: the capture's sound the moment there is one, then
+/// the small preview (P4: also when the user has captures drawn on at once, until the large window
+/// is there), or the clipboard and nothing else.
 pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     let perora = Perora::get(cx);
     let settings = perora.settings();
-    let language = perora.language();
     let sound = match &settings.capture_sound {
         Sound::None => None,
         Sound::System(name) => platform::system_sound(name),
@@ -266,7 +277,123 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     if let Some(sound) = sound {
         platform::play_sound(&sound);
     }
+    match settings.after_capture {
+        After::Copy => copy_alone(source, area, settings, cx),
+        After::Preview | After::Edit => to_preview(source, area, settings, cx),
+    }
+}
 
+/// To the preview: on the clipboard first (unless the user would rather not), so that it is there
+/// to paste by the time the preview is seen; saved as well when the user has every capture saved.
+fn to_preview(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) {
+    let id = preview::ask(cx);
+    let scale = corner::monitor().map_or(1.0, |monitor| monitor.scale);
+    let how = settings.output(Leaves::Copy);
+    let touched = settings.after_capture == After::Edit;
+    // (In the order of the captures: the last one taken is what stays on the clipboard.)
+    let turn = settings.copy_to_clipboard.then(copying::turn);
+    let making = cx.background_executor().spawn(async move {
+        let started = Instant::now();
+        // (Somewhere on it: whoever chose it saw to that.)
+        let frame = Arc::new(source.crop(area)?);
+        drop(source);
+        let (copied, png) = match turn.map(|turn| copying::to_clipboard(&frame, how, turn)) {
+            None => (None, None),
+            Some(Ok(copied)) => (
+                Some(Ok((!copied.passed).then_some(copied.sequence).flatten())),
+                copied.png.map(Arc::new),
+            ),
+            Some(Err(detail)) => {
+                eprintln!("clipboard: the capture was not put there: {detail}");
+                (Some(Err(detail)), None)
+            }
+        };
+        let copying_took = started.elapsed();
+        let picture = preview::picture_of(&frame, scale);
+        eprintln!(
+            "deliver: {}x{} copied in {:.0} ms, its picture made in {:.0} ms more",
+            frame.width(),
+            frame.height(),
+            copying_took.as_secs_f64() * 1000.0,
+            (started.elapsed() - copying_took).as_secs_f64() * 1000.0
+        );
+        Some(preview::Shown {
+            id,
+            frame,
+            png,
+            copied,
+            copied_as: how,
+            picture,
+            touched,
+        })
+    });
+    cx.spawn(async move |cx| {
+        let Some(shown) = making.await else {
+            // (Nothing to show: what was being previewed before is back.)
+            cx.update(preview::restore);
+            return;
+        };
+        // (Saved once it is shown: the preview is not kept waiting for the files.)
+        let taken = settings
+            .save_on_capture
+            .then(|| (shown.frame.clone(), shown.png.clone()));
+        cx.update(|cx| {
+            preview::present(shown, cx);
+            if let Some((frame, png)) = taken {
+                save_as_taken(id, frame, png, settings, cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// Saves a previewed capture as it was taken, apart from whatever else becomes of it, and says where
+/// it went: unless it was discarded meanwhile, and taken away with that.
+fn save_as_taken(
+    id: u64,
+    frame: Arc<Frame>,
+    png: Option<Arc<Vec<u8>>>,
+    settings: Settings,
+    cx: &mut App,
+) {
+    let saving = cx.background_executor().spawn(async move {
+        saving::save_as_taken(&settings, &frame, png.as_deref().map(Vec::as_slice))
+    });
+    cx.spawn(async move |cx| {
+        let saved = saving.await;
+        cx.update(|cx| {
+            let language = Perora::get(cx).language();
+            match saved {
+                Ok(files) => {
+                    if !preview::saved_as_taken(id, &files, cx) {
+                        return;
+                    }
+                    let Some(first) = files.first().cloned() else {
+                        return;
+                    };
+                    let message =
+                        language.saved_as_taken(&first.display().to_string(), files.len() - 1);
+                    notice::say_of_file(message, Lasting::Brief, first, cx);
+                }
+                Err(detail) => notice::say(
+                    language.not_saved_as_taken(&detail),
+                    Lasting::Long,
+                    None,
+                    cx,
+                ),
+            }
+        });
+    })
+    .detach();
+}
+
+/// To the clipboard and nothing else (the user chose to have no preview): as copies are made (the
+/// kind of file, and how large at most), whether or not previewed captures are copied; saved as
+/// well when the user has every capture saved, and one notice says what became of it. What was
+/// being previewed before is still to be dealt with: it comes back.
+fn copy_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) {
+    preview::restore(cx);
+    let language = Perora::get(cx).language();
     let how = settings.output(Leaves::Copy);
     let saves = settings.save_on_capture;
     // (In the order of the captures: the last one taken is what stays on the clipboard.)
@@ -282,7 +409,10 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
         let copying_took = started.elapsed();
         // (Saved meanwhile too, when it is: one notice says both, and a click on it shows the file.
         // As the PNG the copy was made into, when that is the picture as it was.)
-        let png = copied.as_ref().ok().and_then(|copied| copied.png.as_deref());
+        let png = copied
+            .as_ref()
+            .ok()
+            .and_then(|copied| copied.png.as_deref());
         let saved = saves.then(|| saving::save_as_taken(&settings, &frame, png));
         let copied = copied.map(|copied| copied.passed);
         eprintln!(
@@ -291,7 +421,10 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
             frame.area.height,
             copying_took.as_secs_f64() * 1000.0,
             if saves {
-                format!(", saved in {:.0} ms more", (started.elapsed() - copying_took).as_secs_f64() * 1000.0)
+                format!(
+                    ", saved in {:.0} ms more",
+                    (started.elapsed() - copying_took).as_secs_f64() * 1000.0
+                )
             } else {
                 String::new()
             }
@@ -321,12 +454,16 @@ fn tell(
         match saved {
             Some(Ok(files)) => {
                 let first = files.first().cloned().unwrap_or_default();
-                let message = language.saved_as_taken(&first.display().to_string(), files.len() - 1);
+                let message =
+                    language.saved_as_taken(&first.display().to_string(), files.len() - 1);
                 notice::say_of_file(message, Lasting::Brief, first, cx);
             }
-            Some(Err(detail)) => {
-                notice::say(language.not_saved_as_taken(&detail), Lasting::Long, None, cx)
-            }
+            Some(Err(detail)) => notice::say(
+                language.not_saved_as_taken(&detail),
+                Lasting::Long,
+                None,
+                cx,
+            ),
             None => {}
         }
         return;

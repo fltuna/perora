@@ -102,6 +102,36 @@ fn bitmap(frame: &Frame) -> Vec<u8> {
     bitmap
 }
 
+/// Empties the clipboard when it still holds what was put there at that count of its changes
+/// (looked at once it is had: something else may have been put there while it was asked for).
+/// Whether it was emptied; refused with the reason when the clipboard could not be had.
+pub fn clear_if(written: u32) -> Result<bool, String> {
+    open()?;
+    let still = crate::platform::clipboard_sequence() == Some(written);
+    let emptied = if still {
+        unsafe { EmptyClipboard() }
+            .map(|()| true)
+            .map_err(|error| error.message())
+    } else {
+        Ok(false)
+    };
+    let _ = unsafe { CloseClipboard() };
+    emptied
+}
+
+/// Has the clipboard, asking again for a moment while another program has it.
+fn open() -> Result<(), String> {
+    let mut opened = unsafe { OpenClipboard(None) };
+    for _ in 1..ASKED {
+        if opened.is_ok() {
+            break;
+        }
+        std::thread::sleep(ASKED_EVERY);
+        opened = unsafe { OpenClipboard(None) };
+    }
+    opened.map_err(|error| error.message())
+}
+
 /// Puts these on the clipboard, each under its format, in place of whatever is there: all of them
 /// or (refused) none.
 fn put(entries: &[(u32, &[u8])]) -> Result<(), String> {
@@ -131,17 +161,9 @@ fn put(entries: &[(u32, &[u8])]) -> Result<(), String> {
             memory.push(one);
         }
 
-        let mut opened = OpenClipboard(None);
-        for _ in 1..ASKED {
-            if opened.is_ok() {
-                break;
-            }
-            std::thread::sleep(ASKED_EVERY);
-            opened = OpenClipboard(None);
-        }
-        if let Err(error) = opened {
+        if let Err(error) = open() {
             free(&memory);
-            return Err(error.message());
+            return Err(error);
         }
         if let Err(error) = EmptyClipboard() {
             let _ = CloseClipboard();

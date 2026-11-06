@@ -362,6 +362,13 @@ pub fn put_picture_on_clipboard(frame: &Frame, png: &[u8]) -> std::result::Resul
     windows::clipboard::put_picture(frame, png)
 }
 
+/// Empties the clipboard when it still holds what was put there at that count of its changes
+/// (`clipboard_sequence`). Whether it was emptied; refused with the reason when it could not be had.
+#[cfg(windows)]
+pub fn clear_clipboard_if(written: u32) -> std::result::Result<bool, String> {
+    windows::clipboard::clear_if(written)
+}
+
 /// A number that changes whenever what is on the clipboard does: for telling whether what was put
 /// there is still what is there. `None` when the system does not say.
 #[cfg(windows)]

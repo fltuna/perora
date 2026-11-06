@@ -1,0 +1,1415 @@
+//! The small preview: what was just captured, in a corner of the primary monitor, before anything
+//! else is done with it (owner: 「撮影プレビュー画面欲しいかも！」). It never takes the keyboard from
+//! whatever is in front (a game, usually), nor is it among the windows the user switches between.
+//!
+//! The capture is on the clipboard as soon as the preview appears (unless the user would rather
+//! not): pasting it somewhere is the most common thing to do with it, and needs no choice. The
+//! preview is for the rest: save it, copy it again (as another kind of file, or smaller), throw it
+//! away. Saving closes it; a capture nothing was done about is given up when its time is over (the
+//! clipboard keeps it), not while the pointer is over it.
+//!
+//! The window is opened as the preview appears and closed as it goes: while it is open, the GPU is
+//! held. Not over a selection screen: it is put away as a capture starts, and back (with its time
+//! anew) when that comes to nothing.
+//!
+//! P3 of docs/gpui-rewrite.md. Not yet: the large window, where a capture is drawn on (P4: a click on
+//! the picture does nothing more than keep the capture); uploading (P5: never on offer until then);
+//! asking where to save (P5: saved where the settings say); the tour (P6).
+
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use gpui::prelude::FluentBuilder;
+use gpui::{
+    App, AppContext, BoxShadow, Context, CursorStyle, Global, Hsla, InteractiveElement,
+    IntoElement, MouseButton, ParentElement, Render, RenderImage, SharedString,
+    StatefulInteractiveElement, Styled, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, div, img, point, px, relative, rgb,
+};
+use perora_core::geometry::Rect;
+use perora_core::language::Language;
+use perora_core::output::{FITS, Format, Output};
+use perora_core::platform::{self, Desktop, Frame};
+use perora_core::preview::{Discarded, Once, Pending, picture_size, small_size};
+use perora_core::settings::{Leaves, Settings};
+use perora_core::{copying, saving};
+use perora_ui::{Theme, Tip};
+
+use crate::notice::{self, Lasting};
+use crate::state::Perora;
+use crate::{capture, corner, display, gpu, hwnd, motion};
+
+/// How often a preview whose time is over looks whether the pointer has left it.
+const POINTED_AT: Duration = Duration::from_millis(250);
+/// How often the window looks whether the clipboard still holds the capture.
+const LOOKS_AT_CLIPBOARD: Duration = Duration::from_millis(500);
+/// How long after a press beside the open choice a click is not one (it only put the choice away).
+const SWALLOWED_FOR: Duration = Duration::from_millis(600);
+
+/// A capture for the preview, as it was made ready on its way there.
+pub struct Shown {
+    /// Which capture it is: taken (`ask`) as it was chosen, so that one that took longer to make
+    /// ready does not take the place of a later one.
+    pub id: u64,
+    pub frame: Arc<Frame>,
+    /// The capture as a PNG, when it went to the clipboard as one, as it was.
+    pub png: Option<Arc<Vec<u8>>>,
+    /// Whether it went to the clipboard (see `Pending::copied`), and as what.
+    pub copied: Option<Result<Option<u32>, String>>,
+    pub copied_as: Output,
+    /// The picture the window shows.
+    pub picture: Option<Arc<RenderImage>>,
+    /// Something is done about it from the start: the user has captures drawn on at once (P4: shown
+    /// in the small window until the large one is there). It is not given up on its own.
+    pub touched: bool,
+}
+
+#[derive(Default)]
+struct Previews {
+    pending: Option<Pending>,
+    picture: Option<Arc<RenderImage>>,
+    /// Why saving it, or copying it again, did not work, when it did not: said in the window until
+    /// that is tried again.
+    save_failure: Option<String>,
+    copy_failure: Option<String>,
+    /// The capture that is being saved or copied: nothing else is asked of it meanwhile.
+    busy: Option<u64>,
+    /// The last capture asked for, and the last one shown.
+    asked: u64,
+    presented: u64,
+    window: Option<WindowHandle<Small>>,
+    /// Which showing of the window is the last: one that comes into its corner stops where a later
+    /// showing put it.
+    placing: u64,
+    discarded: Discarded,
+}
+
+impl Global for Previews {}
+
+/// A number for a capture that is on its way to the preview.
+pub fn ask(cx: &mut App) -> u64 {
+    let previews = cx.default_global::<Previews>();
+    previews.asked += 1;
+    previews.asked
+}
+
+/// The picture of a capture as the small window shows it, at the size it is shown at on a monitor of
+/// that scale: of the capture's middle, where the capture is of a shape the window cannot follow.
+/// (Made at the size it is drawn at: the GPU makes a picture smaller by leaving pixels out.)
+pub fn picture_of(frame: &Frame, scale: f64) -> Option<Arc<RenderImage>> {
+    let (across, down) = picture_size(frame.width(), frame.height());
+    let middle = perora_core::preview::middle(frame.width(), frame.height(), across, down);
+    let part = if middle.width == frame.width() && middle.height == frame.height() {
+        None
+    } else {
+        frame.crop(Rect::new(
+            frame.area.x + middle.x,
+            frame.area.y + middle.y,
+            middle.width,
+            middle.height,
+        ))
+    };
+    let part = part.as_ref().unwrap_or(frame);
+    let fitted = part.scaled_to_fit(
+        (across * scale).round().max(1.0) as u32,
+        (down * scale).round().max(1.0) as u32,
+    );
+    crate::selection::drawable(fitted)
+}
+
+/// Shows a capture in the preview, in place of whatever was previewed. Not one that a later capture
+/// was shown in place of already.
+pub fn present(shown: Shown, cx: &mut App) {
+    let previews = cx.default_global::<Previews>();
+    if shown.id <= previews.presented {
+        return;
+    }
+    previews.presented = shown.id;
+    let mut pending = Pending::new(
+        shown.id,
+        shown.frame,
+        shown.png,
+        shown.copied,
+        shown.copied_as,
+    );
+    pending.touched = shown.touched;
+    previews.pending = Some(pending);
+    previews.picture = shown.picture;
+    previews.save_failure = None;
+    previews.copy_failure = None;
+    previews.busy = None;
+    show(cx);
+    leave_to_its_time(cx);
+}
+
+/// Puts the capture being previewed back on screen, if there is one: after a selection screen that
+/// came to nothing, or one that was up when the preview wanted to appear. It has its time anew.
+pub fn restore(cx: &mut App) {
+    if cx.default_global::<Previews>().pending.is_none() {
+        return;
+    }
+    show(cx);
+    leave_to_its_time(cx);
+}
+
+/// Takes the preview off the screen for a capture (the capture being previewed stays until the new
+/// one takes its place). Whether it was on screen: a window that was just hidden is on screen for
+/// one more frame, which matters to whoever captures the screen next.
+pub fn put_away(cx: &mut App) -> bool {
+    let previews = cx.default_global::<Previews>();
+    // (Its time is over for now: it has it anew as it comes back.)
+    if let Some(pending) = previews.pending.as_mut() {
+        pending.timer += 1;
+    }
+    close(cx)
+}
+
+/// The small window, when it is on screen: Perora's own, in the picture when the user wants that.
+pub fn on_screen_now(cx: &mut App) -> Option<platform::WindowId> {
+    let window = cx.default_global::<Previews>().window?;
+    window
+        .update(cx, |_, window, _| hwnd::of(window))
+        .ok()
+        .flatten()
+}
+
+/// How tall the small window is (physical pixels) while it is on screen with a capture, in the
+/// corner the settings say: what shares that corner keeps clear of it.
+pub fn in_its_corner(cx: &mut App) -> Option<(perora_core::notice::Corner, i32)> {
+    let previews = cx.default_global::<Previews>();
+    previews.pending.as_ref()?;
+    let window = previews.window?;
+    let handle = window
+        .update(cx, |_, window, _| hwnd::of(window))
+        .ok()
+        .flatten()?;
+    let corner = Perora::get(cx).settings().preview_corner;
+    Some((corner, hwnd::rect(handle)?.height as i32))
+}
+
+/// Keeps in mind what a capture was saved as, as it was taken, for discarding to take away. When it
+/// was discarded meanwhile (and the user has discarding take that away), it is taken away at once.
+/// Whether it is still there.
+pub fn saved_as_taken(id: u64, files: &[PathBuf], cx: &mut App) -> bool {
+    let takes_away = Perora::get(cx).settings().delete_saved_on_discard;
+    let previews = cx.default_global::<Previews>();
+    let discarded = previews.discarded.has(id);
+    if let Some(pending) = previews
+        .pending
+        .as_mut()
+        .filter(|pending| pending.id == id && !discarded)
+    {
+        pending.saved = files.to_vec();
+    }
+    if discarded && takes_away {
+        saving::take_away(files);
+        return false;
+    }
+    true
+}
+
+/// The small window in its corner, at the size of the capture. Not over a selection screen: it would
+/// be in the way and in the picture (`restore` shows it once that is gone).
+fn show(cx: &mut App) {
+    if capture::busy(cx) {
+        return;
+    }
+    let Some((width, height)) = cx
+        .default_global::<Previews>()
+        .pending
+        .as_ref()
+        .map(|pending| (pending.frame.width(), pending.frame.height()))
+    else {
+        return;
+    };
+    let Some(monitor) = corner::monitor() else {
+        return;
+    };
+    let corner = Perora::get(cx).settings().preview_corner;
+    let to = corner::spot(&monitor, corner, small_size(width, height), None);
+    let previews = cx.default_global::<Previews>();
+    previews.placing += 1;
+    let placing = previews.placing;
+
+    // On screen already: there at once, at its size, showing this capture.
+    if let Some(window) = previews.window {
+        let _ = window.update(cx, |small, window, cx| {
+            corner::put(window, to, cx);
+            small.anew();
+            cx.notify();
+        });
+        return;
+    }
+
+    let Some(screen) = display::of(&monitor, cx) else {
+        return;
+    };
+    let from = corner::from(&monitor, corner, to);
+    gpu::attach(cx);
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(display::bounds_on(
+            &monitor,
+            from.unwrap_or(to),
+        ))),
+        titlebar: None,
+        focus: false,
+        show: true,
+        kind: WindowKind::PopUp,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id: Some(screen.id()),
+        window_background: WindowBackgroundAppearance::Opaque,
+        ..Default::default()
+    };
+    let still: Rc<dyn Fn(&App) -> bool> = Rc::new(move |cx: &App| {
+        cx.try_global::<Previews>()
+            .is_some_and(|previews| previews.placing == placing && previews.window.is_some())
+    });
+    let language = Perora::get(cx).language();
+    let opened = cx.open_window(options, |window, cx| {
+        if let Some(handle) = hwnd::of(window) {
+            platform::without_transitions(handle);
+            // Never takes the keyboard: not when it appears, not when it is clicked.
+            hwnd::never_active(handle);
+            platform::set_cloaked(handle, true);
+        }
+        // Closed (Alt+F4, should it ever have the keyboard): thrown away, as the bin does.
+        window.on_window_should_close(cx, |_, cx| {
+            cx.defer(|cx| discard_by_user(None, cx));
+            false
+        });
+        cx.new(|cx| Small::new(language, corner::Appearing { to, from, still }, cx))
+    });
+    match opened {
+        Ok(window) => cx.default_global::<Previews>().window = Some(window),
+        Err(error) => eprintln!("the preview could not be shown: {error}"),
+    }
+}
+
+/// Closes the window. Whether it was open.
+fn close(cx: &mut App) -> bool {
+    let previews = cx.default_global::<Previews>();
+    previews.placing += 1;
+    let Some(window) = previews.window.take() else {
+        return false;
+    };
+    let _ = window.update(cx, |_, window, _| {
+        // Out of sight at once: closing takes a turn of the message loop.
+        if let Some(handle) = hwnd::of(window) {
+            hwnd::hide(handle);
+        }
+        window.remove_window();
+    });
+    true
+}
+
+/// Tells the window that what it shows changed.
+fn changed(cx: &mut App) {
+    if let Some(window) = cx.default_global::<Previews>().window {
+        let _ = window.update(cx, |_, _, cx| cx.notify());
+    }
+}
+
+/// The preview is on screen (anew, or again): from now it has as long as the user chose, and the
+/// capture is given up when that is over with nothing done about it. Not one that something was done
+/// about, and not under the pointer: whoever points at it is about to press something on it.
+fn leave_to_its_time(cx: &mut App) {
+    // (For as long as the settings say now: not changed under it afterwards.)
+    let seconds = Perora::get(cx).settings().preview_seconds;
+    if seconds <= 0.0 {
+        return;
+    }
+    let Some((id, timer)) = cx
+        .default_global::<Previews>()
+        .pending
+        .as_mut()
+        .filter(|pending| pending.is_untouched())
+        .map(|pending| {
+            pending.timer += 1;
+            (pending.id, pending.timer)
+        })
+    else {
+        return;
+    };
+    let still = move |cx: &mut App| {
+        matches!(
+            &cx.default_global::<Previews>().pending,
+            Some(pending) if pending.id == id && pending.timer == timer && pending.is_untouched()
+        )
+    };
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_secs_f64(seconds))
+            .await;
+        loop {
+            let pointed_at = cx.update(|cx| {
+                if !still(cx) {
+                    return None;
+                }
+                let window = cx.default_global::<Previews>().window?;
+                let handle = window
+                    .update(cx, |_, window, _| hwnd::of(window))
+                    .ok()
+                    .flatten()?;
+                let pointer = platform::desktop().pointer().ok();
+                Some(
+                    hwnd::rect(handle)
+                        .zip(pointer)
+                        .is_some_and(|(rect, pointer)| rect.contains(pointer)),
+                )
+            });
+            match pointed_at {
+                // Gone, done something about, put away: not this time's to end.
+                None => return,
+                Some(true) => cx.background_executor().timer(POINTED_AT).await,
+                // (Not as the user discards it: what is on the clipboard stays.)
+                Some(false) => {
+                    cx.update(|cx| discard(Some(id), cx));
+                    return;
+                }
+            }
+        }
+    })
+    .detach();
+}
+
+/// Throws the capture away and closes the window: `id` when it is still the one previewed, whichever
+/// is previewed when no id is given.
+fn discard(id: Option<u64>, cx: &mut App) {
+    let previews = cx.default_global::<Previews>();
+    match &previews.pending {
+        Some(pending) if id.is_none_or(|id| id == pending.id) => {}
+        _ => return,
+    }
+    previews.pending = None;
+    previews.picture = None;
+    previews.busy = None;
+    close(cx);
+}
+
+/// Discarding as the user does it (the bin, closing the window): when they asked for that, the image
+/// is taken off the clipboard as well (only the image: whatever came to the clipboard after it
+/// stays), and what was saved of it as it was taken is taken away.
+fn discard_by_user(id: Option<u64>, cx: &mut App) {
+    let settings = Perora::get(cx).settings();
+    let previews = cx.default_global::<Previews>();
+    let Some(pending) = previews
+        .pending
+        .as_ref()
+        .filter(|pending| id.is_none_or(|id| id == pending.id))
+    else {
+        return;
+    };
+    let on_clipboard = match pending.copied {
+        Some(Ok(Some(written))) if pending.on_clipboard(platform::clipboard_sequence()) => {
+            Some(written)
+        }
+        _ => None,
+    };
+    let saved = pending.saved.clone();
+    let id = pending.id;
+    previews.discarded.add(id);
+    discard(Some(id), cx);
+    if let Some(written) = on_clipboard
+        && settings.clear_clipboard_on_discard
+    {
+        match platform::clear_clipboard_if(written) {
+            Ok(true) => copying::forget_copied(None),
+            Ok(false) => {}
+            Err(error) => {
+                eprintln!("clipboard: the discarded capture was not taken off it: {error}")
+            }
+        }
+    }
+    if settings.delete_saved_on_discard {
+        saving::take_away(&saved);
+    }
+}
+
+/// The capture, when it is still `id` and nothing is being done with it: something is to be done.
+fn to_do(id: u64, cx: &mut App) -> Option<&mut Pending> {
+    let previews = cx.default_global::<Previews>();
+    if previews.busy.is_some() {
+        return None;
+    }
+    previews.pending.as_mut().filter(|pending| pending.id == id)
+}
+
+/// Saves the capture as a file (or several, of each kind the user saves as) in the folder for
+/// saving, named after the moment, and closes the preview; a notice says where it went, and a click
+/// on that shows the file. The preview stays, with the reason, when it could not be written.
+fn save(id: u64, cx: &mut App) {
+    let settings = Perora::get(cx).settings();
+    let language = Perora::get(cx).language();
+    let Some(pending) = to_do(id, cx) else {
+        return;
+    };
+    pending.touched = true;
+    let once = pending.once.of(Leaves::Save).clone();
+    let (frame, png) = (pending.frame.clone(), pending.png.clone());
+    let previews = cx.default_global::<Previews>();
+    previews.busy = Some(id);
+    previews.save_failure = None;
+    changed(cx);
+
+    // As the user has captures saved, or asked for this once: the kinds of file (one of each, all
+    // by one name), and how large at most.
+    let how = once.output(&settings, Leaves::Save);
+    let kinds = once.saved_as(&settings);
+    let saving = cx.background_executor().spawn(async move {
+        let leaving = Pending::new(0, frame, png, None, how);
+        let directory = saving::save_directory(&settings).ok_or("no folder to save to")?;
+        // Every kind is made before any is written: one that cannot be made leaves no file.
+        let files = kinds
+            .iter()
+            .map(|kind| {
+                Ok((
+                    kind.name(),
+                    leaving.file(Output {
+                        format: *kind,
+                        ..how
+                    })?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let files: Vec<_> = files
+            .iter()
+            .map(|(kind, file)| (*kind, file.as_slice()))
+            .collect();
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let name = format!("Perora {}", platform::local_timestamp());
+        saving::write_each(&directory, &name, &files, false)
+            .map(|first| (first, kinds.len()))
+            .map_err(|not_all| match not_all.first {
+                // Some of them are there: a notice says which, and the window why the rest is not.
+                Some(first) => {
+                    let kind = not_all.kind.to_uppercase();
+                    let name = first.file_name().unwrap_or_default().to_string_lossy();
+                    let said = language.saved_but_not(&first.display().to_string(), &kind);
+                    let refused = language.not_all_saved(&kind, &not_all.error.to_string(), &name);
+                    format!("{refused}\u{0}{said}\u{0}{}", first.display())
+                }
+                None => not_all.error.to_string(),
+            })
+    });
+    cx.spawn(async move |cx| {
+        let saved = saving.await;
+        cx.update(|cx| {
+            let previews = cx.default_global::<Previews>();
+            if previews.busy == Some(id) {
+                previews.busy = None;
+            }
+            let language = Perora::get(cx).language();
+            match saved {
+                Ok((path, kinds)) => {
+                    discard(Some(id), cx);
+                    let shown = path.display().to_string();
+                    let message = match kinds {
+                        1 => language.saved(&shown),
+                        several => language.saved_several(&shown, several - 1),
+                    };
+                    notice::say_of_file(message, Lasting::Brief, path, cx);
+                }
+                Err(failure) => {
+                    let mut parts = failure.split('\u{0}');
+                    let refused = parts.next().unwrap_or_default().to_owned();
+                    if let (Some(said), Some(first)) = (parts.next(), parts.next()) {
+                        notice::say_of_file(said.to_owned(), Lasting::Long, first.into(), cx);
+                    }
+                    let previews = cx.default_global::<Previews>();
+                    if previews
+                        .pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.id == id)
+                    {
+                        previews.save_failure = Some(refused);
+                    }
+                    changed(cx);
+                }
+            }
+        });
+    })
+    .detach();
+}
+
+/// Puts the capture on the clipboard again, as it is asked for now, and keeps the preview: after
+/// something else was copied, or to have it as another kind of file. Nothing is done when the
+/// clipboard holds just that already.
+fn copy(id: u64, cx: &mut App) {
+    let settings = Perora::get(cx).settings();
+    let Some(pending) = to_do(id, cx) else {
+        return;
+    };
+    pending.touched = true;
+    let copy_as = pending
+        .once
+        .of(Leaves::Copy)
+        .output(&settings, Leaves::Copy);
+    let there = pending.on_clipboard(platform::clipboard_sequence())
+        && pending.copied_as.format == copy_as.format
+        && pending.copied_as.fit == copy_as.fit;
+    let frame = pending.frame.clone();
+    let previews = cx.default_global::<Previews>();
+    previews.copy_failure = None;
+    if there {
+        changed(cx);
+        return;
+    }
+    previews.busy = Some(id);
+    let turn = copying::turn();
+    let copying = cx
+        .background_executor()
+        .spawn(async move { copying::to_clipboard(&frame, copy_as, turn) });
+    cx.spawn(async move |cx| {
+        let copied = copying.await;
+        cx.update(|cx| {
+            let previews = cx.default_global::<Previews>();
+            if previews.busy == Some(id) {
+                previews.busy = None;
+            }
+            match (
+                previews.pending.as_mut().filter(|pending| pending.id == id),
+                copied,
+            ) {
+                (Some(pending), Ok(copied)) => {
+                    pending.copied =
+                        Some(Ok((!copied.passed).then_some(copied.sequence).flatten()));
+                    pending.copied_as = copy_as;
+                    if pending.png.is_none() {
+                        pending.png = copied.png.map(Arc::new);
+                    }
+                    if let Some(window) = previews.window {
+                        let _ = window.update(cx, |small, _, cx| {
+                            small.ticked = Some(Instant::now());
+                            cx.notify();
+                        });
+                    }
+                }
+                (Some(_), Err(detail)) => {
+                    eprintln!("clipboard: the capture was not put there: {detail}");
+                    previews.copy_failure = Some(detail);
+                    changed(cx);
+                }
+                // Gone in the moment it was written: it is not left on the clipboard.
+                (None, Ok(copied)) => {
+                    if !copied.passed
+                        && let Some(written) = copied.sequence
+                        && platform::clear_clipboard_if(written) == Ok(true)
+                    {
+                        copying::forget_copied(None);
+                    }
+                }
+                (None, Err(_)) => {}
+            }
+        });
+    })
+    .detach();
+}
+
+/// The user chose what the capture leaves as this once, one way: remembered for it (and something
+/// was done about it: it is not given up on its own after that).
+fn choose(id: u64, leaves: Leaves, chosen: impl FnOnce(&mut Once), cx: &mut App) {
+    if let Some(pending) = cx
+        .default_global::<Previews>()
+        .pending
+        .as_mut()
+        .filter(|pending| pending.id == id)
+    {
+        pending.touched = true;
+        chosen(pending.once.of_mut(leaves));
+    }
+    changed(cx);
+}
+
+/// Something is being done about the capture (a choice was opened): it is not given up on its own.
+fn touch(id: u64, cx: &mut App) {
+    if let Some(pending) = cx
+        .default_global::<Previews>()
+        .pending
+        .as_mut()
+        .filter(|pending| pending.id == id)
+    {
+        pending.touched = true;
+    }
+}
+
+/// The picture was clicked: the capture in the large window, to be drawn on. (P4: there is none
+/// yet; the capture is kept, as one that something was done about.)
+fn enlarge(id: u64, cx: &mut App) {
+    touch(id, cx);
+    eprintln!("preview {id}: the large window is not there yet (P4)");
+}
+
+/// What the window shows, read in one go.
+struct Look {
+    id: u64,
+    width: u32,
+    height: u32,
+    picture: Option<Arc<RenderImage>>,
+    /// Whether the clipboard holds the capture, as copying would put it there now.
+    copied: bool,
+    failure: Option<String>,
+    once: perora_core::preview::Chosen,
+}
+
+/// The window. What it shows is the application's (`Previews`); what is only about how it is shown
+/// is its own.
+pub struct Small {
+    language: Language,
+    appearing: Option<corner::Appearing>,
+    /// The capture it shows: what is its own starts anew with another.
+    id: u64,
+    /// Whether things move (the system's "animation effects").
+    moves: bool,
+    /// The pointer is over the picture; and when it came or went, with how much of the dark over the
+    /// picture was seen then (it fades in and out).
+    over: bool,
+    over_changed: Option<(Instant, f32)>,
+    /// The choice of what the capture leaves as this once, open for that way, and since when.
+    choosing: Option<Leaves>,
+    opened: Instant,
+    /// A press beside the open choice put it away: the click that ends it is not one.
+    swallow_until: Option<Instant>,
+    /// Whether the clipboard held the capture as last drawn, and since when (for this capture: what
+    /// it says of that is seen to change).
+    copied: bool,
+    copied_since: Option<Instant>,
+    /// When a copy made while the capture was on screen was done: its tick comes in with a bounce.
+    pub(crate) ticked: Option<Instant>,
+    /// The clipboard's count of changes, as last looked at (to draw anew when it changes).
+    clipboard: Option<u32>,
+}
+
+/// How long the dark over the picture takes to come and go; what is said of the clipboard to fade
+/// out, and in; the sheets of the copy button to go; the tick to wait, and to come; the choice to
+/// come up.
+const OVER_FADES: Duration = Duration::from_millis(150);
+const SAID_OUT: Duration = Duration::from_millis(200);
+const SAID_IN: Duration = Duration::from_millis(280);
+const SHEETS_GO: Duration = Duration::from_millis(160);
+const TICK_WAITS: Duration = Duration::from_millis(100);
+const TICK_COMES: Duration = Duration::from_millis(420);
+const CHOICE_COMES: Duration = Duration::from_millis(160);
+/// How the tick comes: `cubic-bezier(0.2, 0.8, 0.3, 1)`.
+const BOUNCE: motion::Curve = motion::Curve(0.2, 0.8, 0.3, 1.0);
+
+impl Small {
+    fn new(language: Language, appearing: corner::Appearing, cx: &mut Context<Self>) -> Self {
+        // What is on the clipboard changes without Perora: the window looks now and then.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(LOOKS_AT_CLIPBOARD).await;
+                let looked = this.update(cx, |this, cx| {
+                    let now = platform::clipboard_sequence();
+                    if now != this.clipboard {
+                        this.clipboard = now;
+                        cx.notify();
+                    }
+                });
+                if looked.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+        Self {
+            language,
+            appearing: Some(appearing),
+            id: 0,
+            moves: platform::animations_enabled(),
+            over: false,
+            over_changed: None,
+            choosing: None,
+            opened: Instant::now(),
+            swallow_until: None,
+            copied: false,
+            copied_since: None,
+            ticked: None,
+            clipboard: platform::clipboard_sequence(),
+        }
+    }
+
+    /// How much of the dark over the picture is seen now.
+    fn dark(&self) -> f32 {
+        let to = if self.over { 1.0 } else { 0.0 };
+        match self.over_changed {
+            Some((since, from)) => {
+                let along = motion::share(since, Duration::ZERO, OVER_FADES);
+                from + (to - from) * motion::EASE.at(along)
+            }
+            None => to,
+        }
+    }
+
+    /// The pointer came onto the picture, or left it.
+    fn hovered(&mut self, over: bool) {
+        if over == self.over {
+            return;
+        }
+        let seen = self.dark();
+        self.over = over;
+        self.over_changed = self.moves.then(|| (Instant::now(), seen));
+    }
+
+    /// The choice opened (for that way) or put away.
+    fn choose(&mut self, leaves: Option<Leaves>) {
+        if leaves.is_some() && leaves != self.choosing {
+            self.opened = Instant::now();
+        }
+        self.choosing = leaves;
+    }
+
+    /// Another capture: nothing of the one before is left.
+    fn anew(&mut self) {
+        self.id = 0;
+    }
+
+    fn look(&mut self, settings: &Settings, cx: &mut App) -> Option<Look> {
+        let previews = cx.default_global::<Previews>();
+        let pending = previews.pending.as_ref()?;
+        let language = &self.language;
+        let failure = previews
+            .save_failure
+            .as_ref()
+            .map(|detail| language.text("preview.saveFailed", &[("detail", detail)]))
+            .or_else(|| {
+                previews
+                    .copy_failure
+                    .as_deref()
+                    .or(pending.copy_failure())
+                    .map(|detail| language.text("preview.copyFailed", &[("detail", detail)]))
+            });
+        Some(Look {
+            id: pending.id,
+            width: pending.frame.width(),
+            height: pending.frame.height(),
+            picture: previews.picture.clone(),
+            copied: pending.on_clipboard(platform::clipboard_sequence())
+                && pending.copied_as_asked(settings),
+            failure,
+            once: pending.once.clone(),
+        })
+    }
+}
+
+/// A tooltip that says this.
+fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let text = text.into();
+    move |_, cx| Tip::view(text.clone(), cx)
+}
+
+/// Segoe Fluent Icons, as the Tauri version's style sheet has them.
+const PEN: &str = "\u{E70F}";
+const CHEVRON: &str = "\u{E70D}";
+const SHEETS: &str = "\u{E8C8}";
+const TICK: &str = "\u{E73E}";
+const BIN: &str = "\u{E74D}";
+const GUIDE: &str = "\u{E946}";
+
+/// The bin's colour: a subdued red, the same in both themes (owner: 「#a1473f あたり？」), and a
+/// little darker under the pointer.
+const BIN_COLOUR: u32 = 0xa1473f;
+const BIN_HOVER: u32 = 0x94413a;
+
+fn icon(glyph: &'static str, size: f32) -> gpui::Div {
+    div()
+        .font_family("Segoe Fluent Icons")
+        .text_size(px(size))
+        .line_height(px(size))
+        .child(glyph)
+}
+
+/// What the capture leaves as, one way: what was chosen this once, or what the settings say. (The
+/// kinds of file, for saving: several at once.)
+fn leaves_as(settings: &Settings, once: &Once, leaves: Leaves) -> (Format, Vec<Format>, u32) {
+    let output = once.output(settings, leaves);
+    let kinds = match leaves {
+        Leaves::Save => once
+            .formats
+            .clone()
+            .filter(|kinds| !kinds.is_empty())
+            .unwrap_or_else(|| settings.save_formats.clone()),
+        _ => vec![output.format],
+    };
+    (output.format, kinds, output.fit.unwrap_or(0))
+}
+
+impl Render for Small {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(appearing) = self.appearing.take() {
+            corner::appear_when_drawn(appearing, window);
+        }
+        let theme = Theme::get(cx).clone();
+        let settings = Perora::get(cx).settings();
+        let root = div()
+            .id("preview")
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .p(px(10.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background)
+            .text_color(theme.text)
+            .font_family(theme.font.clone())
+            .text_size(theme.text_size_small)
+            .line_height(relative(1.43));
+        let Some(look) = self.look(&settings, cx) else {
+            return root;
+        };
+        if look.id != self.id {
+            // Another capture starts with what it has to say, nothing moving.
+            self.id = look.id;
+            self.over = false;
+            self.over_changed = None;
+            self.choosing = None;
+            self.swallow_until = None;
+            self.copied = look.copied;
+            self.copied_since = None;
+            self.ticked = None;
+        } else if look.copied != self.copied {
+            self.copied = look.copied;
+            self.copied_since = self.moves.then(Instant::now);
+        }
+        if !look.copied || !self.moves {
+            self.ticked = None;
+        }
+        let id = look.id;
+        let t = |key: &str| self.language.text(key, &[]);
+        let dark = self.dark();
+        if let Some((since, _)) = self.over_changed {
+            motion::along(since, Duration::ZERO, OVER_FADES, window);
+        }
+
+        // A press anywhere but on the open choice and the row it belongs to puts it away, and is
+        // nothing more: the click it ends in does not also open the large window.
+        let root = root.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if this.choosing.is_some() {
+                    this.choose(None);
+                    this.swallow_until = Some(Instant::now() + SWALLOWED_FOR);
+                    cx.notify();
+                }
+            }),
+        );
+
+        // The picture: the way to the large window, where it is seen whole and drawn on. With the
+        // pointer over it, it darkens and says what a click does.
+        let picture = div()
+            .id("picture")
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(6.0))
+            .overflow_hidden()
+            .bg(theme.surface)
+            .cursor(CursorStyle::PointingHand)
+            .children(look.picture.clone().map(|picture| img(picture).size_full()))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(8.0))
+                    .text_color(gpui::white())
+                    .bg(Hsla::from(gpui::rgba(0x0000_0073)))
+                    .opacity(dark)
+                    .child(icon(PEN, 18.0))
+                    .child(t("preview.clickToEdit")),
+            )
+            .tooltip(tip(t("preview.clickToEdit")))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.hovered(*hovered);
+                cx.notify();
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this
+                    .swallow_until
+                    .take()
+                    .is_some_and(|until| Instant::now() < until)
+                {
+                    return;
+                }
+                this.hovered(false);
+                cx.notify();
+                cx.defer(move |cx| enlarge(id, cx));
+            }));
+
+        // What is on the clipboard, and how large the capture is; or what went wrong last (in two
+        // lines at most, the whole of it in its tooltip).
+        let status = match look.failure.clone() {
+            Some(failure) => div()
+                .id("status")
+                .min_h(px(18.2))
+                .text_color(theme.bad)
+                .line_clamp(2)
+                .tooltip(tip(failure.clone()))
+                .child(failure),
+            None => div()
+                .id("status")
+                .min_h(px(18.2))
+                .flex()
+                .items_center()
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .text_color(theme.muted)
+                .child(self.said(&theme, window))
+                .when(look.copied, |status| status.child("\u{a0}·\u{a0}"))
+                .child(format!("{} × {}", look.width, look.height)),
+        };
+
+        let actions = self.actions(&look, &settings, &theme, window, cx);
+        root.child(picture).child(status).child(actions)
+    }
+}
+
+impl Small {
+    /// What is said of the clipboard: a tick and "copied", or nothing. As it changes, what was said
+    /// fades out where it is, and what is said now fades in from a little to the left (owner:
+    /// 「既存の文字はそのままfadeout、新しい文字を左からうっすらfadeinさせてほしい」, 3 px).
+    fn said(&self, theme: &Theme, window: &mut Window) -> impl IntoElement {
+        let copied = |theme: &Theme| {
+            div()
+                .flex()
+                .items_center()
+                .whitespace_nowrap()
+                .text_color(theme.good)
+                .child(icon(TICK, 12.0).mr(px(5.0)))
+                .child(self.language.text("preview.copied", &[]))
+        };
+        let (coming, going) = match self.copied_since {
+            Some(since) => (
+                motion::EASE_OUT.at(motion::along(since, Duration::ZERO, SAID_IN, window)),
+                motion::EASE_OUT.at(motion::share(since, Duration::ZERO, SAID_OUT)),
+            ),
+            None => (1.0, 1.0),
+        };
+        div()
+            .relative()
+            .flex()
+            // (What was said, while it fades: only "copied" says anything.)
+            .when(!self.copied && going < 1.0, |said| {
+                said.child(
+                    copied(theme)
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .opacity(1.0 - going),
+                )
+            })
+            .when(self.copied, |said| {
+                said.child(
+                    copied(theme)
+                        .relative()
+                        .left(px(-3.0 * (1.0 - coming)))
+                        .opacity(coming),
+                )
+            })
+    }
+
+    /// The copy button's mark: the sheets, or the tick while the clipboard holds the capture as it
+    /// would be copied now. Copied, the sheets shrink away and the tick is there in their place; after
+    /// a copy made just now it comes in larger than it is and settles.
+    fn copy_mark(&self, theme: &Theme, window: &mut Window) -> impl IntoElement {
+        let cell = || {
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+        };
+        // (Both ways, as the sheets went: shrinking away, or back.)
+        let turned = self.copied_since.map_or(1.0, |since| {
+            motion::EASE_IN.at(motion::along(since, Duration::ZERO, SHEETS_GO, window))
+        });
+        let (sheets_seen, sheets_size) = if self.copied {
+            (1.0 - turned, 1.0 - 0.6 * turned)
+        } else {
+            (turned, 0.4 + 0.6 * turned)
+        };
+        let (tick_seen, tick_size) = match (self.copied, self.ticked) {
+            (false, _) => (0.0, 1.0),
+            (true, None) => (1.0, 1.0),
+            // Up to 1.45 times its size by 55 % of the way, then back to it.
+            (true, Some(since)) => {
+                let along = motion::along(since, TICK_WAITS, TICK_COMES, window);
+                if along < 0.55 {
+                    let up = BOUNCE.at(along / 0.55);
+                    (up, 1.45 * up)
+                } else {
+                    let back = BOUNCE.at((along - 0.55) / 0.45);
+                    (1.0, 1.45 - 0.45 * back)
+                }
+            }
+        };
+        div()
+            .relative()
+            .size_full()
+            .when(sheets_seen > 0.0, |mark| {
+                mark.child(
+                    cell()
+                        .opacity(sheets_seen)
+                        .child(icon(SHEETS, (16.0 * sheets_size).max(0.5))),
+                )
+            })
+            .when(tick_seen > 0.0, |mark| {
+                mark.child(
+                    cell()
+                        .opacity(tick_seen)
+                        .child(icon(TICK, (16.0 * tick_size).max(0.5)).text_color(theme.good)),
+                )
+            })
+    }
+
+    /// The row of what can be done with the capture: the tour, then saving (the one that stands
+    /// out while uploading is not on offer), copying and throwing away; and beside saving and
+    /// copying the small arrow that opens the choice of what it leaves as this once.
+    fn actions(
+        &mut self,
+        look: &Look,
+        settings: &Settings,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let id = look.id;
+        let t = |key: &str| self.language.text(key, &[]);
+        let base = |name: &'static str| {
+            div()
+                .id(name)
+                .h(px(30.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface)
+                .cursor(CursorStyle::PointingHand)
+                .whitespace_nowrap()
+        };
+        let accent = theme.accent;
+
+        // (P6: the tour.)
+        let guide = div()
+            .id("guide")
+            .w(px(20.0))
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(theme.muted)
+            .cursor(CursorStyle::PointingHand)
+            .hover(|style| style.text_color(theme.text))
+            .tooltip(tip(t("tour.open")))
+            .child(icon(GUIDE, 16.0));
+
+        let save = base("save")
+            .flex_1()
+            .px(px(8.0))
+            .rounded_r(px(6.0))
+            .bg(theme.accent)
+            .border_color(theme.accent)
+            .text_color(theme.accent_text)
+            .tooltip(tip(format!(
+                "{} · {}",
+                t("preview.save"),
+                self.leaves_as_said(settings, look.once.of(Leaves::Save), Leaves::Save)
+            )))
+            .child(t("preview.save"))
+            .on_click(move |_, _, cx| cx.defer(move |cx| save(id, cx)));
+
+        let copy = base("copy")
+            .w(px(34.0))
+            .rounded_r(px(6.0))
+            .hover(|style| style.border_color(accent))
+            .tooltip(tip(if look.copied {
+                t("preview.copied")
+            } else {
+                t("preview.copy")
+            }))
+            .child(self.copy_mark(theme, window))
+            .on_click(move |_, _, cx| cx.defer(move |cx| copy(id, cx)));
+
+        let bin = base("discard")
+            .w(px(34.0))
+            .rounded(px(6.0))
+            .bg(rgb(BIN_COLOUR))
+            .border_color(rgb(BIN_COLOUR))
+            .text_color(gpui::white())
+            .hover(|style| style.bg(rgb(BIN_HOVER)))
+            .tooltip(tip(t("preview.discard")))
+            .child(icon(BIN, 16.0))
+            .on_click(move |_, _, cx| cx.defer(move |cx| discard_by_user(Some(id), cx)));
+
+        let mut row = div()
+            .id("actions")
+            .relative()
+            .flex()
+            .gap(px(6.0))
+            .h(px(30.0))
+            // A press on the row puts the choice away (not the arrows and the choice itself: they
+            // see to that), and is the row's: it is not a press beside it.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.choosing.is_some() {
+                        this.choose(None);
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .child(guide)
+            .child(
+                div()
+                    .flex_1()
+                    .flex()
+                    .child(self.chevron(Leaves::Save, id, theme, cx))
+                    .child(save),
+            )
+            .child(
+                div()
+                    .flex()
+                    .child(self.chevron(Leaves::Copy, id, theme, cx))
+                    .child(copy),
+            )
+            .child(bin);
+        if let Some(leaves) = self.choosing {
+            row = row.child(self.menu(leaves, look, settings, theme, window));
+        }
+        row
+    }
+
+    /// What the capture leaves as, one way, in words: the kinds of file (all of them, for saving),
+    /// and how large at most when it is made smaller.
+    fn leaves_as_said(&self, settings: &Settings, once: &Once, leaves: Leaves) -> String {
+        let (_, kinds, fit) = leaves_as(settings, once, leaves);
+        let kinds = kinds
+            .iter()
+            .map(|kind| {
+                self.language
+                    .text(&format!("main.output.format.{}", kind.name()), &[])
+            })
+            .collect::<Vec<_>>()
+            .join(" + ");
+        if fit == 0 {
+            kinds
+        } else {
+            let within = self
+                .language
+                .text("main.output.fit.within", &[("side", &fit.to_string())]);
+            format!("{kinds}, {within}")
+        }
+    }
+
+    /// The small arrow beside a way to leave: it opens (or puts away) the choice of what the capture
+    /// leaves as that way, this once.
+    fn chevron(
+        &self,
+        leaves: Leaves,
+        id: u64,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let open = self.choosing == Some(leaves);
+        let (text, accent) = (theme.text, theme.accent);
+        let what = self.language.text(
+            match leaves {
+                Leaves::Save => "preview.save",
+                Leaves::Upload => "preview.upload",
+                Leaves::Copy => "preview.copy",
+            },
+            &[],
+        );
+        let said = self.language.text("preview.as", &[("what", &what)]);
+        div()
+            .id(SharedString::from(format!("as-{}", leaves.name())))
+            .w(px(18.0))
+            .h(px(30.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_1()
+            .border_r_0()
+            .border_color(theme.border)
+            .rounded_l(px(6.0))
+            .bg(theme.surface)
+            .text_color(if open { theme.text } else { theme.muted })
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |style| style.text_color(text).border_color(accent))
+            .tooltip(tip(said))
+            .child(icon(CHEVRON, 9.0))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.choose(if open { None } else { Some(leaves) });
+                if !open {
+                    // (Opened, something is being done about the capture: it is not given up on
+                    // its own meanwhile.)
+                    cx.defer(move |cx| touch(id, cx));
+                }
+                cx.notify();
+            }))
+    }
+
+    /// The choice of what the capture leaves as this once, over the row (the small window has no
+    /// room for a list): the kinds of file, and under them how large at most (the numbers alone).
+    fn menu(
+        &self,
+        leaves: Leaves,
+        look: &Look,
+        settings: &Settings,
+        theme: &Theme,
+        window: &mut Window,
+    ) -> impl IntoElement {
+        let id = look.id;
+        // It comes up into its place from the row it belongs to (6 px, 0.16 s): seen to open, and
+        // one opened in place of another is seen to be another.
+        let up = if self.moves {
+            motion::EASE_OUT.at(motion::along(
+                self.opened,
+                Duration::ZERO,
+                CHOICE_COMES,
+                window,
+            ))
+        } else {
+            1.0
+        };
+        let once = look.once.of(leaves).clone();
+        let (format, kinds, fit) = leaves_as(settings, &once, leaves);
+        let item = |name: SharedString, label: String, checked: bool| {
+            let accent = theme.accent;
+            div()
+                .id(name)
+                .flex_1()
+                .h(px(26.0))
+                .px(px(6.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(12.0))
+                .rounded(px(5.0))
+                .border_1()
+                .border_color(if checked { theme.accent } else { theme.border })
+                .when(checked, |item| {
+                    item.text_color(theme.accent).shadow(vec![BoxShadow {
+                        color: theme.accent,
+                        offset: point(px(0.0), px(0.0)),
+                        blur_radius: px(0.0),
+                        spread_radius: px(1.0),
+                        inset: true,
+                    }])
+                })
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |style| style.border_color(accent))
+                .whitespace_nowrap()
+                .child(label)
+        };
+        let formats = Format::ALL.into_iter().map(|each| {
+            let checked = match leaves {
+                Leaves::Save => kinds.contains(&each),
+                _ => format == each,
+            };
+            let label = self
+                .language
+                .text(&format!("main.output.format.{}", each.name()), &[]);
+            let now = kinds.clone();
+            item(
+                SharedString::from(format!("format-{}", each.name())),
+                label,
+                checked,
+            )
+            .on_click(move |_, _, cx| {
+                let now = now.clone();
+                cx.defer(move |cx| {
+                    choose(
+                        id,
+                        leaves,
+                        |once| match leaves {
+                            // Saved as several kinds at once, one file of each: ticked, not
+                            // chosen. The last one ticked stays so.
+                            Leaves::Save => {
+                                let kinds: Vec<Format> = Format::ALL
+                                    .into_iter()
+                                    .filter(|one| now.contains(one) != (*one == each))
+                                    .collect();
+                                if !kinds.is_empty() {
+                                    once.formats = Some(kinds);
+                                }
+                            }
+                            _ => once.format = Some(each),
+                        },
+                        cx,
+                    )
+                });
+            })
+        });
+        let fits = std::iter::once(0).chain(FITS).map(|side| {
+            // (Room for the number alone: the rest is its tooltip.)
+            let (label, said) = if side == 0 {
+                (
+                    self.language.text("preview.fit.none", &[]),
+                    self.language.text("main.output.fit.none", &[]),
+                )
+            } else {
+                (
+                    side.to_string(),
+                    self.language
+                        .text("main.output.fit.within", &[("side", &side.to_string())]),
+                )
+            };
+            item(
+                SharedString::from(format!("fit-{side}")),
+                label,
+                fit == side,
+            )
+            .tooltip(tip(said))
+            .on_click(move |_, _, cx| {
+                cx.defer(move |cx| {
+                    choose(
+                        id,
+                        leaves,
+                        |once| once.fit = Some((side != 0).then_some(side)),
+                        cx,
+                    )
+                })
+            })
+        });
+        div()
+            .id("menu")
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom(px(36.0 - 6.0 * (1.0 - up)))
+            .opacity(up)
+            .flex()
+            .flex_wrap()
+            .gap(px(4.0))
+            .p(px(6.0))
+            .bg(theme.surface)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(8.0))
+            .shadow(vec![BoxShadow {
+                color: Hsla::from(gpui::rgba(0x0000_0047)),
+                offset: point(px(0.0), px(4.0)),
+                blur_radius: px(14.0),
+                spread_radius: px(0.0),
+                inset: false,
+            }])
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(formats)
+            // (The second row starts here.)
+            .child(div().w_full().h_0())
+            .children(fits)
+    }
+}

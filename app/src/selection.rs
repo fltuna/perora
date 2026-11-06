@@ -473,9 +473,11 @@ pub fn finish(selection: &Entity<Selection>, choice: Option<Choice>, cx: &mut Ap
     };
     close(selection, cx);
     capture::ended(selection, cx);
-    // (A choice all off the screen: the screen just comes down.)
-    if let Some((source, area)) = cut {
-        capture::deliver(source, area, cx);
+    // (A choice all off the screen: the screen just comes down.) Given up, what was being previewed
+    // before is back.
+    match cut {
+        Some((source, area)) => capture::deliver(source, area, cx),
+        None => crate::preview::restore(cx),
     }
 }
 
