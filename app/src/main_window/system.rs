@@ -101,8 +101,12 @@ pub fn set_notice_corner(corner: Corner, cx: &mut App) {
 /// Where the small preview appears.
 pub fn set_preview_corner(corner: Corner, cx: &mut App) {
     set(cx, |settings| settings.preview_corner = corner);
-    // TODO(P5, preview.rs): the Tauri version shows a sample of the small preview there for 5
-    // seconds, and moves a preview that is on screen (`preview::moved`); preview.rs has neither yet.
+    // A preview on screen goes there; with none, one is shown there for a moment.
+    if dry() {
+        eprintln!("dry: the small preview would be shown where it appears");
+        return;
+    }
+    crate::preview::moved(cx);
 }
 
 /// Which sound a notice or a capture comes with: heard once as it is chosen. One of the system's is

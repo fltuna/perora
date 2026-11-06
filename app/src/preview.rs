@@ -98,6 +98,50 @@ struct Previews {
     discarded: Discarded,
     /// The tour of the small window was seen since Perora started (before the settings say so).
     toured: bool,
+    /// The window is on screen with no capture, to show where it appears (the user just chose the
+    /// corner); and which showing of that is the last.
+    sampling: bool,
+    sampled: u64,
+}
+
+/// How long the window is on screen to show where it appears.
+const SHOWN_WHERE_FOR: Duration = Duration::from_secs(5);
+
+/// The user chose another corner for the small window. With a capture in it, it is there at once, if
+/// it is on screen. With none, the window is shown there for a moment all the same, to say that this
+/// is where it appears: the choice is seen at once, as that of where notices are said is.
+pub fn moved(cx: &mut App) {
+    let previews = cx.default_global::<Previews>();
+    if previews.pending.is_some() {
+        if !previews.large && previews.window.is_some() {
+            show(cx);
+        }
+        return;
+    }
+    if capture::busy(cx) {
+        return;
+    }
+    let previews = cx.default_global::<Previews>();
+    previews.sampling = true;
+    previews.sampled += 1;
+    let sampled = previews.sampled;
+    show(cx);
+    changed(cx);
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(SHOWN_WHERE_FOR).await;
+        cx.update(|cx| {
+            let previews = cx.default_global::<Previews>();
+            // (Shown anew since, or a capture came: not this one's to take away.)
+            if previews.sampled != sampled || !previews.sampling {
+                return;
+            }
+            previews.sampling = false;
+            if previews.pending.is_none() {
+                close(cx);
+            }
+        });
+    })
+    .detach();
 }
 
 impl Global for Previews {}
@@ -141,6 +185,8 @@ pub fn present(shown: Shown, cx: &mut App) {
         return;
     }
     previews.presented = shown.id;
+    // (Not there to show where it appears any more: here is a capture.)
+    previews.sampling = false;
     let mut pending = Pending::new(
         shown.id,
         shown.frame,
@@ -297,10 +343,12 @@ fn show(cx: &mut App) {
         large::show(id, frame, picture, cx);
         return;
     }
+    // (Showing where it appears, it is as large as a capture of a monitor is.)
     let Some((width, height)) = previews
         .pending
         .as_ref()
         .map(|pending| (pending.frame.width(), pending.frame.height()))
+        .or(previews.sampling.then_some((16, 9)))
     else {
         return;
     };
@@ -1027,6 +1075,19 @@ impl Small {
 
     fn look(&mut self, settings: &Settings, cx: &mut App) -> Option<Look> {
         let previews = cx.default_global::<Previews>();
+        // Showing where it appears: as it does with a capture of a monitor in it, copied (nothing in
+        // it does anything).
+        if previews.pending.is_none() && previews.sampling {
+            return Some(Look {
+                id: 0,
+                width: 1920,
+                height: 1080,
+                picture: None,
+                copied: true,
+                failure: None,
+                once: Default::default(),
+            });
+        }
         let pending = previews.pending.as_ref()?;
         let language = &self.language;
         let failure = previews
@@ -1147,7 +1208,8 @@ impl Render for Small {
         let Some(look) = self.look(&settings, cx) else {
             return root;
         };
-        if look.id != self.id {
+        let sampling = look.id == 0;
+        if look.id != self.id && !sampling {
             // The tour comes on its own a moment after the first capture is seen here, unless it
             // was seen; on over another capture, that one is not given up on its own either.
             if self.tour.is_some() {
@@ -1215,6 +1277,15 @@ impl Render for Small {
             .bg(theme.surface)
             .cursor(CursorStyle::PointingHand)
             .children(look.picture.clone().map(|picture| img(picture).size_full()))
+            .when(sampling, |picture| {
+                picture
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(12.0))
+                    .text_color(theme.muted)
+                    .child(t("preview.here"))
+            })
             .child(
                 div()
                     .absolute()
@@ -1288,6 +1359,10 @@ impl Render for Small {
             tour.view(&marks, &words, &theme, window, move |button, _, cx| {
                 let _ = this.update(cx, |small, cx| small.tour_button(button, cx));
             })
+        });
+        // (Showing where it appears, nothing in it is pressed.)
+        let root = root.when(sampling, |root| {
+            root.child(div().id("sample").absolute().inset_0().occlude())
         });
         root.child(picture)
             .child(status)
