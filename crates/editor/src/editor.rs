@@ -8,6 +8,7 @@
 //! what is in hand or selected (`bars`: the second bar and the panels). The other tools come next.
 
 mod bars;
+mod copying;
 mod cropping;
 mod hiding;
 mod lettering;
@@ -138,6 +139,10 @@ pub struct Editor {
     selected: Vec<usize>,
     /// The pointer over a hold of the one selected: the way it is pulled there.
     pointing: Option<CursorStyle>,
+    /// What was copied of the drawing (this capture's only), and how closely the picture was last
+    /// looked at (pixels of the screen to one of the image).
+    copied: copying::Copied,
+    scale: Rc<Cell<f32>>,
     /// The frame the image is being cut down to, while the tool for that is in hand; and the shape
     /// it is held to, if any.
     frame: Option<Area>,
@@ -224,6 +229,8 @@ impl Editor {
             grabbing: false,
             selected: Vec::new(),
             pointing: None,
+            copied: Default::default(),
+            scale: Rc::new(Cell::new(1.0)),
             frame: None,
             ratio: None,
             typing: None,
@@ -268,6 +275,7 @@ impl Editor {
         self.letters =
             typing::first_writing(unit(capture.picture.width, capture.picture.height), font);
         self.typing = None;
+        self.copied = Default::default();
         self.capture = Some(capture);
         self.drawing = Drawing::default();
         self.shown = Rc::new(Vec::new());
@@ -358,6 +366,11 @@ impl Editor {
             return Some(whole);
         }
         Some(cropping::kept_of(self.drawing.edits(), whole).unwrap_or(whole))
+    }
+
+    /// How closely the picture was last looked at: pixels of the screen to one of the image.
+    fn scale_now(&self) -> f32 {
+        self.scale.get().max(f32::EPSILON)
     }
 
     /// The size of the picture as it leaves: what the image is cut down to.
@@ -1147,6 +1160,12 @@ impl Editor {
             match key {
                 "z" if !modifiers.shift => self.undo(cx),
                 "z" | "y" => self.redo(cx),
+                // What is selected: copied, taken out, put back, or made once more beside itself.
+                // (Once for each press: a key held does not fill the picture.)
+                "c" if !event.is_held && !modifiers.shift => self.copy_selected(),
+                "x" if !event.is_held && !modifiers.shift => self.take_out(cx),
+                "v" if !event.is_held && !modifiers.shift => self.paste(cx),
+                "d" if !event.is_held && !modifiers.shift => self.duplicate(cx),
                 "s" if !event.is_held => cx.emit(Event::Leave(Leave::Save)),
                 // (P5: uploading, when it is on offer.)
                 "enter" if !event.is_held && !modifiers.shift => cx.emit(Event::Leave(Leave::Save)),
@@ -1487,6 +1506,7 @@ impl Editor {
             CursorStyle::Arrow
         };
         let frozen = self.frozen;
+        let scale = self.scale.clone();
         let frame = if self.tool == Kind::Crop {
             self.frame.or(view)
         } else {
@@ -1521,6 +1541,7 @@ impl Editor {
                 if let (Some(picture), Some(view)) = (picture, view) {
                     let size = (bounds.size.width.as_f32(), bounds.size.height.as_f32());
                     let look = view::look(size, view, looking, dense);
+                    scale.set(look.scale);
                     let painter = Painter {
                         origin,
                         offset: [look.part.x, look.part.y],
