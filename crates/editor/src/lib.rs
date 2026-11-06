@@ -4,6 +4,7 @@
 
 pub mod editor;
 pub mod icons;
+pub mod letters;
 pub mod marks;
 pub mod outline;
 pub mod paint;

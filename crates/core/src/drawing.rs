@@ -15,6 +15,10 @@ pub const MOST_HIDDEN: usize = 64;
 /// counted them: UTF-16 units). Before, the application took 60,000 bytes and the window 20,000
 /// letters; 20,000 letters are never more than 60,000 bytes.
 pub const MOST_LETTERS: usize = 20_000;
+/// Nothing with letters (something written, a number) is larger than this: a side, and its pixels
+/// in all.
+pub const MOST_SIDE: f32 = 8192.0;
+pub const MOST_PIXELS: f32 = 8_000_000.0;
 /// No line is wider than this many pixels of the image.
 pub const WIDEST: f32 = 400.0;
 

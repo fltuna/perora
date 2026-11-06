@@ -58,6 +58,7 @@ pub(super) struct BarLook {
     inside: (Colour, f32),
     fills: bool,
     stroke: Colour,
+    stamps: Colour,
     open: Option<Panel>,
 }
 
@@ -179,6 +180,7 @@ impl Editor {
             }
             Panel::Stroke => (palette(), Some(self.stroke_now(false).0), RED),
             Panel::Outline => (palette(), Some(self.outline_now().0), RED),
+            Panel::Stamps => (palette(), Some(self.stamps_now().0), RED),
             Panel::Fill => {
                 let (colour, fill) = self.inside_now();
                 // "None" takes the place of the darkest grey: the rows stay six wide.
@@ -212,6 +214,7 @@ impl Editor {
             }
             (Panel::Outline, Some(colour)) => self.set_outline(Set::Colour(colour), dragged, cx),
             (Panel::Fill, colour) => self.set_inside(Set::Inside(colour), dragged, cx),
+            (Panel::Stamps, Some(colour)) => self.set_stamping(Set::Colour(colour), dragged, cx),
             _ => {}
         }
     }
@@ -333,6 +336,7 @@ impl Editor {
             inside: self.inside_now(),
             fills: self.fills(),
             stroke: self.stroke_now(self.chosen_is_marker()).0,
+            stamps: self.stamps_now().0,
             open: self.panel(),
         }
     }
@@ -406,6 +410,18 @@ impl Editor {
             bar = bar.child(rule(theme));
         }
         match look.offered {
+            Offered::Stamps => {
+                bar = bar.child(self.opener(
+                    Panel::Stamps,
+                    t("editor.stroke"),
+                    Some(look.stamps),
+                    true,
+                    &look,
+                    leaving,
+                    theme,
+                    cx,
+                ));
+            }
             Offered::Stroke => {
                 bar = bar.child(self.opener(
                     Panel::Stroke,
@@ -512,6 +528,7 @@ impl Editor {
         let step = match panel {
             Panel::Pen | Panel::Marker | Panel::Stroke => self.stroke_now(marker).1,
             Panel::Outline => self.outline_now().1,
+            Panel::Stamps => self.stamps_now().1,
             Panel::Fill => 0,
         };
         Some(PanelLook {
@@ -585,6 +602,57 @@ impl Editor {
                 let colour = look.colour.unwrap_or(look.fallback);
                 settings.push(
                     self.size(sample, marker, colour, look.step, leaving, theme, cx, set)
+                        .into_any_element(),
+                );
+            }
+            Panel::Stamps => {
+                // Its size alone: the slider and how many steps (the colour is the number).
+                let this = cx.entity().downgrade();
+                settings.push(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(10.0))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(t("editor.size")),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.0))
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        Slider::new(
+                                            "stamps",
+                                            look.step.clamp(STEPS.0, STEPS.1) as f32,
+                                            STEPS.0 as f32,
+                                            STEPS.1 as f32,
+                                        )
+                                        .inert(leaving)
+                                        .on_change(
+                                            move |value, _, cx| {
+                                                let _ = this.update(cx, |this, cx| {
+                                                    this.set_stamping(
+                                                        Set::Step(value.round() as u32),
+                                                        true,
+                                                        cx,
+                                                    )
+                                                });
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .min_w(px(34.0))
+                                        .flex()
+                                        .justify_end()
+                                        .child(look.step.to_string()),
+                                ),
+                        )
                         .into_any_element(),
                 );
             }

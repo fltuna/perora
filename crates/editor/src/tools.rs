@@ -6,6 +6,7 @@ use perora_core::edit::{Edit, Place};
 
 pub mod figure;
 pub mod pen;
+pub mod stamp;
 
 /// A press, a move or a letting go, as a tool is told of it.
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +18,8 @@ pub struct Press {
     /// A step of width, in pixels of the image (`perora_core::drawing::unit`).
     pub unit: f32,
     pub shift: bool,
+    /// The number the next stamp gets.
+    pub next_number: u32,
 }
 
 pub trait Tool {
@@ -43,10 +46,11 @@ pub enum Kind {
     Ellipse,
     Line,
     Arrow,
+    Stamp,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Select,
         Kind::Pen,
         Kind::Marker,
@@ -54,6 +58,7 @@ impl Kind {
         Kind::Ellipse,
         Kind::Line,
         Kind::Arrow,
+        Kind::Stamp,
     ];
 
     /// The key that takes it up.
@@ -66,6 +71,7 @@ impl Kind {
             Kind::Ellipse => "e",
             Kind::Line => "l",
             Kind::Arrow => "a",
+            Kind::Stamp => "n",
         }
     }
 
@@ -79,6 +85,7 @@ impl Kind {
             Kind::Ellipse => "editor.tool.ellipse",
             Kind::Line => "editor.tool.line",
             Kind::Arrow => "editor.tool.arrow",
+            Kind::Stamp => "editor.tool.stamp",
         }
     }
 
@@ -97,6 +104,6 @@ impl Kind {
 
     /// Whether a drag may begin beside the picture with it (and the pointer is a cross there too).
     pub fn begins_beside(self) -> bool {
-        !matches!(self, Kind::Select)
+        !matches!(self, Kind::Select | Kind::Stamp)
     }
 }

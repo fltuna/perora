@@ -15,6 +15,7 @@ mod line;
 mod marker;
 mod pen;
 mod shape;
+pub mod stamp;
 
 pub use line::head;
 pub use marker::{SEEN_THROUGH, WIDER};
@@ -59,6 +60,11 @@ pub trait Mark: Sync {
     fn resized(&self, edit: &Edit, _hold: Hold, _by: Place, _shift: bool, _unit: f32) -> Edit {
         edit.clone()
     }
+
+    /// It, once a hold is let go: as it is kept (a number square again, at whole pixels).
+    fn settled(&self, edit: &Edit) -> Edit {
+        edit.clone()
+    }
 }
 
 /// The part for a mark of this kind: none for a kind the editor cannot draw yet (P4 adds them one by
@@ -67,6 +73,7 @@ pub fn mark_of(edit: &Edit) -> Option<&'static dyn Mark> {
     match edit {
         Edit::Pen { .. } => Some(&pen::Pen),
         Edit::Marker { .. } => Some(&marker::Marker),
+        Edit::Stamp { .. } => Some(&stamp::Stamp),
         Edit::Rectangle { .. } | Edit::Ellipse { .. } => Some(&shape::Shape),
         Edit::Line { .. } | Edit::Arrow { .. } => Some(&line::Line),
         _ => None,

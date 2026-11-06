@@ -107,6 +107,17 @@ fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             Part::line("M2.5 8a5.5 4.5 0 1 0 11 0a5.5 4.5 0 1 0-11 0z"),
             colour,
         )],
+        Kind::Stamp => match colour {
+            // The disc in the colour, the 1 in black or white on it.
+            Some(colour) => vec![
+                Part::solid("M2 8a6 6 0 1 0 12 0a6 6 0 1 0-12 0z").in_colour(colour),
+                Part::line("M6.9 6.3L8.4 5.2v5.6").in_colour(on(colour)),
+            ],
+            None => vec![
+                Part::line("M2 8a6 6 0 1 0 12 0a6 6 0 1 0-12 0z"),
+                Part::line("M6.9 6.3L8.4 5.2v5.6"),
+            ],
+        },
         Kind::Marker => {
             let mut parts = vec![
                 Part::line("M5.2 9.2l5.5-6 2.6 2.4-5.5 6zM5.2 9.2l-1.4 3 3.9-.7")
@@ -139,6 +150,16 @@ fn shaped(kind: Kind, colour: Option<Hsla>) -> Vec<Part> {
             }
             parts
         }
+    }
+}
+
+/// Black on a light colour, white on a dark one (`isLight` in editor.tsx).
+fn on(colour: Hsla) -> Hsla {
+    let rgb = colour.to_rgb();
+    if rgb.r * 255.0 * 0.299 + rgb.g * 255.0 * 0.587 + rgb.b * 255.0 * 0.114 > 160.0 {
+        gpui::black()
+    } else {
+        gpui::white()
     }
 }
 

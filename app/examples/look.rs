@@ -7,6 +7,7 @@
 //! The script, a line each (logical pixels of the window, which is 1200 x 800; `#` begins a remark):
 //! - `move X Y`, `down X Y`, `up X Y`, `click X Y` (down and up), `drag X Y X2 Y2 [STEPS]`, with
 //!   `shift`, `ctrl` after them for those held (`right`, `middle` for those buttons)
+//! - `wheel X Y LINES` (up is more than 0: closer)
 //! - `key K` (a key as GPUI names it: `r`, `escape`, `ctrl-z`), `type TEXT`
 //! - `wait MS` (the window draws meanwhile, as it does on screen)
 //! - `shot NAME` (the window, as it is now, into `<out-dir>/NAME.png`)
@@ -173,6 +174,17 @@ async fn play(
                         events.push(moved(at, Some(button), modifiers));
                     }
                     events.push(let_go(at, button, modifiers));
+                }
+                "wheel" => {
+                    at = place(0);
+                    events.push(moved(at, held, modifiers));
+                    events.push(PlatformInput::Scroll(gpui::ScrollEvent {
+                        position: at,
+                        delta: gpui::ScrollDelta::Lines(point(0.0, numbers[2])),
+                        modifiers,
+                        touch_phase: gpui::TouchPhase::Moved,
+                        ..Default::default()
+                    }));
                 }
                 "key" | "type" | "wait" | "shot" => {}
                 other => eprintln!("look: line {}: what is {other}?", number + 1),

@@ -20,9 +20,15 @@ url = "2"
 webp = { version = "0.3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+# The points DirectWrite gives the outlines of letters in (`Vector2`).
+windows-numerics = "0.3"
+# What `#[implement]` (a COM object made in Rust: the sink of the outlines) is written against.
+windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",

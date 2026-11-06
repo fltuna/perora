@@ -110,6 +110,7 @@ pub struct Editor {
     pen: tools::pen::Pen,
     marker: tools::pen::Pen,
     figures: tools::figure::Figures,
+    stamps: tools::stamp::Stamps,
     /// The last thing in the list was just drawn, with the tool still in hand: a shape is taken
     /// hold of there to be put right (owner: 「図形は描画直後は直前のやつを描画モードでも掴めるように」).
     just_drawn: bool,
@@ -183,6 +184,7 @@ impl Editor {
             pen: tools::pen::Pen::default(),
             marker: tools::pen::Pen::marker(),
             figures: tools::figure::Figures::default(),
+            stamps: tools::stamp::Stamps::default(),
             just_drawn: false,
             looking: Looking::default(),
             stage: Rc::new(Cell::new(None)),
@@ -221,6 +223,7 @@ impl Editor {
         self.pen = tools::pen::Pen::default();
         self.marker = tools::pen::Pen::marker();
         self.figures = tools::figure::Figures::default();
+        self.stamps = tools::stamp::Stamps::default();
         self.just_drawn = false;
         self.looking = Looking::default();
         self.gesture = None;
@@ -321,6 +324,7 @@ impl Editor {
             scale: look.scale,
             unit: self.unit(),
             shift: modifiers.shift,
+            next_number: perora_core::drawing::next_number(self.drawing.edits()),
         })
     }
 
@@ -329,6 +333,7 @@ impl Editor {
             Kind::Select => None,
             Kind::Pen => Some(&mut self.pen),
             Kind::Marker => Some(&mut self.marker),
+            Kind::Stamp => Some(&mut self.stamps),
             Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&mut self.figures),
         }
     }
@@ -338,6 +343,7 @@ impl Editor {
             Kind::Select => None,
             Kind::Pen => Some(&self.pen),
             Kind::Marker => Some(&self.marker),
+            Kind::Stamp => Some(&self.stamps),
             Kind::Rectangle | Kind::Ellipse | Kind::Line | Kind::Arrow => Some(&self.figures),
         }
     }
@@ -586,7 +592,9 @@ impl Editor {
             Some(Gesture::Resize {
                 index, was, now, ..
             }) => {
-                // (Only what it was when it was taken hold of is made larger.)
+                // (Only what it was when it was taken hold of is made larger.) Kept as it is kept: a
+                // number square again.
+                let now = mark_of(&now).map_or(now.clone(), |mark| mark.settled(&now));
                 if self.drawing.edits().get(index) == Some(&was) && now != was {
                     let mut edits = self.drawing.edits().to_vec();
                     edits[index] = now;
@@ -783,7 +791,8 @@ impl Editor {
     /// again: its bar goes, or comes back (and the pen's panel opens or goes); with something
     /// selected, the select button does that for the bar of what is selected.
     fn pick(&mut self, kind: Kind, cx: &mut Context<Self>) {
-        if self.gesture.is_some() {
+        // (Not while the capture leaves: what leaves is what was drawn when it was asked for.)
+        if self.gesture.is_some() || self.frozen {
             return;
         }
         if kind == self.tool && kind.is_stroke() && self.chosen().is_none() {
@@ -938,6 +947,7 @@ fn kind_of(edit: &Edit) -> Option<Kind> {
     match edit {
         Edit::Pen { .. } => Some(Kind::Pen),
         Edit::Marker { .. } => Some(Kind::Marker),
+        Edit::Stamp { .. } => Some(Kind::Stamp),
         Edit::Rectangle { .. } => Some(Kind::Rectangle),
         Edit::Ellipse { .. } => Some(Kind::Ellipse),
         Edit::Line { .. } => Some(Kind::Line),
@@ -1056,6 +1066,22 @@ impl Editor {
                 }))
                 .child(icons::icon(
                     icons::shapes(paint::colour(figures.colour), inside),
+                    16.0,
+                    theme.text,
+                )),
+        );
+        // (P4 later: the text, before the numbers.)
+        let named = format!(
+            "{} ({})",
+            t(Kind::Stamp.name()),
+            Kind::Stamp.key().to_uppercase()
+        );
+        bar = bar.child(
+            button(Kind::Stamp.name().into(), self.tool == Kind::Stamp, true)
+                .tooltip(tip(named))
+                .on_click(cx.listener(|this, _, _, cx| this.pick(Kind::Stamp, cx)))
+                .child(icons::icon(
+                    icons::of_tool(Kind::Stamp, Some(paint::colour(self.stamps.colour)), None),
                     16.0,
                     theme.text,
                 )),

@@ -147,16 +147,36 @@ pub fn seen_through(
     let Some(first) = points.first() else {
         return;
     };
-    let triangles = crate::outline::of(points, width);
-    let corner = |at: u32| {
-        let [x, y] = triangles.corners[at as usize];
-        painter.at([first[0] + x, first[1] + y])
+    let shape = crate::outline::of(points, width);
+    triangles(
+        window,
+        painter,
+        *first,
+        &shape.corners,
+        &shape.indices,
+        colour,
+    );
+}
+
+/// Triangles (three corners to one, from `at` in the image), in one colour: one path, as solid
+/// everywhere when the triangles do not meet.
+pub fn triangles(
+    window: &mut Window,
+    painter: &Painter,
+    at: Place,
+    corners: &[[f32; 2]],
+    indices: &[u32],
+    colour: Hsla,
+) {
+    let corner = |index: u32| {
+        let [x, y] = corners[index as usize];
+        painter.at([at[0] + x, at[1] + y])
     };
-    let Some(start) = triangles.indices.first() else {
+    let Some(start) = indices.first() else {
         return;
     };
     let mut path = gpui::Path::new(corner(*start));
-    for three in triangles.indices.chunks_exact(3) {
+    for three in indices.chunks_exact(3) {
         path.push_triangle(
             (corner(three[0]), corner(three[1]), corner(three[2])),
             (point(0., 1.), point(0., 1.), point(0., 1.)),

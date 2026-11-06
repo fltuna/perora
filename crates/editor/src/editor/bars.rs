@@ -30,6 +30,7 @@ use crate::tools::Kind;
 pub(super) enum Panel {
     Pen,
     Marker,
+    Stamps,
     Stroke,
     Fill,
     Outline,
@@ -43,6 +44,8 @@ pub(super) enum Offered {
     Shape,
     Line,
     Stroke,
+    /// The numbers: of the tool in hand, or of the one selected.
+    Stamps,
 }
 
 /// A setting, as a panel changes it.
@@ -183,8 +186,10 @@ impl Editor {
             Some(Edit::Pen { .. } | Edit::Marker { .. }) => Some(Offered::Stroke),
             Some(Edit::Rectangle { .. } | Edit::Ellipse { .. }) => Some(Offered::Shape),
             Some(Edit::Line { .. } | Edit::Arrow { .. }) => Some(Offered::Line),
+            Some(Edit::Stamp { .. }) => Some(Offered::Stamps),
             Some(_) => None,
             None if self.tool.is_figure() => Some(Offered::Figures),
+            None if self.tool == Kind::Stamp => Some(Offered::Stamps),
             None => None,
         }
     }
@@ -215,6 +220,7 @@ impl Editor {
                 second,
                 Some(Offered::Figures | Offered::Shape | Offered::Line)
             ),
+            Panel::Stamps => second == Some(Offered::Stamps),
         };
         open.then_some(self.asked?)
     }
@@ -244,6 +250,52 @@ impl Editor {
             (_, false) => (self.pen.colour, self.pen.step),
             (_, true) => (self.marker.colour, self.marker.step),
         }
+    }
+
+    /// The colour and size (in steps) of the numbers: what is put down next, or the one selected.
+    pub(super) fn stamps_now(&self) -> (Colour, u32) {
+        match self.chosen_edit() {
+            Some(edit @ Edit::Stamp { color, .. }) => {
+                let across = crate::marks::box_of(edit).width;
+                let step = (across / (crate::marks::stamp::STEP * self.unit())).round();
+                (*color, step.max(1.0) as u32)
+            }
+            _ => (self.stamps.colour, self.stamps.step),
+        }
+    }
+
+    /// A setting of the numbers: for the next, and for the one the settings are about (put down
+    /// anew around its middle).
+    pub(super) fn set_stamping(&mut self, set: Set, dragged: bool, cx: &mut Context<Self>) {
+        if self.frozen {
+            return;
+        }
+        let (colour, step) = self.stamps_now();
+        let (colour, step) = match set {
+            Set::Colour(to) => (to, step),
+            Set::Step(to) => (colour, to),
+            _ => return,
+        };
+        self.stamps.colour = colour;
+        self.stamps.step = step;
+        let unit = self.unit();
+        let Some(index) = self.about() else {
+            cx.notify();
+            return;
+        };
+        let Some(edit @ Edit::Stamp { number, .. }) = self.drawing.edits().get(index).cloned()
+        else {
+            return;
+        };
+        let area = crate::marks::box_of(&edit);
+        let middle = [area.x + area.width / 2.0, area.y + area.height / 2.0];
+        let across = match set {
+            Set::Step(step) => step as f32 * crate::marks::stamp::STEP * unit,
+            _ => area.width,
+        };
+        let next = crate::marks::stamp::stamped(middle, across, number, colour);
+        self.alter(index, next, set, dragged, cx);
+        cx.notify();
     }
 
     /// Whether the stroke selected is the marker's.
@@ -299,6 +351,9 @@ impl Editor {
         dragged: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.frozen {
+            return;
+        }
         let tool = if marker {
             &mut self.marker
         } else {
@@ -335,6 +390,9 @@ impl Editor {
 
     /// A setting of the outline of shapes and lines.
     pub(super) fn set_outline(&mut self, set: Set, dragged: bool, cx: &mut Context<Self>) {
+        if self.frozen {
+            return;
+        }
         match set {
             Set::Colour(colour) => self.figures.colour = colour,
             Set::Step(step) => self.figures.step = step,
@@ -366,6 +424,9 @@ impl Editor {
     /// A setting of a shape's inside. An inside given a colour where it had none is as solid as an
     /// inside last was.
     pub(super) fn set_inside(&mut self, set: Set, dragged: bool, cx: &mut Context<Self>) {
+        if self.frozen {
+            return;
+        }
         let (colour, fill) = self.inside_now();
         let (colour, fill) = match set {
             Set::Inside(Some(to)) => (to, if fill == 0.0 { self.solid } else { fill }),
@@ -373,8 +434,10 @@ impl Editor {
             Set::Solid(solid) => (colour, solid),
             _ => return,
         };
-        if fill > 0.0 {
-            self.solid = fill;
+        // (How solid it was set to by its slider: what an inside given a colour is again. Not what a
+        // shape chosen had.)
+        if let Set::Solid(solid) = set {
+            self.solid = solid;
         }
         // What is drawn next has the inside this one has now, all of it.
         self.figures.fill_colour = colour;
@@ -398,7 +461,11 @@ impl Editor {
                 ..
             } => {
                 *was = fill;
-                *fill_color = Some(colour);
+                // (Its colour only when it is given one: no inside, or another solidness, leaves the
+                // colour it says, or does not say, as it is.)
+                if let Set::Inside(Some(to)) = set {
+                    *fill_color = Some(to);
+                }
             }
             _ => return,
         }
@@ -408,6 +475,9 @@ impl Editor {
 
     /// A press on a button that opens a panel: it opens, or goes when it is open.
     pub(super) fn open(&mut self, panel: Panel, cx: &mut Context<Self>) {
+        if self.frozen {
+            return;
+        }
         self.asked = if self.panel() == Some(panel) {
             None
         } else {

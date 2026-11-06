@@ -206,6 +206,20 @@ pub fn font_families() -> Vec<String> {
     windows::fonts::families()
 }
 
+/// Lines laid out as the shapes of their letters (see `windows::letters`): in the first of
+/// `families` the system has, at `size` pixels, curves within `flat` pixels.
+#[cfg(windows)]
+pub fn lay_out(
+    lines: &[&str],
+    families: &[&str],
+    size: f32,
+    bold: bool,
+    italic: bool,
+    flat: f32,
+) -> Option<windows::letters::Laid> {
+    windows::letters::lay_out(lines, families, size, bold, italic, flat)
+}
+
 /// The names of the system's sounds a notice can come with, in order.
 #[cfg(windows)]
 pub fn system_sounds() -> Vec<String> {
