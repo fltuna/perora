@@ -21,7 +21,8 @@
 //! - `wait MS` (the window draws meanwhile, as it does on screen)
 //! - `shot NAME` (the window, as it is now, into `<out-dir>/NAME.png`)
 //!
-//! With `LOOK_TAKEN` set, the shortcut is as if another application had it.
+//! With `LOOK_TAKEN` set, the shortcut is as if another application had it; `LOOK_SETTINGS` adds to
+//! the settings the window starts with (JSON members: `"copyToClipboard": false`).
 
 // The application's own modules, as its `main.rs` has them: an example cannot use a program's.
 #![allow(dead_code)]
@@ -121,11 +122,16 @@ fn main() {
     // The settings are a file of their own beside the shots, made anew: not where the user's
     // Perora keeps them.
     let settings = out.join("settings.json");
+    // (With a setting of a version to come: what the file holds that this one does not know is to
+    // be kept as it is. `LOOK_SETTINGS` adds others, as JSON members: `"copyToClipboard": false`.)
+    let more = std::env::var("LOOK_SETTINGS")
+        .map(|more| format!(", {more}"))
+        .unwrap_or_default();
     std::fs::write(
         &settings,
-        // (With a setting of a version to come: what the file holds that this one does not know is
-        // to be kept as it is.)
-        format!("{{\"language\": \"{code}\", \"theme\": \"{look}\", \"aSettingToCome\": [1, 2]}}"),
+        format!(
+            "{{\"language\": \"{code}\", \"theme\": \"{look}\", \"aSettingToCome\": [1, 2]{more}}}"
+        ),
     )
     .expect("the settings can be written");
     // SAFETY: nothing else runs yet to read the environment meanwhile.

@@ -264,7 +264,7 @@ pub fn page(
             theme,
         )
         .into_any_element(),
-        Reveal::new("shellBehind", snipping.behind)
+        Reveal::new("takeSnipping-more", snipping.behind)
             .child(card(
                 about(
                     t(if snipping.wanted {

@@ -453,7 +453,7 @@ pub fn capture(
         )
         .into_any_element(),
         // What goes with copying, under it: shown while captures are copied (owner, 2026-10-14).
-        Reveal::new("copies", copies)
+        Reveal::new("copies-more", copies)
             .child(Leaving::Copy.row(settings, language, theme, true))
             .child(setting(
                 t("main.capture.clear"),
@@ -479,7 +479,7 @@ pub fn capture(
             theme,
         )
         .into_any_element(),
-        Reveal::new("barRevealArea", settings.bar_hide_seconds > 0.0)
+        Reveal::new("barHideSeconds-more", settings.bar_hide_seconds > 0.0)
             .child(setting(
                 t("main.capture.barRevealArea"),
                 t("main.capture.barRevealAreaHint"),
@@ -513,27 +513,30 @@ pub fn capture(
             theme,
         )
         .into_any_element(),
-        Reveal::new("preview", settings.after_capture == After::Preview)
-            .child(setting(
-                t("main.capture.previewSeconds"),
-                t("main.capture.previewSecondsHint"),
-                this.seconds.preview.clone(),
-                true,
-                theme,
-            ))
-            .child(setting(
-                t("main.capture.previewCorner"),
-                t("main.capture.previewCornerHint"),
-                corner_choice(
-                    "previewCorner",
-                    settings.preview_corner,
-                    language,
-                    system::set_preview_corner,
-                ),
-                true,
-                theme,
-            ))
-            .into_any_element(),
+        Reveal::new(
+            "afterCapture-more",
+            settings.after_capture == After::Preview,
+        )
+        .child(setting(
+            t("main.capture.previewSeconds"),
+            t("main.capture.previewSecondsHint"),
+            this.seconds.preview.clone(),
+            true,
+            theme,
+        ))
+        .child(setting(
+            t("main.capture.previewCorner"),
+            t("main.capture.previewCornerHint"),
+            corner_choice(
+                "previewCorner",
+                settings.preview_corner,
+                language,
+                system::set_preview_corner,
+            ),
+            true,
+            theme,
+        ))
+        .into_any_element(),
     ];
     page.extend(sound_setting(Occasion::Capture, settings, language, theme));
     page.extend([
@@ -567,7 +570,7 @@ pub fn capture(
             theme,
         )
         .into_any_element(),
-        Reveal::new("uploads", uploads)
+        Reveal::new("enableUpload-more", uploads)
             .child(setting(
                 t("main.capture.uploadImmediately"),
                 t("main.capture.uploadImmediatelyHint"),
@@ -671,7 +674,7 @@ pub fn save(
         // What goes with it, under it, while it is on: what the files are (as saving has them, or
         // their own, chosen under that), and whether discarding takes them away (owner,
         // 2026-10-16).
-        Reveal::new("saveOnCapture", settings.save_on_capture)
+        Reveal::new("saveOnCapture-more", settings.save_on_capture)
             .child(setting(
                 t("main.save.onCaptureAs"),
                 t("main.save.onCaptureAsHint"),
@@ -686,7 +689,7 @@ pub fn save(
                 theme,
             ))
             .child(
-                Reveal::new("saveOnCaptureCustom", custom)
+                Reveal::new("saveOnCaptureCustom-more", custom)
                     .child(Leaving::SaveOnCapture.row(settings, language, theme, true)),
             )
             .child(setting(
@@ -846,7 +849,7 @@ pub fn general(
             theme,
         )
         .into_any_element(),
-        Reveal::new("startMinimized", started.is_some())
+        Reveal::new("startAtSignIn-more", started.is_some())
             .child(setting(
                 t("main.general.startMinimized"),
                 t("main.general.startMinimizedHint"),
