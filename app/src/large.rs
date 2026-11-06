@@ -139,6 +139,10 @@ fn present(id: u64, picture: Picture, cx: &mut App) {
             editor.below = Some(status.into());
         });
         window.focus(&editor.focus_handle(cx), cx);
+        // In front: opened from a click on the small window (which never takes the keyboard), Perora
+        // is not the application in front, and the system opens a new window behind it unless asked
+        // to bring it forward (GPUI's activation sees to that).
+        window.activate_window();
         editor
     });
     match opened {
