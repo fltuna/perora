@@ -36,6 +36,7 @@ pub fn release(cx: &mut App) {
     {
         return;
     }
+    eprintln!("gpu: let go (no window for a while)");
     let task = cx.request_windowing(WindowingRequest::Headless);
     cx.foreground_executor()
         .spawn(async move {

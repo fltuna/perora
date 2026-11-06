@@ -95,6 +95,12 @@ pub struct Selection {
     asked: Instant,
 }
 
+impl Drop for Selection {
+    fn drop(&mut self) {
+        eprintln!("selection {}: let go of", self.id);
+    }
+}
+
 impl Selection {
     /// What the choice is of the capture, and where to cut it out of: the area of the still, or the
     /// window (without its edge, where what is behind it showed through) of its own picture or of
