@@ -38,6 +38,7 @@ use perora_core::platform::{self, Desktop, Frame};
 use perora_core::preview::{Discarded, Once, Pending, picture_size, small_size};
 use perora_core::settings::{Leaves, Settings};
 use perora_core::{copying, saving};
+use perora_ui::tour::{Asked, At, Button as TourButton, Marks, Step, Tour, Words};
 use perora_ui::{Theme, Tip, motion};
 
 use crate::notice::{self, Lasting};
@@ -95,6 +96,8 @@ struct Previews {
     /// showing put it.
     placing: u64,
     discarded: Discarded,
+    /// The tour of the small window was seen since Perora started (before the settings say so).
+    toured: bool,
 }
 
 impl Global for Previews {}
@@ -885,6 +888,11 @@ pub struct Small {
     pub(crate) ticked: Option<Instant>,
     /// The clipboard's count of changes, as last looked at (to draw anew when it changes).
     clipboard: Option<u32>,
+    /// The tour of the window, while it is on; where the things it shows are; whether the choice
+    /// is open for it (the tour's to put away).
+    tour: Option<Tour>,
+    marks: Marks,
+    chosen_by_tour: bool,
 }
 
 /// How long the dark over the picture takes to come and go; what is said of the clipboard to fade
@@ -933,7 +941,53 @@ impl Small {
             copied_since: None,
             ticked: None,
             clipboard: platform::clipboard_sequence(),
+            tour: None,
+            marks: Marks::default(),
+            chosen_by_tour: false,
         }
+    }
+
+    /// The tour of the window, from its first step. (Shown, something is being done about the
+    /// capture: it is not given up on its own meanwhile.)
+    fn start_tour(&mut self, cx: &mut Context<Self>) {
+        let t = |key: &str| self.language.text(key, &[]);
+        let offers_upload = false;
+        let steps = vec![
+            Step::new(At::Mark("picture"), t("tour.preview.picture")),
+            Step::new(
+                At::Mark("actions"),
+                t(if offers_upload {
+                    "tour.preview.actions"
+                } else {
+                    "tour.preview.actionsWithoutUpload"
+                }),
+            ),
+            Step::new(At::Mark("as"), t("tour.preview.as")),
+            Step::new(At::Mark("menu"), t("tour.choice")),
+            Step::new(At::Mark("guide"), t("tour.again")),
+        ];
+        self.tour = Some(Tour::new(steps, self.moves, true));
+        self.choose(None);
+        let id = self.id;
+        cx.defer(move |cx| touch(id, cx));
+        cx.notify();
+    }
+
+    /// One of the tour's buttons pressed.
+    fn tour_button(&mut self, button: TourButton, cx: &mut Context<Self>) {
+        let Some(tour) = self.tour.as_mut() else {
+            return;
+        };
+        let asked = match button {
+            TourButton::Skip => Asked::End,
+            TourButton::Back => tour.back(),
+            TourButton::Next => tour.next(),
+        };
+        if asked == Asked::End {
+            self.tour = None;
+            cx.defer(|cx| saw_tour(cx));
+        }
+        cx.notify();
     }
 
     /// How much of the dark over the picture is seen now.
@@ -1074,8 +1128,10 @@ impl Render for Small {
         }
         let theme = Theme::get(cx).clone();
         let settings = Perora::get(cx).settings();
+        self.marks.turn();
         let root = div()
             .id("preview")
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -1092,6 +1148,23 @@ impl Render for Small {
             return root;
         };
         if look.id != self.id {
+            // The tour comes on its own a moment after the first capture is seen here, unless it
+            // was seen; on over another capture, that one is not given up on its own either.
+            if self.tour.is_some() {
+                let id = look.id;
+                cx.defer(move |cx| touch(id, cx));
+            } else if !tour_seen(cx) {
+                let id = look.id;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TOUR_COMES_AFTER).await;
+                    let _ = this.update(cx, |small, cx| {
+                        if small.id == id && small.tour.is_none() && !tour_seen(cx) {
+                            small.start_tour(cx);
+                        }
+                    });
+                })
+                .detach();
+            }
             // Another capture starts with what it has to say, nothing moving.
             self.id = look.id;
             self.over = false;
@@ -1157,6 +1230,7 @@ impl Render for Small {
                     .child(t("preview.clickToEdit")),
             )
             .tooltip(tip(t("preview.clickToEdit")))
+            .child(self.marks.mark("picture"))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.hovered(*hovered);
                 cx.notify();
@@ -1197,8 +1271,73 @@ impl Render for Small {
                 .child(format!("{} × {}", look.width, look.height)),
         };
 
+        // The tour opens the choice beside saving for its step, and puts it away after.
+        let tour_opens = self.tour.as_ref().is_some_and(|tour| tour.at() == 3);
+        if tour_opens && self.choosing.is_none() {
+            self.choose(Some(Leaves::Save));
+            self.chosen_by_tour = true;
+        } else if !tour_opens && self.chosen_by_tour {
+            self.choose(None);
+            self.chosen_by_tour = false;
+        }
         let actions = self.actions(&look, &settings, &theme, window, cx);
-        root.child(picture).child(status).child(actions)
+        let words = tour_words(&self.language);
+        let this = cx.entity().downgrade();
+        let marks = self.marks.clone();
+        let tour = self.tour.as_mut().map(|tour| {
+            tour.view(&marks, &words, &theme, window, move |button, _, cx| {
+                let _ = this.update(cx, |small, cx| small.tour_button(button, cx));
+            })
+        });
+        root.child(picture)
+            .child(status)
+            .child(actions)
+            .children(tour)
+    }
+}
+
+/// A moment after the window came, so that it is seen to come first.
+const TOUR_COMES_AFTER: Duration = Duration::from_millis(400);
+
+/// Whether the tour of the small window was seen: the settings say so, or it was, since Perora
+/// started.
+fn tour_seen(cx: &mut App) -> bool {
+    cx.default_global::<Previews>().toured
+        || Perora::get(cx)
+            .settings()
+            .tours_seen
+            .contains(&perora_core::settings::Tour::Preview)
+}
+
+/// The tour of the small window was seen (to the end, or put away): it does not come on its own
+/// again.
+fn saw_tour(cx: &mut App) {
+    let previews = cx.default_global::<Previews>();
+    if previews.toured {
+        return;
+    }
+    previews.toured = true;
+    let perora = Perora::get(cx);
+    if let Some(path) = perora.settings_path.clone() {
+        perora_core::settings::tour_seen(&path, &perora.settings, "preview");
+    }
+}
+
+/// The words of a tour's own buttons, in the user's language.
+pub fn tour_words(language: &Language) -> Words {
+    let count = language.clone();
+    let t = |key: &str| SharedString::from(language.text(key, &[]));
+    Words {
+        count: Box::new(move |at, of| {
+            count.text(
+                "tour.count",
+                &[("at", &at.to_string()), ("of", &of.to_string())],
+            )
+        }),
+        skip: t("tour.skip"),
+        back: t("tour.back"),
+        next: t("tour.next"),
+        done: t("tour.done"),
     }
 }
 
@@ -1329,9 +1468,10 @@ impl Small {
         };
         let accent = theme.accent;
 
-        // (P6: the tour.)
+        // The tour, shown again.
         let guide = div()
             .id("guide")
+            .relative()
             .w(px(20.0))
             .h(px(30.0))
             .flex()
@@ -1341,7 +1481,9 @@ impl Small {
             .cursor(CursorStyle::PointingHand)
             .hover(|style| style.text_color(theme.text))
             .tooltip(tip(t("tour.open")))
-            .child(icon(GUIDE, 16.0));
+            .child(icon(GUIDE, 16.0))
+            .child(self.marks.mark("guide"))
+            .on_click(cx.listener(|this, _, _, cx| this.start_tour(cx)));
 
         let save = base("save")
             .flex_1()
@@ -1406,9 +1548,15 @@ impl Small {
                 div()
                     .flex_1()
                     .flex()
-                    .child(self.chevron(Leaves::Save, id, theme, cx))
+                    .child(
+                        div()
+                            .relative()
+                            .child(self.chevron(Leaves::Save, id, theme, cx))
+                            .child(self.marks.mark("as")),
+                    )
                     .child(save),
             )
+            .child(self.marks.mark("actions"))
             .child(
                 div()
                     .flex()
@@ -1627,5 +1775,6 @@ impl Small {
             // (The second row starts here.)
             .child(div().w_full().h_0())
             .children(fits)
+            .child(self.marks.mark("menu"))
     }
 }
