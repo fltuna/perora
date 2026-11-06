@@ -5,10 +5,23 @@
 
 use std::cell::Cell;
 
-use windows::Win32::UI::WindowsAndMessaging::ShowCursor;
+use windows::Win32::Foundation::POINT;
+use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos, ShowCursor};
 
 thread_local! {
     static HIDDEN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The pointer looked at again where it is, as if it had moved: the system shows or hides it only as
+/// it moves, so a screen that came up under a pointer standing still left it there to be seen until
+/// it did (owner, 2026-11-06: 「カーソル動かすまでカーソル消えないw」). Put where it is, it is not moved.
+pub fn refresh() {
+    let mut at = POINT::default();
+    unsafe {
+        if GetCursorPos(&mut at).is_ok() {
+            let _ = SetCursorPos(at.x, at.y);
+        }
+    }
 }
 
 /// Hidden or shown again; each once, so that the count is back where it was when the screen is

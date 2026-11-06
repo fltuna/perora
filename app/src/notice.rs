@@ -184,7 +184,8 @@ fn taken_away(the_one: impl FnOnce(&Notices) -> bool, cx: &mut App) -> (bool, Op
 /// folder as it goes. The click says which notice the window showed: when another has taken its
 /// place meanwhile, that one stays, unread, and nothing is shown.
 fn dismiss(turn: u64, cx: &mut App) {
-    let (_, click) = taken_away(|notices| notices.turn == turn, cx);
+    let (was, click) = taken_away(|notices| notices.turn == turn, cx);
+    eprintln!("notice {turn}: clicked ({}, {click:?})", if was { "put away" } else { "another took its place" });
     match click {
         Some(Click::Reveal(file)) => {
             std::thread::spawn(move || {
@@ -327,11 +328,22 @@ impl Render for Notice {
             .child(div().absolute().left_0().top_0().bottom_0().w(px(3.0)).bg(theme.accent))
             .children(message.map(|message| {
                 div()
+                    .flex_1()
+                    .min_w_0()
                     .flex()
                     .items_center()
                     .gap(px(12.0))
                     .children(icon.map(|icon| img(icon).flex_none().size(px(32.0))))
-                    .child(div().flex_1().line_clamp(3).child(message))
+                    // Wrapped, a long path anywhere in it too, three lines at most (as `-webkit-line-
+                    // clamp: 3` and `overflow-wrap: anywhere` had it).
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .line_clamp(3)
+                            .child(message),
+                    )
             }))
     }
 }

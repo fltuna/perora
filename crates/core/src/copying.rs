@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::output::{Format, Output};
 use crate::platform::Frame;
@@ -12,16 +13,34 @@ use crate::platform::Frame;
 /// One at a time has the clipboard and the folder of what is copied.
 static COPIED: Mutex<()> = Mutex::new(());
 
+/// The turn of each copy, in the order they were asked for; and the latest that was put on the
+/// clipboard. A copy that took longer to make (a larger capture) is not put there over a later one.
+static ASKED: AtomicU64 = AtomicU64::new(0);
+static PUT: AtomicU64 = AtomicU64::new(0);
+
+/// A copy's turn, taken when it is asked for.
+pub fn turn() -> u64 {
+    ASKED.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+/// What came of a copy.
+pub struct Copied {
+    /// The clipboard's count of changes right after, where the system says.
+    pub sequence: Option<u32>,
+    /// The PNG it was put there as, when that is the picture as it was (not made smaller): for
+    /// saving without making it again.
+    pub png: Option<Vec<u8>>,
+}
+
 /// The folder of Perora's own that holds the file on the clipboard (when a copy is not a PNG), and
 /// nothing else: `%LOCALAPPDATA%\dev.f2a.perora\copied`, as the Tauri version had it.
 pub fn copied_folder() -> Option<PathBuf> {
     Some(crate::settings::cache_directory()?.join("copied"))
 }
 
-/// Puts the picture on the clipboard, in place of what is there. Returns the clipboard's count of
-/// changes right after, where the system says; refused with the reason when it could not be put
-/// there.
-pub fn to_clipboard(frame: &Frame, how: Output) -> Result<Option<u32>, String> {
+/// Puts the picture on the clipboard, in place of what is there, unless a later copy (`turn`) is
+/// there already. Refused with the reason when it could not be put there.
+pub fn to_clipboard(frame: &Frame, how: Output, turn: u64) -> Result<Copied, String> {
     let fitted = how.fit.and_then(|side| frame.fitted(side));
     let frame = fitted.as_ref().unwrap_or(frame);
     // The file of a copy is made first (that takes a moment); then one at a time has the clipboard
@@ -33,11 +52,23 @@ pub fn to_clipboard(frame: &Frame, how: Output) -> Result<Option<u32>, String> {
     let _one_at_a_time = COPIED
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let as_it_was = fitted.is_none();
+    if PUT.load(Ordering::Acquire) > turn {
+        // (A later copy is there: what is said of that one is what counts.)
+        return Ok(Copied {
+            sequence: None,
+            png: (how.format == Format::Png && as_it_was).then_some(file),
+        });
+    }
+    PUT.store(turn, Ordering::Release);
     if how.format == Format::Png {
         crate::platform::put_picture_on_clipboard(frame, &file)?;
         // (No file of Perora's is on the clipboard any more.)
         forget_copied_held(None);
-        return Ok(crate::platform::clipboard_sequence());
+        return Ok(Copied {
+            sequence: crate::platform::clipboard_sequence(),
+            png: as_it_was.then_some(file),
+        });
     }
 
     // A file has to be somewhere: in the folder that holds the one on the clipboard. The one before
@@ -66,7 +97,10 @@ pub fn to_clipboard(frame: &Frame, how: Output) -> Result<Option<u32>, String> {
         return Err(error);
     }
     forget_copied_held(Some(&path));
-    Ok(crate::platform::clipboard_sequence())
+    Ok(Copied {
+        sequence: crate::platform::clipboard_sequence(),
+        png: None,
+    })
 }
 
 /// Takes away the files Perora put on the clipboard before, all but `kept`: they are no longer what

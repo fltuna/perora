@@ -189,27 +189,49 @@ mod tests {
 }
 
 /// Opens the folder a file is in, with the file chosen there (what the file manager's "show in
-/// folder" does), in a window of the file manager's. Refused with the reason when the system would
-/// not. (As the Tauri version's opener did: `SHOpenFolderAndSelectItems`.)
+/// folder" does), in a window of the file manager the user has: through the shell, which hands it
+/// to whatever took the file manager's place (the owner has Files do that). Not by starting
+/// `explorer.exe /select`, which opens the system's own past that. Refused with the reason when the
+/// shell would not.
+///
+/// As the Tauri version's opener did it: the folder and the file in it apart, and the thread left
+/// set up for COM.
 pub fn reveal(path: &std::path::Path) -> Result<(), String> {
-    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+    use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
     use windows::core::HSTRING;
 
+    let folder = path
+        .parent()
+        .ok_or_else(|| format!("{} is in no folder", path.display()))?;
     unsafe {
-        // (Whatever this thread was set up as before stands: then it is not undone either.)
-        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let folder = ILCreateFromPathW(&HSTRING::from(folder.as_os_str()));
         let item = ILCreateFromPathW(&HSTRING::from(path.as_os_str()));
-        let shown = if item.is_null() {
+        let shown = if folder.is_null() || item.is_null() {
             Err(format!("{} is not there", path.display()))
         } else {
-            let shown = SHOpenFolderAndSelectItems(item, None, 0).map_err(|error| error.message());
-            ILFree(Some(item));
-            shown
+            SHOpenFolderAndSelectItems(folder, Some(&[item.cast_const()]), 0)
+                .map_err(|error| error.message())
         };
-        if initialized {
-            CoUninitialize();
+        for list in [folder, item] {
+            if !list.is_null() {
+                ILFree(Some(list));
+            }
         }
         shown
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    /// Opens a window of the file manager: only when asked for (`cargo test -- --ignored reveal`).
+    #[test]
+    #[ignore]
+    fn reveal_opens_the_folder_with_the_file_chosen() {
+        let file = std::env::temp_dir().join("perora-reveal.txt");
+        std::fs::write(&file, b"reveal").unwrap();
+        super::reveal(&file).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
     }
 }

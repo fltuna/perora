@@ -216,11 +216,11 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
     let language = perora.language();
     let session = Session::new(layout.clone(), windows, mode, pointer);
     let on_home = &layout.monitors[home];
-    let home_scale = on_home.scale as f32;
+    let scale = on_home.scale as f32;
     let list = List::new(
         session.windows(),
-        on_home.bounds.width as f32 / home_scale,
-        on_home.bounds.height as f32 / home_scale,
+        on_home.bounds.width as f32 / scale,
+        on_home.bounds.height as f32 / scale,
     );
     let selection = cx.new(|cx| {
         let mut selection = Selection {
@@ -313,13 +313,22 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
         selection.update(cx, |selection, _| selection.up.store(false, Ordering::Release));
         return None;
     };
-    selection.update(cx, |selection, cx| {
+    let home_scale = selection.update(cx, |selection, cx| {
         if selection.home != home {
             eprintln!("selection {id}: the bar is on monitor {home}: that of the pointer did not open");
             selection.home = home;
+            let on = selection.home_monitor().clone();
+            let scale = on.scale as f32;
+            selection.list = List::new(
+                selection.session.windows(),
+                on.bounds.width as f32 / scale,
+                on.bounds.height as f32 / scale,
+            );
             let pointer = selection.pointer;
             selection.pointer_at(pointer, cx);
+            cx.notify();
         }
+        selection.home_monitor().scale as f32
     });
     let _ = window.update(cx, |_, window, _| window.activate_window());
     cx.activate(true);
@@ -333,6 +342,7 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
                 for &handle in &selection.handles {
                     platform::set_cloaked(handle, false);
                 }
+                cursor::refresh();
             }
         });
     })
@@ -583,6 +593,7 @@ impl Render for Overlay {
                     if let Some(handle) = hwnd::of(window) {
                         platform::set_cloaked(handle, false);
                     }
+                    cursor::refresh();
                     eprintln!(
                         "selection {id}: monitor {monitor} shown {:.0} ms after the shortcut",
                         asked.elapsed().as_secs_f64() * 1000.0

@@ -110,8 +110,10 @@ pub fn start(cx: &mut App) {
 /// The screen as it was at the press, and the windows on it; with each monitor's part ready to be
 /// drawn when the selection screen is to show it.
 fn take(own: &[WindowId], parts: bool) -> Result<Taken, String> {
+    let started = Instant::now();
     let capture = platform::screen_capture();
     let still = capture.capture_all().map_err(|error| error.to_string())?;
+    let captured = started.elapsed();
     let layout = capture.layout().map_err(|error| error.to_string())?;
     let desktop = platform::desktop();
     // In the picture, Perora's own windows are there to be picked like any other, where they are
@@ -120,6 +122,7 @@ fn take(own: &[WindowId], parts: bool) -> Result<Taken, String> {
     let pointer = desktop
         .pointer()
         .unwrap_or_else(|_| Point::new(layout.bounds.x, layout.bounds.y));
+    let listed = started.elapsed();
     // Each monitor's part, all at once.
     let parts = if parts {
         std::thread::scope(|scope| {
@@ -139,6 +142,13 @@ fn take(own: &[WindowId], parts: bool) -> Result<Taken, String> {
     } else {
         Vec::new()
     };
+    let ms = |time: Duration| time.as_secs_f64() * 1000.0;
+    eprintln!(
+        "capture: the screen in {:.0} ms, the windows by {:.0} ms, the parts to draw by {:.0} ms",
+        ms(captured),
+        ms(listed),
+        ms(started.elapsed())
+    );
     Ok(Taken {
         still: Arc::new(still),
         layout,
@@ -246,6 +256,8 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
 
     let how = settings.output(Leaves::Copy);
     let saves = settings.save_on_capture;
+    // (In the order of the captures: the last one taken is what stays on the clipboard.)
+    let turn = copying::turn();
     let working = cx.background_executor().spawn(async move {
         let started = Instant::now();
         // (Somewhere on it: whoever chose it saw to that.)
@@ -253,10 +265,13 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
             return (Err("nothing was chosen".to_owned()), None);
         };
         drop(source);
-        let copied = copying::to_clipboard(&frame, how).map(|_| ());
+        let copied = copying::to_clipboard(&frame, how, turn);
         let copying_took = started.elapsed();
-        // (Saved meanwhile too, when it is: one notice says both, and a click on it shows the file.)
-        let saved = saves.then(|| saving::save_as_taken(&settings, &frame, None));
+        // (Saved meanwhile too, when it is: one notice says both, and a click on it shows the file.
+        // As the PNG the copy was made into, when that is the picture as it was.)
+        let png = copied.as_ref().ok().and_then(|copied| copied.png.as_deref());
+        let saved = saves.then(|| saving::save_as_taken(&settings, &frame, png));
+        let copied = copied.map(|_| ());
         eprintln!(
             "deliver: {}x{} copied in {:.0} ms{}",
             frame.area.width,

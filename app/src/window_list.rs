@@ -254,27 +254,32 @@ pub fn element(
     });
     let room = list.room.clone();
     div()
-        .id("windows")
         .absolute()
         .top(px(INSET_TOP))
         .left(px(INSET))
         .right(px(INSET))
         .bottom(px(INSET))
-        .flex()
-        .flex_wrap()
-        .justify_center()
-        // More windows than there is room for, even at the smallest: the rest is reached by
-        // scrolling, from the first row on.
-        .when(list.fits, |list| list.content_center())
-        .when(!list.fits, |list| list.content_start())
-        .gap(px(GAP))
-        .overflow_y_scroll()
+        // Where the list is seen: recorded out here, as what scrolls moves with the scrolling.
         .child(
             canvas(move |bounds, _, _| room.set(Some(bounds)), |_, _, _, _| {})
                 .absolute()
                 .size_full(),
         )
-        .children(cards)
+        .child(
+            div()
+                .id("windows")
+                .size_full()
+                .flex()
+                .flex_wrap()
+                .justify_center()
+                // More windows than there is room for, even at the smallest: the rest is reached by
+                // scrolling, from the first row on.
+                .when(list.fits, |list| list.content_center())
+                .when(!list.fits, |list| list.content_start())
+                .gap(px(GAP))
+                .overflow_y_scroll()
+                .children(cards),
+        )
         .into_any_element()
 }
 
