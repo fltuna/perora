@@ -86,22 +86,26 @@ pub fn start(cx: &mut App) {
         }
         take(&own, start_mode != Mode::AllMonitors)
     });
-    // The GPU back while the screen is taken (not for every monitor at once: no screen is put up).
+    // While the screen is taken: the GPU back, and the windows of the selection screen opened (out
+    // of sight, empty). Not for every monitor at once: no screen is put up.
     let attaching = Instant::now();
-    if start_mode != Mode::AllMonitors {
+    let prepared = if start_mode != Mode::AllMonitors {
         gpu::attach(cx);
-    }
+        selection::prepare(cx)
+    } else {
+        None
+    };
     let attached = attaching.elapsed();
 
     cx.spawn(async move |cx| {
         let taken = taking.await;
         cx.update(|cx| {
             eprintln!(
-                "capture: taken {:.0} ms after the shortcut (the GPU back in {:.0} ms meanwhile)",
+                "capture: taken {:.0} ms after the shortcut (the GPU back and the windows opened in {:.0} ms meanwhile)",
                 asked.elapsed().as_secs_f64() * 1000.0,
                 attached.as_secs_f64() * 1000.0
             );
-            arrived(taken, before, hide, start_mode, asked, cx);
+            arrived(taken, prepared, before, hide, start_mode, asked, cx);
         });
     })
     .detach();
@@ -161,6 +165,7 @@ fn take(own: &[WindowId], parts: bool) -> Result<Taken, String> {
 
 fn arrived(
     taken: Result<Taken, String>,
+    prepared: Option<selection::Prepared>,
     before: Option<Entity<Selection>>,
     hide: bool,
     start_mode: Mode,
@@ -174,6 +179,9 @@ fn arrived(
     let taken = match taken {
         Ok(taken) => taken,
         Err(detail) => {
+            if let Some(prepared) = prepared {
+                selection::discard(prepared, cx);
+            }
             let message = Perora::get(cx).language().capture_failed(&detail);
             eprintln!("{message}");
             come_back(cx);
@@ -202,7 +210,7 @@ fn arrived(
     // (Let go of meanwhile, should the last window have closed just before the press: windows
     // cannot be opened without it.)
     gpu::attach(cx);
-    match selection::open(id, taken, start_mode, asked, cx) {
+    match selection::open(id, taken, prepared, start_mode, asked, cx) {
         Some(selection) => cx.global_mut::<Capturing>().current = Some(selection),
         None => {
             eprintln!("selection {id}: no window could be opened");
@@ -210,6 +218,11 @@ fn arrived(
             gpu::release_soon(cx);
         }
     }
+}
+
+/// The selection screen that is up.
+pub fn current(cx: &mut App) -> Option<Entity<Selection>> {
+    cx.default_global::<Capturing>().current.clone()
 }
 
 /// Whether the screen is being taken or a capture selected: no notice is shown meanwhile.

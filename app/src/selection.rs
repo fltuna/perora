@@ -30,12 +30,12 @@ use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Context, CursorStyle, DispatchPhase, Entity,
     FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, RenderImage, Styled, Subscription,
-    WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas,
-    div, fill, img, point, px, rgba, size,
+    WeakEntity, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, canvas, div, fill, img, point, px, rgba, size,
 };
 use perora_core::geometry::{Point, Rect};
 use perora_core::language::Language;
-use perora_core::platform::{self, Desktop, Frame, Monitor, ScreenLayout, WindowId};
+use perora_core::platform::{self, Desktop, Frame, Monitor, ScreenCapture, ScreenLayout, WindowId};
 use perora_core::selection::{Choice, Mode, Session, without_edge};
 
 use crate::bar::{self, Bar};
@@ -196,7 +196,108 @@ impl Selection {
 
 /// Puts the selection screen up over every monitor, from what was taken. `None` when no window
 /// could be opened: then there is nothing to choose on.
-pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> Option<Entity<Selection>> {
+/// The windows of the selection screen, opened over the monitors while the screen is taken: out of
+/// sight and empty until it is there. Opening them takes as long as taking the screen does, so the
+/// two are done at once (owner, 2026-11-06, of making the screen come up sooner: 「1がRIO良さそう」).
+pub struct Prepared {
+    windows: Vec<(Rect, WindowHandle<Shell>)>,
+}
+
+/// Opens a window over every monitor there is now, for the screen being taken.
+pub fn prepare(cx: &mut App) -> Option<Prepared> {
+    let layout = platform::screen_capture().layout().ok()?;
+    let pointer = platform::desktop().pointer().ok();
+    let home = pointer
+        .and_then(|pointer| {
+            layout
+                .monitors
+                .iter()
+                .position(|monitor| monitor.bounds.contains(pointer))
+        })
+        .or_else(|| layout.monitors.iter().position(|monitor| monitor.primary))
+        .unwrap_or(0);
+    let windows = layout
+        .monitors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, monitor)| {
+            open_shell(monitor, index == home, cx).map(|handle| (monitor.bounds, handle))
+        })
+        .collect();
+    Some(Prepared { windows })
+}
+
+/// The windows opened for a screen that did not come of it: closed.
+pub fn discard(prepared: Prepared, cx: &mut App) {
+    for (_, window) in prepared.windows {
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+    }
+}
+
+/// A window over a monitor, out of sight (until it has drawn the screen) and empty.
+fn open_shell(monitor: &Monitor, focus: bool, cx: &mut App) -> Option<WindowHandle<Shell>> {
+    let display = crate::display::of(monitor, cx)?;
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(display.bounds())),
+        titlebar: None,
+        focus,
+        show: true,
+        kind: WindowKind::PopUp,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id: Some(display.id()),
+        window_background: WindowBackgroundAppearance::Opaque,
+        ..Default::default()
+    };
+    let opened = cx.open_window(options, |window, cx| {
+        if let Some(handle) = hwnd::of(window) {
+            // The screen comes and goes at once: a fade would show the desktop moving under a
+            // still of itself. And it is not seen before it has drawn the still.
+            platform::without_transitions(handle);
+            platform::set_cloaked(handle, true);
+        }
+        // Alt + F4 gives up, as Esc does.
+        window.on_window_should_close(cx, |_, cx| {
+            if let Some(selection) = capture::current(cx) {
+                cx.defer(move |cx| finish(&selection, None, cx));
+            }
+            false
+        });
+        cx.new(|_| Shell { overlay: None })
+    });
+    match opened {
+        Ok(window) => Some(window),
+        Err(error) => {
+            eprintln!("the selection screen's window was not opened for {}: {error}", monitor.name);
+            None
+        }
+    }
+}
+
+/// A window of the selection screen: empty while the screen is taken, then the screen over its
+/// monitor.
+pub struct Shell {
+    overlay: Option<Entity<Overlay>>,
+}
+
+impl Render for Shell {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        match &self.overlay {
+            Some(overlay) => overlay.clone().into_any_element(),
+            None => div().size_full().bg(gpui::black()).into_any_element(),
+        }
+    }
+}
+
+pub fn open(
+    id: u64,
+    taken: Taken,
+    prepared: Option<Prepared>,
+    mode: Mode,
+    asked: Instant,
+    cx: &mut App,
+) -> Option<Entity<Selection>> {
     let Taken {
         still,
         layout,
@@ -247,66 +348,47 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
 
     // The window with the bar, as it opened (or the first that did).
     let mut opened_home: Option<(usize, AnyWindowHandle)> = None;
+    let mut prepared = prepared.map(|prepared| prepared.windows).unwrap_or_default();
     for (index, monitor) in layout.monitors.iter().enumerate() {
+        // The window opened for this monitor while the screen was taken, or one opened now (the
+        // monitors changed meanwhile).
+        let made = prepared
+            .iter()
+            .position(|(bounds, _)| *bounds == monitor.bounds)
+            .map(|at| prepared.remove(at).1);
         let Some(image) = parts.get(index).cloned().flatten() else {
-            continue;
-        };
-        let Some(display) = crate::display::of(monitor, cx) else {
-            eprintln!("selection {id}: no display of GPUI's for {}", monitor.name);
+            if let Some(made) = made {
+                let _ = made.update(cx, |_, window, _| window.remove_window());
+            }
             continue;
         };
         let is_home = index == home;
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(display.bounds())),
-            titlebar: None,
-            focus: is_home,
-            show: true,
-            kind: WindowKind::PopUp,
-            is_movable: false,
-            is_resizable: false,
-            is_minimizable: false,
-            display_id: Some(display.id()),
-            window_background: WindowBackgroundAppearance::Opaque,
-            ..Default::default()
+        let Some(handle) = made.or_else(|| open_shell(monitor, is_home, cx)) else {
+            eprintln!("selection {id}: a window was not opened for {}", monitor.name);
+            continue;
         };
         let shared = selection.clone();
         let monitor = monitor.clone();
-        let opened = cx.open_window(options, move |window, cx| {
-            if let Some(handle) = hwnd::of(window) {
-                // The screen comes and goes at once: a fade would show the desktop moving under a
-                // still of itself. And it is not seen before it has drawn the still.
-                platform::without_transitions(handle);
-                platform::set_cloaked(handle, true);
-            }
-            // Alt + F4 gives up, as Esc does.
-            let closing = shared.downgrade();
-            window.on_window_should_close(cx, move |_, cx| {
-                if let Some(selection) = closing.upgrade() {
-                    cx.defer(move |cx| finish(&selection, None, cx));
-                }
-                false
-            });
-            cx.new(|cx| Overlay::new(shared, index, monitor, image, window, cx))
+        let adopted = handle.update(cx, move |shell, window, cx| {
+            shell.overlay = Some(cx.new(|cx| Overlay::new(shared, index, monitor, image, window, cx)));
+            cx.notify();
+            hwnd::of(window)
         });
-        match opened {
-            Ok(handle) => {
-                let handle: AnyWindowHandle = handle.into();
-                let id = handle
-                    .update(cx, |_, window, _| hwnd::of(window))
-                    .ok()
-                    .flatten();
-                selection.update(cx, |selection, _| {
-                    selection.overlays.push(handle);
-                    selection.handles.extend(id);
-                    opened_home.get_or_insert((index, handle));
-                    if is_home {
-                        opened_home = Some((index, handle));
-                    }
-                });
+        let Ok(id) = adopted else {
+            continue;
+        };
+        let handle: AnyWindowHandle = handle.into();
+        selection.update(cx, |selection, _| {
+            selection.overlays.push(handle);
+            selection.handles.extend(id);
+            opened_home.get_or_insert((index, handle));
+            if is_home {
+                opened_home = Some((index, handle));
             }
-            Err(error) => eprintln!("selection {id}: a window was not opened: {error}"),
-        }
+        });
     }
+    // (Of monitors that are gone.)
+    discard(Prepared { windows: prepared }, cx);
     // The bar and the keyboard where the pointer is; on another monitor, when that one's window
     // could not be opened (with no bar, nothing could be chosen but by pointing).
     let Some((home, window)) = opened_home else {
@@ -332,6 +414,10 @@ pub fn open(id: u64, taken: Taken, mode: Mode, asked: Instant, cx: &mut App) -> 
     });
     let _ = window.update(cx, |_, window, _| window.activate_window());
     cx.activate(true);
+    eprintln!(
+        "selection {id}: the windows opened {:.0} ms after the shortcut",
+        asked.elapsed().as_secs_f64() * 1000.0
+    );
     take_window_pictures(&selection, own, home_scale, cx);
 
     let shown_anyway = selection.downgrade();
@@ -431,7 +517,7 @@ enum Press {
 }
 
 /// The selection screen over one monitor.
-struct Overlay {
+pub struct Overlay {
     selection: Entity<Selection>,
     monitor: usize,
     /// Its monitor, as the system has it (physical pixels).
