@@ -49,6 +49,8 @@ struct Large {
     /// The window was asked for with no capture in it, and waits for an image: it comes back so
     /// after a capture that came to nothing.
     awaiting: bool,
+    /// The tour of the window was seen since Perora started (before the settings say so).
+    toured: bool,
     _subscription: Option<Subscription>,
 }
 
@@ -134,11 +136,14 @@ pub fn awaiting(cx: &mut App) -> bool {
 fn open(capture: Option<Capture>, cx: &mut App) {
     // (Which way to make a part unreadable the editor starts with, as the settings say.)
     let hider = Perora::get(cx).settings().default_hider;
+    let seen = tour_seen(cx);
     if let Some(window) = cx.default_global::<Large>().window {
         let _ = window.update(cx, move |editor, window, cx| {
             editor.set_default_hider(hider);
+            editor.set_tour_seen(seen);
             if let Some(capture) = capture {
                 editor.show(capture, cx);
+                editor.offer_tour(cx);
             }
             if let Some(handle) = hwnd::of(window) {
                 fade_in(handle, cx);
@@ -178,8 +183,10 @@ fn open(capture: Option<Capture>, cx: &mut App) {
         let editor = cx.new(|cx| {
             let mut editor = Editor::new(language.clone(), window, cx);
             editor.set_default_hider(hider);
+            editor.set_tour_seen(seen);
             if let Some(capture) = capture {
                 editor.show(capture, cx);
+                editor.offer_tour(cx);
             }
             editor
         });
@@ -255,7 +262,30 @@ fn asked(editor: Entity<Editor>, event: Event, cx: &mut App) {
         Event::Changed => changed(cx),
         Event::Leave(Leave::Save) => preview::save(id, cx),
         Event::Discard => preview::discard_by_user(Some(id), cx),
+        Event::Toured => saw_tour(cx),
         Event::Open(_) => {}
+    }
+}
+
+/// Whether the tour of the window was seen: the settings say so, or it was, since Perora started.
+fn tour_seen(cx: &mut App) -> bool {
+    cx.default_global::<Large>().toured
+        || Perora::get(cx)
+            .settings()
+            .tours_seen
+            .contains(&perora_core::settings::Tour::Editor)
+}
+
+/// The tour of the window was seen (to the end, or put away): it does not come on its own again.
+fn saw_tour(cx: &mut App) {
+    let large = cx.default_global::<Large>();
+    if large.toured {
+        return;
+    }
+    large.toured = true;
+    let perora = Perora::get(cx);
+    if let Some(path) = perora.settings_path.clone() {
+        perora_core::settings::tour_seen(&path, &perora.settings, "editor");
     }
 }
 
@@ -307,6 +337,8 @@ pub fn hide(cx: &mut App) -> bool {
         .update(cx, |editor, window, cx| {
             // (Its button let go while it is hidden, nobody would hear it.)
             editor.settle(cx);
+            // (Out of sight while it is on, the tour is over, and not seen.)
+            editor.end_tour(false, cx);
             hwnd::of(window)
         })
         .ok()
@@ -486,6 +518,9 @@ struct Actions {
     opened: Instant,
     /// For which capture it was open: another capture has none open.
     choosing_for: Option<u64>,
+    /// The choice was opened by the tour: it is the tour's to put away.
+    by_tour: bool,
+    marks: perora_ui::tour::Marks,
 }
 
 /// The arrow that opens the choice, and how the choice comes down.
@@ -503,6 +538,8 @@ impl Actions {
             choosing: None,
             opened: Instant::now(),
             choosing_for: None,
+            by_tour: false,
+            marks: editor.read(cx).marks(),
         }
     }
 
@@ -693,6 +730,7 @@ impl Actions {
                     }),
             );
         }
+        let list = list.relative().child(self.marks.mark("menu"));
         Some(
             div()
                 .absolute()
@@ -732,10 +770,15 @@ impl Render for Actions {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let t = |key: &str| self.language.text(key, &[]).to_string();
-        let Some((id, edits)) = self
+        let Some((id, edits, touring, tour_opens)) = self
             .editor
             .read_with(cx, |editor, _| {
-                (editor.capture_id(), editor.edits().to_vec())
+                (
+                    editor.capture_id(),
+                    editor.edits().to_vec(),
+                    editor.touring(),
+                    editor.tour_opens_choice(),
+                )
             })
             .ok()
         else {
@@ -747,6 +790,16 @@ impl Render for Actions {
         // (Another capture has its own choice: none open.)
         if self.choosing_for != Some(id) {
             self.choosing = None;
+        }
+        // The tour opens the choice beside saving for its step, and puts it away after.
+        if tour_opens && self.choosing.is_none() {
+            self.choosing = Some(Leaves::Save);
+            self.choosing_for = Some(id);
+            self.opened = Instant::now();
+            self.by_tour = true;
+        } else if !tour_opens && self.by_tour {
+            self.choosing = None;
+            self.by_tour = false;
         }
         let said = preview::said_of(id, &edits, cx);
         let copied = said.as_ref().is_some_and(|said| said.copied);
@@ -795,8 +848,8 @@ impl Render for Actions {
             .choosing
             .and_then(|leaves| self.menu(leaves, id, &theme, window, cx));
         // While the choice is open, Esc puts it away and no other key does anything (owner's
-        // window: the keys are the editor's otherwise).
-        if self.choosing.is_some() {
+        // window: the keys are the editor's otherwise). Not while the tour is on: they are its.
+        if self.choosing.is_some() && !touring {
             let this = cx.entity().downgrade();
             window.on_key_event(move |event: &KeyDownEvent, phase, _, cx| {
                 if phase != gpui::DispatchPhase::Capture {
@@ -811,12 +864,16 @@ impl Render for Actions {
                 }
             });
         }
-        let save_as_chevron = self.chevron(Leaves::Save, id, &theme, cx);
+        let save_as_chevron = div()
+            .relative()
+            .child(self.chevron(Leaves::Save, id, &theme, cx))
+            .child(self.marks.mark("as"));
         let copy_as_chevron = self.chevron(Leaves::Copy, id, &theme, cx);
         div()
             .relative()
             .flex()
             .gap(px(4.0))
+            .child(self.marks.mark("actions"))
             .child(
                 div()
                     .flex()
@@ -841,6 +898,7 @@ struct Status {
     /// (Weakly: the editor holds this view.)
     editor: WeakEntity<Editor>,
     clipboard: Option<u32>,
+    marks: perora_ui::tour::Marks,
 }
 
 impl Status {
@@ -851,6 +909,7 @@ impl Status {
             language,
             editor: editor.downgrade(),
             clipboard: platform::clipboard_sequence(),
+            marks: editor.read(cx).marks(),
         }
     }
 }
@@ -915,7 +974,14 @@ impl Render for Status {
         });
         let count = edits.len().to_string();
         let most = perora_core::drawing::MOST_EDITS.to_string();
-        div().flex().flex_col().gap(px(2.0)).child(first).child(
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .child(self.marks.mark("status"))
+            .child(first)
+            .child(
             div().text_color(theme.muted).child(format!(
                 "{width} × {height} · {}",
                 self.language

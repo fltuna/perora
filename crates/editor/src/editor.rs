@@ -14,6 +14,8 @@ mod cropping;
 mod hiding;
 mod lettering;
 mod panels;
+mod playing;
+mod touring;
 mod turning;
 mod typing;
 
@@ -70,6 +72,8 @@ pub enum Event {
     Discard,
     /// An image is asked to be opened here.
     Open(Open),
+    /// The tour was seen (to the end, or put away): it does not come on its own again.
+    Toured,
 }
 
 /// Where an image to open in the editor comes from.
@@ -208,6 +212,16 @@ pub struct Editor {
     hiders: tools::hide::Hiders,
     hidden_kept: hiding::Kept,
     default_hider: perora_core::settings::Hider,
+    /// Where the things the tour shows are; the tour, while it is on; whether it comes on its own;
+    /// what a step of it has the editor do (and how many have).
+    marks: perora_ui::tour::Marks,
+    touring: Option<touring::Touring>,
+    offered: touring::Offered,
+    offers_upload: bool,
+    play: Option<playing::Play>,
+    plays: u64,
+    /// Pixels of the screen to one of the window, as last drawn.
+    dense: f32,
 }
 
 impl EventEmitter<Event> for Editor {}
@@ -283,12 +297,28 @@ impl Editor {
             },
             hidden_kept: hiding::Kept::default(),
             default_hider: perora_core::settings::Hider::Last,
+            marks: Default::default(),
+            touring: None,
+            offered: Default::default(),
+            offers_upload: false,
+            play: None,
+            plays: 0,
+            dense: window.scale_factor(),
         }
+    }
+
+    /// Where the things the tour shows are marked: the window's parts in the editor mark theirs here
+    /// too (what the capture leaves as, what is said of it).
+    pub fn marks(&self) -> perora_ui::tour::Marks {
+        self.marks.clone()
     }
 
     /// Another capture, drawn on anew: nothing of the one before is left (what is drawn, what is
     /// undone, the tool, the look).
     pub fn show(&mut self, capture: Capture, cx: &mut Context<Self>) {
+        // (What a step of the tour was doing was about the capture before: not given back to this
+        // one.)
+        self.play = None;
         if let Some(old) = self.capture.take() {
             self.retired.push(old.picture);
         }
@@ -325,6 +355,10 @@ impl Editor {
         self.was = (Kind::Select, None);
         self.solid = 1.0;
         self.motions = Motions::default();
+        // (The tour goes on over the new one: its step shows anew.)
+        if self.touring.is_some() {
+            self.step_shown(cx);
+        }
         cx.notify();
     }
 
@@ -1163,6 +1197,10 @@ impl Editor {
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         let modifiers = event.keystroke.modifiers;
+        // The keys are the tour's while it is on.
+        if self.tour_key(event, cx) {
+            return;
+        }
         if self.frozen {
             cx.stop_propagation();
             return;
@@ -1349,8 +1387,18 @@ impl Editor {
         let button = |id: SharedString, current: bool, enabled: bool| {
             bars::button(id, current, enabled, theme)
         };
-        let mut bar = div().flex().items_center().gap(px(4.0));
+        let mut bar = div()
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(self.marks.mark("tools"));
         for kind in [Kind::Select, Kind::Pen, Kind::Marker] {
+            let mark = match kind {
+                Kind::Select => "tool-select",
+                Kind::Pen => "tool-pen",
+                _ => "tool-marker",
+            };
             let pen = kind.is_stroke();
             let colour = match kind {
                 Kind::Pen => Some(paint::colour(self.pen.colour)),
@@ -1381,7 +1429,8 @@ impl Editor {
                                 .child(icons::caret(theme.text)),
                         )
                     })
-                    .when(pen, |button| button.child(self.stroke_opener(kind))),
+                    .when(pen, |button| button.child(self.stroke_opener(kind)))
+                    .child(self.marks.mark(mark)),
             );
         }
         // The shapes and lines: one button, which takes up the last of them taken; drawn in their
@@ -1405,7 +1454,8 @@ impl Editor {
                     icons::shapes(paint::colour(figures.colour), inside),
                     16.0,
                     theme.text,
-                )),
+                ))
+                .child(self.marks.mark("tool-shapes")),
         );
         // The text: its letter, with a line under it in the colour it is written in (of the line
         // around the letters, where they have no inside).
@@ -1427,7 +1477,8 @@ impl Editor {
                     icons::of_tool(Kind::Text, Some(paint::colour(written_in)), None),
                     16.0,
                     theme.text,
-                )),
+                ))
+                .child(self.marks.mark("tool-text")),
         );
         let named = format!(
             "{} ({})",
@@ -1442,7 +1493,8 @@ impl Editor {
                     icons::of_tool(Kind::Stamp, Some(paint::colour(self.stamps.colour)), None),
                     16.0,
                     theme.text,
-                )),
+                ))
+                .child(self.marks.mark("tool-stamp")),
         );
         // Cutting the image down.
         let named = format!(
@@ -1457,7 +1509,8 @@ impl Editor {
                 icons::of_tool(Kind::Crop, None, None),
                 16.0,
                 theme.text,
-            ));
+            ))
+            .child(self.marks.mark("tool-crop"));
         // The two ways to make a part unreadable: one button, which takes up the last of them taken.
         let hider = if self.tool.is_hider() {
             self.tool
@@ -1479,7 +1532,8 @@ impl Editor {
                     icons::of_tool(hider, None, None),
                     16.0,
                     theme.text,
-                )),
+                ))
+                .child(self.marks.mark("tool-hide")),
         );
         bar = bar.child(crop);
         let typing = self.typing.is_some();
@@ -1761,6 +1815,8 @@ impl Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.dense = window.scale_factor();
+        self.marks.turn();
         self.follow();
         self.follow_motions(window, cx);
         let theme = Theme::get(cx).clone();
@@ -1771,6 +1827,8 @@ impl Render for Editor {
         let panel = self.panel_view(&theme, window, cx);
         let stage = self.stage(cx);
         let zoom = self.zoom(&theme, window, cx);
+        let guide = self.guide_button(&theme, cx);
+        let tour = self.tour_view(&theme, window, cx);
         let text: Hsla = theme.text;
         // (An image dragged over the window: the only things dragged into it are files.)
         let dropping = cx.has_active_drag();
@@ -1812,8 +1870,8 @@ impl Render for Editor {
                 div()
                     .flex()
                     .items_start()
-                    // (P6: the tour's i, at the left.)
-                    .child(div().flex_1().min_w_0())
+                    // The tour's "i", at the left.
+                    .child(div().flex_1().min_w_0().child(guide))
                     .child(tools)
                     .child(
                         div()
@@ -1824,7 +1882,14 @@ impl Render for Editor {
                             .children(self.top_right.clone()),
                     ),
             )
-            .child(div().flex_1().min_h_0().relative().child(stage))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(stage)
+                    .child(self.marks.mark("stage")),
+            )
             .child(
                 div()
                     .flex()
@@ -1838,6 +1903,7 @@ impl Render for Editor {
             .children(lettering)
             .children(panel)
             .when(dropping, |editor| editor.child(self.dropping_view(&theme)))
+            .children(tour)
             .into_any_element()
     }
 }
