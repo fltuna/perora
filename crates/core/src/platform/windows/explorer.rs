@@ -19,6 +19,20 @@ pub const CLASSES: &str = r"Software\Classes";
 /// The entry of the menu, under what the system says of every image.
 const VERB: &str = r"SystemFileAssociations\image\shell\Perora";
 
+/// The entry of the menu under one kind of file. Every image is not every kind the system counts
+/// as an image: it goes by the kinds it knows of itself (PNG, JPEG and so on), not those it is told
+/// of in the registry later (WebP, HEIC, AVIF, JPEG XR), on which the entry is not shown (owner,
+/// 2026-11-07: 「webpは出てこないかも右栗」). So it is under each kind Perora opens too; on a kind
+/// that has both, the system shows it once.
+fn verb_of(kind: &str) -> String {
+    format!(r"SystemFileAssociations\{kind}\shell\Perora")
+}
+
+/// Every place the entry is kept: under every image, and under each kind.
+fn verbs() -> impl Iterator<Item = String> {
+    std::iter::once(VERB.to_owned()).chain(KINDS.into_iter().map(verb_of))
+}
+
 /// What Perora is started with to open a file: the file follows.
 pub const OPEN: &str = "--open";
 
@@ -58,12 +72,14 @@ pub fn registered(classes: &str) -> Option<String> {
 pub fn register(classes: &str, program: &str, label: &str) -> Result<(), String> {
     unregister(classes, program)?;
     let opened = command(program);
-    let verb = format!(r"{classes}\{VERB}");
-    set_command_in(&verb, "", Some(label))?;
-    set_command_in(&verb, "Icon", Some(&format!("\"{program}\",0")))?;
-    // (Not on several files at once: one image is opened at a time.)
-    set_command_in(&verb, "MultiSelectModel", Some("Single"))?;
-    set_command_in(&format!(r"{verb}\command"), "", Some(&opened))?;
+    for verb in verbs() {
+        let verb = format!(r"{classes}\{verb}");
+        set_command_in(&verb, "", Some(label))?;
+        set_command_in(&verb, "Icon", Some(&format!("\"{program}\",0")))?;
+        // (Not on several files at once: one image is opened at a time.)
+        set_command_in(&verb, "MultiSelectModel", Some("Single"))?;
+        set_command_in(&format!(r"{verb}\command"), "", Some(&opened))?;
+    }
 
     let application = application(classes, program);
     set_command_in(&application, "FriendlyAppName", Some("Perora"))?;
@@ -80,17 +96,22 @@ pub fn register(classes: &str, program: &str, label: &str) -> Result<(), String>
 
 /// Takes all of that away again. What is not there is away already.
 pub fn unregister(classes: &str, program: &str) -> Result<(), String> {
-    remove_tree(&format!(r"{classes}\{VERB}"))?;
+    for verb in verbs() {
+        remove_tree(&format!(r"{classes}\{verb}"))?;
+    }
     remove_tree(&application(classes, program))
 }
 
-/// Whether the label of the entry is that one: for telling whether it is to be written anew (the
-/// user's language changed).
+/// Whether the label of the entry is that one, everywhere it is kept: for telling whether it is to
+/// be written anew (the user's language changed, or it was written where it is under every image
+/// only, as Perora did before).
 pub fn labelled(classes: &str, label: &str) -> bool {
-    text_in(&format!(r"{classes}\{VERB}"), "")
-        .ok()
-        .flatten()
-        .is_some_and(|there| there == label)
+    verbs().all(|verb| {
+        text_in(&format!(r"{classes}\{verb}"), "")
+            .ok()
+            .flatten()
+            .is_some_and(|there| there == label)
+    })
 }
 
 fn remove_tree(key: &str) -> Result<(), String> {
@@ -170,6 +191,18 @@ mod tests {
             text_in(&format!(r"{application}\SupportedTypes"), ".webp"),
             Ok(Some(String::new()))
         );
+        // Under each kind too: WebP is not among the images the system knows of itself.
+        let webp = format!(r"{}\{}", classes.0, verb_of(".webp"));
+        assert_eq!(
+            command_in(&format!(r"{webp}\command"), ""),
+            Some(command(PROGRAM))
+        );
+        assert_eq!(text_in(&webp, ""), Ok(Some("Perora で開く".to_owned())));
+        // As Perora wrote it before (under every image only): it is to be written anew.
+        remove_tree(&webp).unwrap();
+        assert!(!labelled(&classes.0, "Perora で開く"));
+        register(&classes.0, PROGRAM, "Perora で開く").unwrap();
+        assert!(labelled(&classes.0, "Perora で開く"));
 
         // Another copy of Perora, elsewhere: it is that one that opens images now.
         let elsewhere = r"D:\work\perora\target\debug\perora.exe";
@@ -179,6 +212,7 @@ mod tests {
 
         unregister(&classes.0, elsewhere).unwrap();
         assert_eq!(registered(&classes.0), None);
+        assert_eq!(command_in(&format!(r"{webp}\command"), ""), None);
         assert_eq!(
             command_in(&format!(r"{application}\shell\open\command"), ""),
             None
