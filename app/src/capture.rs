@@ -316,6 +316,17 @@ fn come_back(cx: &mut App) {
 pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     let perora = Perora::get(cx);
     let settings = perora.settings();
+    sound(&settings);
+    match settings.after_capture {
+        After::Copy => copy_alone(source, area, settings, cx),
+        After::Preview | After::Edit => to_preview(source, area, settings, cx),
+    }
+}
+
+/// The capture's sound, as the user has it (none, one of the system's, or a file of their own).
+/// Also with the small preview shown where it appears, as a capture shows it (owner, 2026-11-07:
+/// 「プレビューのやつは通知音も一緒に鳴らすようにしたいね、気づかないかも人が」).
+pub fn sound(settings: &Settings) {
     let sound = match &settings.capture_sound {
         Sound::None => None,
         Sound::System(name) => platform::system_sound(name),
@@ -323,10 +334,6 @@ pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     };
     if let Some(sound) = sound {
         platform::play_sound(&sound);
-    }
-    match settings.after_capture {
-        After::Copy => copy_alone(source, area, settings, cx),
-        After::Preview | After::Edit => to_preview(source, area, settings, cx),
     }
 }
 

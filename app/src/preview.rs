@@ -125,6 +125,9 @@ pub fn moved(cx: &mut App) {
     previews.sampling = true;
     previews.sampled += 1;
     let sampled = previews.sampled;
+    // With the capture's sound, as after a capture: one may not be looking at that corner. (Not
+    // when one is on screen already and only goes elsewhere: that is being looked at.)
+    capture::sound(&Perora::get(cx).settings());
     show(cx);
     changed(cx);
     cx.spawn(async move |cx| {
