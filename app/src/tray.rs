@@ -12,8 +12,8 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 
 use crate::Signal;
 
-/// The number the icon is embedded under (perora.rc).
-const ICON_RESOURCE: u16 = 32512;
+/// The number the icon is embedded under (perora.rc): the one GPUI gives its windows.
+const ICON_RESOURCE: u16 = 1;
 
 pub struct Tray {
     _icon: TrayIcon,

@@ -1,3 +1,4 @@
-// The application's icon. 32512 is the number Tauri gave it (IDI_APPLICATION): the notification area
-// loads it by that number at the size it draws (16, 20, 24...), as the Tauri version did.
-32512 ICON "icons/icon.ico"
+// The application's icon, as number 1: GPUI gives its windows (their title bars and the taskbar) the
+// icon numbered 1, and the notification area loads it by the same number at the size it draws (16,
+// 20, 24...). (The Tauri version had it as 32512; nothing outside reads it by its number.)
+1 ICON "icons/icon.ico"
