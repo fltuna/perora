@@ -2,6 +2,7 @@
 //! per tool (`tools`), the same drawing code for the screen and for the picture that leaves
 //! (`paint`), and the editor that puts them together (`editor`).
 
+pub mod checker;
 pub mod editor;
 pub mod hidden;
 pub mod icons;

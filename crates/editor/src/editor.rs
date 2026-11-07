@@ -154,6 +154,8 @@ pub struct Editor {
     /// Where the picture is shown, as last laid out (logical pixels of the window; its corner on a
     /// whole pixel of the screen).
     stage: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The squares behind the picture (kept: the picture of them is made once for a look).
+    checker: Rc<crate::checker::Checker>,
     gesture: Option<Gesture>,
     /// Space is held: the pointer takes hold of the picture, not of a tool.
     grabbing: bool,
@@ -262,6 +264,7 @@ impl Editor {
             just_drawn: false,
             looking: Looking::default(),
             stage: Rc::new(Cell::new(None)),
+            checker: Rc::default(),
             gesture: None,
             grabbing: false,
             selected: Vec::new(),
@@ -1658,6 +1661,7 @@ impl Editor {
         let rewritten = self.typing.as_ref().and_then(|typing| typing.index);
         let focus = self.focus.clone();
         let theme = Theme::get(cx).clone();
+        let checker = self.checker.clone();
         canvas(
             |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
             move |bounds, hitbox, window, cx| {
@@ -1678,6 +1682,8 @@ impl Editor {
                     size: bounds.size,
                 };
                 stage.set(Some(placed));
+                // Behind the picture, squares: seen beside it, and where it is clear.
+                checker.paint(placed, theme.surface, theme.background, window);
                 if let (Some(picture), Some(view)) = (picture, view) {
                     let size = (bounds.size.width.as_f32(), bounds.size.height.as_f32());
                     let look = view::look(size, view, looking, dense);
@@ -1758,6 +1764,8 @@ impl Editor {
                 } else if !frozen {
                     window.set_cursor_style(cursor, &hitbox);
                 }
+                // Around it, the line with its rounded corners, which cut what reaches into them.
+                crate::checker::frame(placed, theme.border, theme.background, window);
 
                 // Every mouse event of the window: while a button is held, the window goes on
                 // getting them, also beside the place and outside the window.
@@ -1914,6 +1922,8 @@ impl Render for Editor {
                     .flex_1()
                     .min_h_0()
                     .relative()
+                    // (Room for the line the stage draws around itself.)
+                    .p(px(crate::checker::LINE))
                     .child(stage)
                     .child(self.marks.mark("stage")),
             )
