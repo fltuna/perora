@@ -491,15 +491,7 @@ fn explorer_entry(cx: &mut App) {
         eprintln!("dry: Explorer's entry would be kept as the settings say");
         return;
     }
-    keep_explorer_entry(cx);
-}
-
-// TEMPORARY: `crate::opening::keep_explorer_entry(cx: &mut App)` is being written by another
-// session (the port of the Tauri version's `keep_explorer_entry`). This stands in for it until that
-// is merged: then this goes, and `explorer_entry` calls that one.
-fn keep_explorer_entry(cx: &mut App) {
-    let _ = cx;
-    eprintln!("Explorer's entry: not yet (opening::keep_explorer_entry)");
+    crate::opening::keep_explorer_entry(cx);
 }
 
 /// Captures, as the shortcut does (the main window steps aside for it).

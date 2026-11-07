@@ -38,6 +38,9 @@ use perora_core::language::Language;
 use perora_core::platform::{self, Desktop, Frame, Monitor, ScreenCapture, ScreenLayout, WindowId};
 use perora_core::selection::{Choice, Mode, Session, without_edge};
 
+// (Its path said: `examples/look_main.rs` takes this file in by its path, where a part would be
+// looked for beside it.)
+#[path = "selection/touring.rs"]
 mod touring;
 
 use crate::bar::{self, Bar};

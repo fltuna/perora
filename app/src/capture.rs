@@ -78,6 +78,10 @@ pub fn start(cx: &mut App) {
     if cx.default_global::<Capturing>().busy {
         return;
     }
+    // (Not over the screen that sets the part bringing the bar back: it would be in the picture.)
+    if crate::main_window::area_screen::is_up(cx) {
+        return;
+    }
     // A capture that goes to the preview takes the place of the image there: when something is
     // drawn on that, the user says first whether that is what they want (owner, 2026-11-02: 「撮影
     // 入る前に出そうか」). Not when the capture goes elsewhere (only copied), nor while the selection
