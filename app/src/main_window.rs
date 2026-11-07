@@ -517,6 +517,14 @@ pub fn open(cx: &mut App) {
     }
 }
 
+/// Whether the main window is open on the account page.
+pub fn on_account_page(cx: &mut App) -> bool {
+    find(cx)
+        .and_then(|window| window.downcast::<MainWindow>())
+        .and_then(|window| window.read_with(cx, |main, _| main.page == Page::Account).ok())
+        .unwrap_or(false)
+}
+
 fn find(cx: &App) -> Option<AnyWindowHandle> {
     cx.windows()
         .into_iter()

@@ -613,6 +613,11 @@ pub fn relanguage(cx: &mut App) {
     }
 }
 
+/// The capture that is on its way to the server, if one is.
+pub fn uploading(cx: &mut App) -> Option<u64> {
+    cx.default_global::<Previews>().uploading
+}
+
 /// Throws the capture away and closes the window: `id` when it is still the one previewed, whichever
 /// is previewed when no id is given.
 fn discard(id: Option<u64>, cx: &mut App) {
@@ -678,7 +683,7 @@ pub fn discard_by_user(id: Option<u64>, cx: &mut App) {
 /// The capture, when it is still `id` and nothing is being done with it: something is to be done.
 fn to_do(id: u64, cx: &mut App) -> Option<&mut Pending> {
     let previews = cx.default_global::<Previews>();
-    if previews.busy.is_some() {
+    if previews.busy.is_some() || previews.uploading == Some(id) {
         return None;
     }
     previews.pending.as_mut().filter(|pending| pending.id == id)
@@ -902,8 +907,13 @@ fn uploaded(id: u64, outcome: Result<String, String>, cx: &mut App) {
         .is_some_and(|pending| pending.id == id);
     match outcome {
         Ok(url) => {
-            let copied = arboard::Clipboard::new()
-                .and_then(|mut clipboard| clipboard.set_text(url.clone()));
+            // (Only an address of the server's own goes on the clipboard, as the account page has
+            // it.)
+            let copied = if account::is_at_server(&url, cx) {
+                arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(url.clone()))
+            } else {
+                Err(arboard::Error::ContentNotAvailable)
+            };
             let (said, lasting) = match copied {
                 Ok(()) => (language.uploaded(), Lasting::Brief),
                 Err(error) => {
@@ -915,8 +925,7 @@ fn uploaded(id: u64, outcome: Result<String, String>, cx: &mut App) {
                 discard(Some(id), cx);
             }
             notice::say(said, lasting, None, cx);
-            // (The account page lists it.)
-            account::ask_recent(cx);
+            account::uploaded(cx);
         }
         Err(said) => {
             if !current {
@@ -924,10 +933,14 @@ fn uploaded(id: u64, outcome: Result<String, String>, cx: &mut App) {
                 changed(cx);
                 return;
             }
-            let previews = cx.default_global::<Previews>();
-            previews.upload_failure = Some(said);
-            if previews.large {
-                large::stays(id, cx);
+            cx.default_global::<Previews>().upload_failure = Some(said.clone());
+            // Drawn on again, and back on screen as it is shown (the large window, which may have
+            // been put away for a capture meanwhile, or opened from the main window; or the small
+            // one). While a capture is under way it comes back after it, if that comes to nothing:
+            // the notice says why meanwhile, and stays said should the new capture take its place.
+            large::thaw(id, cx);
+            if capture::busy(cx) {
+                notice::say(said, Lasting::Long, None, cx);
             } else {
                 show(cx);
             }

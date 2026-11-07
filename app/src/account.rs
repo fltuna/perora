@@ -288,7 +288,7 @@ fn signed(outcome: Result<(), AccountError>, cx: &mut App) {
     if outcome.is_ok() {
         // Before the wait is over: the window never shows "not signed in" between the two.
         accounts.signed_in = Some(SignedIn::default());
-        accounts.recent = Recent::Asking;
+        forget_uploads(accounts);
     }
     accounts.waiting = None;
     changed(cx);
@@ -298,6 +298,8 @@ fn signed(outcome: Result<(), AccountError>, cx: &mut App) {
                 .language()
                 .signed_in(name.as_deref().unwrap_or("?"));
             notice::say(said, Lasting::Brief, None, cx);
+            // (The account page is likely open: it was signed in from there.)
+            ask_recent(cx);
         }),
         // The user gave up, or Perora is quitting: nothing to say.
         Err(AccountError::Oidc(OidcError::Cancelled)) => refresh(cx, |_, _| {}),
@@ -333,8 +335,7 @@ pub fn sign_out(cx: &mut App) {
             Ok(()) => {
                 if let Some(accounts) = accounts_mut(cx) {
                     accounts.signed_in = None;
-                    accounts.recent = Recent::Asking;
-                    accounts.pictures.clear();
+                    forget_uploads(accounts);
                 }
                 changed(cx);
             }
@@ -406,9 +407,25 @@ pub fn refresh(cx: &mut App, then: impl FnOnce(Option<String>, &mut App) + 'stat
 pub fn signed_out_by_server(cx: &mut App) {
     if let Some(accounts) = accounts_mut(cx) {
         accounts.signed_in = None;
-        accounts.recent = Recent::Asking;
+        forget_uploads(accounts);
     }
     changed(cx);
+}
+
+/// Who is signed in changed: the uploads of whoever was are forgotten, and what was being asked
+/// for them comes to nothing.
+fn forget_uploads(accounts: &mut Accounts) {
+    accounts.recent = Recent::Asking;
+    accounts.pictures.clear();
+    accounts.asked += 1;
+}
+
+/// An upload got there: the account page lists it, when it is on screen (otherwise it asks as it
+/// appears: the pictures are not fetched for a page nobody looks at).
+pub fn uploaded(cx: &mut App) {
+    if crate::main_window::on_account_page(cx) {
+        ask_recent(cx);
+    }
 }
 
 /// Asks the server for the user's recent uploads (when the account page appears, the main window
@@ -441,13 +458,15 @@ pub fn ask_recent(cx: &mut App) {
                 .collect(),
             Err(error) => {
                 cx.update(|cx| {
+                    // (An answer to an asking since outdone, a sign-in since ended, says nothing.)
+                    if get(cx).is_none_or(|accounts| accounts.asked != asked) {
+                        return;
+                    }
                     if matches!(error, shots::ApiError::SignedOut) {
                         signed_out_by_server(cx);
                         return;
                     }
-                    if let Some(accounts) = accounts_mut(cx)
-                        && accounts.asked == asked
-                    {
+                    if let Some(accounts) = accounts_mut(cx) {
                         // (What was there stays, should there be something.)
                         if matches!(accounts.recent, Recent::Asking) {
                             accounts.recent = Recent::Unreachable;
@@ -476,7 +495,7 @@ pub fn ask_recent(cx: &mut App) {
             let Some(accounts) = accounts_mut(cx) else {
                 return false;
             };
-            if accounts.asked != asked {
+            if accounts.asked != asked || accounts.signed_in.is_none() {
                 return false;
             }
             accounts.recent = Recent::Got(first);

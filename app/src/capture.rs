@@ -370,11 +370,15 @@ fn upload_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App
             let language = Perora::get(cx).language();
             let (said, lasting) = match outcome {
                 Ok(shot) => {
-                    // (The account page lists it.)
-                    account::ask_recent(cx);
-                    match arboard::Clipboard::new()
-                        .and_then(|mut clipboard| clipboard.set_text(shot.url.clone()))
-                    {
+                    account::uploaded(cx);
+                    // (Only an address of the server's own goes on the clipboard.)
+                    let copied = if account::is_at_server(&shot.url, cx) {
+                        arboard::Clipboard::new()
+                            .and_then(|mut clipboard| clipboard.set_text(shot.url.clone()))
+                    } else {
+                        Err(arboard::Error::ContentNotAvailable)
+                    };
+                    match copied {
                         Ok(()) => (language.uploaded(), Lasting::Brief),
                         Err(error) => {
                             eprintln!("clipboard: the link was not put there: {error}");

@@ -466,11 +466,13 @@ pub fn drawing_of(id: u64, cx: &mut App) -> Option<Vec<Edit>> {
 /// would take the place of.
 pub fn drawn_on(cx: &mut App) -> Option<u64> {
     let window = cx.default_global::<Large>().window?;
+    // (Not the one on its way to the server: what is drawn on it has gone with it.)
+    let uploading = preview::uploading(cx);
     window
         .read_with(cx, |editor, _| {
             editor
                 .capture_id()
-                .filter(|_| !editor.edits().is_empty())
+                .filter(|id| !editor.edits().is_empty() && Some(*id) != uploading)
         })
         .ok()
         .flatten()
@@ -549,6 +551,19 @@ pub fn stays(id: u64, cx: &mut App) {
         editor.set_frozen(false, cx);
         if let Some(handle) = hwnd::of(window) {
             platform::set_cloaked(handle, false);
+        }
+    });
+}
+
+/// The capture did not leave after all: it can be drawn on again (as it is shown, where it is: out
+/// of sight, it comes back as it is shown again).
+pub fn thaw(id: u64, cx: &mut App) {
+    let Some(window) = cx.default_global::<Large>().window else {
+        return;
+    };
+    let _ = window.update(cx, |editor, _, cx| {
+        if editor.capture_id() == Some(id) {
+            editor.set_frozen(false, cx);
         }
     });
 }
