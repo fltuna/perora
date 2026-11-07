@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.1
+
+### New
+
+- A "Changelog" page in the main window shows what changed in each version
+- When you skip versions, the notice of a new version shows everything that changed since the version you have (from the next update)
+
+### Fixes
+
+- The title bar and the taskbar showed Windows' plain icon instead of Perora's
+
 ## v0.2.0
 
 Perora has been rebuilt inside. It no longer uses WebView2, and is lighter and faster. Its windows and how you use it are the same as in 0.1.7.
