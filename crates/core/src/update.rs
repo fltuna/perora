@@ -33,9 +33,13 @@ pub const SILENT_FOR_AT_MOST: Duration = Duration::from_secs(30);
 /// NSIS one by name, then the plain one (as Tauri's updater looked for them).
 const TARGETS: [&str; 2] = ["windows-x86_64-nsis", "windows-x86_64"];
 
-/// Larger than any `latest.json`, and than any installer Perora will have: what is larger is not one.
+/// Larger than any `latest.json`, and than any installer Perora will have (0.2.0's is under 10 MiB):
+/// what is larger is not one. Counted as it is read, after any compression is undone.
 const LATEST_AT_MOST: u64 = 1 << 20;
-const INSTALLER_AT_MOST: usize = 512 << 20;
+const INSTALLER_AT_MOST: usize = 64 << 20;
+/// What a release may say of what changed in it, in each language: more is not said at all (it is
+/// drawn as the main window is, and comes before the signature is checked).
+const CHANGES_AT_MOST: usize = 64 << 10;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -158,12 +162,18 @@ pub fn newest(current: &str) -> Result<Option<Release>, Error> {
     if !(200..300).contains(&status) {
         return Err(Error::Status(status));
     }
-    let body = response
+    // (The limit of the body's own reader counts what came over the line, before it is unzipped:
+    // this counts what it is unzipped into.)
+    let mut body = Vec::new();
+    response
         .body_mut()
-        .with_config()
-        .limit(LATEST_AT_MOST)
-        .read_to_vec()
-        .map_err(unreachable)?;
+        .as_reader()
+        .take(LATEST_AT_MOST + 1)
+        .read_to_end(&mut body)
+        .map_err(|error| Error::Unreachable(error.to_string()))?;
+    if body.len() as u64 > LATEST_AT_MOST {
+        return Err(Error::Unreadable("larger than a release says".into()));
+    }
     newer(&body, current)
 }
 
@@ -185,11 +195,15 @@ pub fn newer(latest: &[u8], current: &str) -> Result<Option<Release>, Error> {
     if url.scheme() != "https" {
         return Err(Error::Unreadable(format!("not an address to fetch from: {url}")));
     }
+    let within = |changes: Option<String>| changes.filter(|changes| changes.len() <= CHANGES_AT_MOST);
     Ok(Some(Release {
         version: version.to_string(),
         url: url.into(),
         signature: platform.signature.clone(),
-        changes: latest.changes,
+        changes: Changes {
+            ja: within(latest.changes.ja),
+            en: within(latest.changes.en),
+        },
     }))
 }
 
@@ -427,6 +441,15 @@ mod tests {
         // 0.1.x's releases say nothing of it.
         let found = newer(LATEST_0_1_7.as_bytes(), "0.1.6").unwrap().unwrap();
         assert_eq!(found.changes("ja"), None);
+
+        // Too much to say is not said.
+        let long = format!(
+            r#"{{"version": "0.3.0", "changes": {{"ja": "{}", "en": "- Fixed"}},
+            "platforms": {{"windows-x86_64": {{"url": "https://example.com/a.exe", "signature": "s"}}}}}}"#,
+            "a".repeat(CHANGES_AT_MOST + 1)
+        );
+        let found = newer(long.as_bytes(), "0.2.0").unwrap().unwrap();
+        assert_eq!(found.changes("ja"), Some("- Fixed"));
     }
 
     #[test]

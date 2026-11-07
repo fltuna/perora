@@ -5,6 +5,7 @@
 //! GPU's device again (Perora lets go of it while no window is open: 25–36 ms to make).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use std::path::PathBuf;
@@ -31,6 +32,33 @@ const SETTLE: Duration = Duration::from_millis(40);
 /// How long the question over what is drawn takes to be gone from the screen (it fades out as it
 /// closes, as windows do) before the screen is taken.
 const ASKED_GONE: Duration = Duration::from_millis(250);
+
+/// Captures on their way somewhere: being cropped and copied for the preview, copied and saved
+/// alone, sent to the server alone, saved as they were taken. Ending Perora meanwhile (an update's
+/// installer does) would lose them: `on_its_way` says whether there are any.
+static ON_ITS_WAY: AtomicUsize = AtomicUsize::new(0);
+
+/// One capture on its way, for as long as this lives (it goes where the work does, and is let go
+/// of however that ends).
+struct OnItsWay;
+
+impl OnItsWay {
+    fn new() -> Self {
+        ON_ITS_WAY.fetch_add(1, Ordering::AcqRel);
+        OnItsWay
+    }
+}
+
+impl Drop for OnItsWay {
+    fn drop(&mut self) {
+        ON_ITS_WAY.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Whether a capture is on its way somewhere (see `ON_ITS_WAY`).
+pub fn on_its_way() -> bool {
+    ON_ITS_WAY.load(Ordering::Acquire) > 0
+}
 
 #[derive(Default)]
 pub struct Capturing {
@@ -336,6 +364,7 @@ fn upload_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App
     let Some(account) = account::account(cx) else {
         return;
     };
+    let on_its_way = OnItsWay::new();
     let language = Perora::get(cx).language();
     notice::say(language.captured(), Lasting::UntilTheNext, None, cx);
     let how = settings.output(Leaves::Upload);
@@ -344,6 +373,7 @@ fn upload_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App
         .background_executor()
         .spawn(async move { source.crop(area).map(Arc::new) });
     cx.spawn(async move |cx| {
+        let _on_its_way = on_its_way;
         // (Somewhere on it: whoever chose it saw to that.)
         let Some(frame) = cropping.await else {
             cx.update(|cx| {
@@ -416,6 +446,7 @@ pub fn sound(settings: &Settings) {
 /// To the preview: on the clipboard first (unless the user would rather not), so that it is there
 /// to paste by the time the preview is seen; saved as well when the user has every capture saved.
 fn to_preview(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) {
+    let on_its_way = OnItsWay::new();
     let id = preview::ask(cx);
     let scale = corner::monitor().map_or(1.0, |monitor| monitor.scale);
     let how = settings.output(Leaves::Copy);
@@ -465,6 +496,8 @@ fn to_preview(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) 
         })
     });
     cx.spawn(async move |cx| {
+        // (Until it is in the preview, which holds it from there.)
+        let _on_its_way = on_its_way;
         let Some(shown) = making.await else {
             // (Nothing to show: what was being previewed before is back.)
             cx.update(preview::restore);
@@ -494,10 +527,12 @@ fn save_as_taken(
     settings: Settings,
     cx: &mut App,
 ) {
+    let on_its_way = OnItsWay::new();
     let saving = cx.background_executor().spawn(async move {
         saving::save_as_taken(&settings, &frame, png.as_deref().map(Vec::as_slice))
     });
     cx.spawn(async move |cx| {
+        let _on_its_way = on_its_way;
         let saved = saving.await;
         cx.update(|cx| {
             let language = Perora::get(cx).language();
@@ -530,6 +565,7 @@ fn save_as_taken(
 /// well when the user has every capture saved, and one notice says what became of it. What was
 /// being previewed before is still to be dealt with: it comes back.
 fn copy_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) {
+    let on_its_way = OnItsWay::new();
     preview::restore(cx);
     let language = Perora::get(cx).language();
     let how = settings.output(Leaves::Copy);
@@ -573,6 +609,7 @@ fn copy_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) 
         (copied, saved)
     });
     cx.spawn(async move |cx| {
+        let _on_its_way = on_its_way;
         let (copied, saved) = working.await;
         cx.update(|cx| tell(copied, saved, &language, cx));
     })

@@ -599,3 +599,11 @@ pub fn settle(cx: &mut App) {
         accounts.account.settle(QUIT_PATIENCE);
     }
 }
+
+/// Perora was to quit for an update's installer, which could not be run: it goes on, and the
+/// browser may be waited for again.
+pub fn unsettle(cx: &mut App) {
+    if let Some(accounts) = get(cx) {
+        accounts.cancel.store(false, Ordering::Relaxed);
+    }
+}

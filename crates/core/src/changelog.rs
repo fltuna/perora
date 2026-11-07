@@ -80,20 +80,19 @@ fn inline(text: &str) -> String {
     while let Some(start) = rest.find('[') {
         out.push_str(&rest[..start]);
         let after = &rest[start + 1..];
-        match after.find("](").and_then(|middle| {
+        // (Once there is no `](` with a `)` after it, no later `[` begins a link either: the rest
+        // is taken as it is, and each character looked at once.)
+        let Some((middle, end)) = after.find("](").and_then(|middle| {
             after[middle + 2..]
                 .find(')')
                 .map(|end| (middle, middle + 2 + end))
-        }) {
-            Some((middle, end)) => {
-                out.push_str(&after[..middle]);
-                rest = &after[end + 1..];
-            }
-            None => {
-                out.push('[');
-                rest = after;
-            }
-        }
+        }) else {
+            out.push('[');
+            rest = after;
+            break;
+        };
+        out.push_str(&after[..middle]);
+        rest = &after[end + 1..];
     }
     out.push_str(rest);
     out.replace("**", "").replace("__", "").replace('`', "")
@@ -155,6 +154,13 @@ mod tests {
             "see the release and [this]"
         );
         assert_eq!(inline("#hashtag"), "#hashtag");
+        assert_eq!(inline("[a [b](c) d"), "a [b d");
+        assert_eq!(inline("[](x"), "[](x");
+        // What would take long a link at a time is read at once.
+        let brackets = "[".repeat(200_000);
+        assert_eq!(inline(&brackets), brackets);
+        let opened = "[](".repeat(100_000);
+        assert_eq!(inline(&opened), opened);
         assert_eq!(blocks("#not a heading")[0], Block::Paragraph("#not a heading".into()));
         assert!(blocks("").is_empty());
     }

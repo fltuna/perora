@@ -522,6 +522,11 @@ pub fn open(cx: &mut App) {
     }
 }
 
+/// Whether the main window is open (on screen or minimized: closed, it is gone).
+pub fn is_open(cx: &App) -> bool {
+    find(cx).is_some()
+}
+
 /// Whether the main window is open on the account page.
 pub fn on_account_page(cx: &mut App) -> bool {
     find(cx)

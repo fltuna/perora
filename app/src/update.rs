@@ -28,6 +28,10 @@ const EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// How often the main window hears how far the download is.
 const TOLD_EVERY: Duration = Duration::from_millis(250);
 
+/// How long the window is given to show that the installer is starting, before Perora is held up
+/// starting it.
+const DRAWN_FIRST: Duration = Duration::from_millis(100);
+
 /// What 0.1.x (the Tauri version) sets for the version it installs when its main window was on
 /// screen: the new version shows it again as it starts. (This version tells the next one by its
 /// arguments instead: `update::installer_parameters`.)
@@ -184,10 +188,12 @@ pub fn view(cx: &mut App) -> View {
     }
 }
 
-/// A capture is being looked at or uploaded, or is being taken: installing would end Perora under
-/// it.
+/// A capture is being taken, looked at, or is on its way somewhere (to the preview, the clipboard,
+/// a file, the server): installing would end Perora under it.
 fn capture_in_hand(cx: &mut App) -> bool {
-    crate::preview::holds_a_capture(cx) || crate::capture::busy(cx)
+    crate::preview::holds_a_capture(cx)
+        || crate::capture::busy(cx)
+        || crate::capture::on_its_way()
 }
 
 fn changed(cx: &mut App) {
@@ -249,6 +255,8 @@ fn looked(result: Result<Option<Release>, update::Error>, cx: &mut App) {
     let on_screen = crate::main_window::on_screen_now(cx).is_some();
     let updates = cx.default_global::<Updates>();
     updates.looking = false;
+    // (Why an install did not happen is old news once the releases are asked again.)
+    updates.failure = None;
     // Asked while this look was under way, or before it: either way, the user hears of it.
     let asked = std::mem::take(&mut updates.asked_meanwhile);
     let found = match result {
@@ -339,14 +347,15 @@ pub fn toggle_changes(cx: &mut App) {
 /// at a time.
 pub fn install(cx: &mut App) {
     let language = Perora::get(cx).language();
+    if cx.default_global::<Updates>().getting.is_some() {
+        return;
+    }
+    // (The band and the general page say so as long as it is so: nothing to keep saying after.)
     if capture_in_hand(cx) {
-        fail(language.text("error.updateCaptureInHand", &[]), cx);
+        changed(cx);
         return;
     }
     let updates = cx.default_global::<Updates>();
-    if updates.getting.is_some() {
-        return;
-    }
     let Some(found) = updates.found.clone() else {
         fail(language.text("error.updateGone", &[]), cx);
         return;
@@ -410,35 +419,52 @@ fn fetched_as(found: Release, fetched: Result<Vec<u8>, update::Error>, cx: &mut 
             return;
         }
     };
+    // A capture taken meanwhile: not installed under it. (The band says why as long as it is so;
+    // the user installs once it is dealt with.)
     if capture_in_hand(cx) {
-        fail(language.text("error.updateCaptureInHand", &[]), cx);
+        cx.default_global::<Updates>().getting = None;
+        changed(cx);
         return;
     }
     if let Some(getting) = cx.default_global::<Updates>().getting.as_mut() {
         getting.installing = true;
     }
     changed(cx);
-    // (Drawn as installing before the installer takes over: a moment later Perora is gone.)
-    cx.defer(move |cx| {
-        // As quitting has it: whatever is under way with the sign-in is let finish (a refresh
-        // token is good once), before the installer ends this Perora.
-        crate::account::settle(cx);
-        // The new version comes back as this one is: with its window, if it was on screen.
-        let in_tray = crate::main_window::on_screen_now(cx).is_none();
-        match platform::run_installer(
-            &bytes,
-            &found.version,
-            update::installer_parameters(in_tray),
-        ) {
-            // The icon, the shortcut and the claim to be the one Perora go before the installer
-            // looks for a Perora still running.
-            Ok(()) => crate::quit(cx),
-            Err(detail) => {
-                eprintln!("the new version could not be installed: {detail}");
-                fail(language.text("error.update", &[("detail", &detail)]), cx);
-            }
+    // Drawn as installing before the installer takes over (a moment later Perora is gone): what
+    // follows holds the application up to a few seconds.
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(DRAWN_FIRST).await;
+        cx.update(|cx| run(found, bytes, cx));
+    })
+    .detach();
+}
+
+/// Runs the installer of a version fetched and checked, which ends this Perora.
+fn run(found: Release, bytes: Vec<u8>, cx: &mut App) {
+    let language = Perora::get(cx).language();
+    // (Once more: one may have been taken while the window drew.)
+    if capture_in_hand(cx) {
+        cx.default_global::<Updates>().getting = None;
+        changed(cx);
+        return;
+    }
+    // As quitting has it: whatever is under way with the sign-in is let finish (a refresh token is
+    // good once), before the installer ends this Perora.
+    crate::account::settle(cx);
+    // The new version comes back as this one is: with its window, if it was open (minimized or
+    // not).
+    let in_tray = !crate::main_window::is_open(cx);
+    match platform::run_installer(&bytes, &found.version, update::installer_parameters(in_tray)) {
+        // The icon, the shortcut and the claim to be the one Perora go before the installer looks
+        // for a Perora still running.
+        Ok(()) => crate::quit(cx),
+        Err(detail) => {
+            eprintln!("the new version could not be installed: {detail}");
+            // Perora goes on: a sign-in in the browser may be waited for again.
+            crate::account::unsettle(cx);
+            fail(language.text("error.update", &[("detail", &detail)]), cx);
         }
-    });
+    }
 }
 
 /// The install did not happen: why, in the band and on the general page.
