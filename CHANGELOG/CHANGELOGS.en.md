@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.3
+
+### Changes
+
+- The capture screen takes the Windows accent colour
+- Shortcuts are shown as keys
+- The settings' wording was gone over, and the system sounds have readable names
+
 ## v0.2.2
 
 ### Fixes
