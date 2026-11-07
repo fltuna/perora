@@ -12,6 +12,7 @@
   "main.nav.save": "Save",
   "main.nav.editor": "Editor",
   "main.nav.shortcut": "Shortcut",
+  "main.nav.changelog": "Changelog",
   "main.home.capture": "Capture",
   "main.home.captureHint": "Click the button on the right, or use {shortcut}, to start a capture.",
   "main.home.shortcutTaken": "{shortcut} is taken by another application, so the shortcut does not work.",

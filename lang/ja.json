@@ -12,6 +12,7 @@
   "main.nav.save": "保存",
   "main.nav.editor": "編集",
   "main.nav.shortcut": "ショートカット",
+  "main.nav.changelog": "変更履歴",
   "main.home.capture": "キャプチャ",
   "main.home.captureHint": "右のボタンをクリックするか、{shortcut} を使用してキャプチャを開始します。",
   "main.home.shortcutTaken": "{shortcut} は他のアプリが使っているため、ショートカットが効きません。",

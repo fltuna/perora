@@ -56,10 +56,12 @@ pub enum Page {
     Shortcut,
     General,
     Account,
+    /// What changed in each version up to this one (`CHANGELOG/CHANGELOGS*.md`, built in).
+    Changelog,
 }
 
 impl Page {
-    pub const ALL: [Page; 7] = [
+    pub const ALL: [Page; 8] = [
         Page::Home,
         Page::Capture,
         Page::Save,
@@ -67,6 +69,7 @@ impl Page {
         Page::Shortcut,
         Page::General,
         Page::Account,
+        Page::Changelog,
     ];
 
     /// As the language files name it (`main.nav.<name>`).
@@ -79,6 +82,7 @@ impl Page {
             Page::Shortcut => "shortcut",
             Page::General => "general",
             Page::Account => "account",
+            Page::Changelog => "changelog",
         }
     }
 
@@ -92,6 +96,7 @@ impl Page {
             Page::Shortcut => "\u{E765}",
             Page::General => "\u{E713}",
             Page::Account => "\u{E77B}",
+            Page::Changelog => "\u{E81C}",
         }
     }
 }
@@ -334,6 +339,7 @@ impl Render for MainWindow {
             Page::Shortcut => shortcut_page::page(self, &language, &theme, cx),
             Page::General => pages::general(self, &settings, &language, &theme, cx),
             Page::Account => account_page::page(self, &language, &theme, cx),
+            Page::Changelog => updates::changelog(&language, &theme),
         };
         let heading = div()
             .flex_none()

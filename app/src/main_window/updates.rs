@@ -222,6 +222,69 @@ pub fn general(view: &View, language: &Language, theme: &Theme) -> Vec<AnyElemen
     part
 }
 
+/// What changed in every version up to this one, as built in (`CHANGELOG/CHANGELOGS.md`, and
+/// `.en.md` for English, made by `CHANGELOG/combine.ps1`).
+const CHANGELOG_JA: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../CHANGELOG/CHANGELOGS.md"));
+const CHANGELOG_EN: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../CHANGELOG/CHANGELOGS.en.md"));
+
+/// The changelog page: a part for each version, newest first (as the file has them), in the
+/// window's language, or the other where it says nothing.
+pub fn changelog(language: &Language, theme: &Theme) -> Vec<AnyElement> {
+    let (asked, other) = if language.code().starts_with("ja") {
+        (CHANGELOG_JA, CHANGELOG_EN)
+    } else {
+        (CHANGELOG_EN, CHANGELOG_JA)
+    };
+    let mut versions = by_version(asked);
+    if versions.is_empty() {
+        versions = by_version(other);
+    }
+    let mut part = Vec::new();
+    for (index, (title, markdown)) in versions.into_iter().enumerate() {
+        part.push(section(title, index == 0, theme).into_any_element());
+        part.push(
+            div()
+                .flex_none()
+                .px(px(16.0))
+                .py(px(12.0))
+                .bg(theme.surface)
+                .border_1()
+                .border_color(theme.border)
+                .rounded(theme.radius_small)
+                .child(changes(markdown, None, theme))
+                .into_any_element(),
+        );
+    }
+    part
+}
+
+/// The combined changelog cut at its `## <version>` headings: each version's title, and what is
+/// under it. (What comes before the first, the file's own `#` title, is the page's.)
+fn by_version(markdown: &str) -> Vec<(String, &str)> {
+    let mut versions: Vec<(String, &str)> = Vec::new();
+    let mut rest = markdown;
+    while let Some(start) = heading_at(rest) {
+        let after = &rest[start..];
+        let line_end = after.find('\n').map_or(after.len(), |end| end + 1);
+        let title = after[3..line_end].trim().to_owned();
+        let body = &after[line_end..];
+        let body_end = heading_at(body).unwrap_or(body.len());
+        versions.push((title, body[..body_end].trim()));
+        rest = &body[body_end..];
+    }
+    versions
+}
+
+/// Where the first line that is a `## ` heading begins.
+fn heading_at(text: &str) -> Option<usize> {
+    if text.starts_with("## ") {
+        return Some(0);
+    }
+    text.find("\n## ").map(|at| at + 1)
+}
+
 /// What changed, as the Markdown says it: headings, items of lists (set in by how deep they are),
 /// paragraphs. A heading that opens it with the version (`## v0.2.0`) is left out where the version
 /// is said already.
@@ -260,4 +323,34 @@ fn changes(markdown: &str, version: Option<&str>, theme: &Theme) -> Div {
                 .child(div().flex_1().min_w_0().child(text)),
             Block::Paragraph(text) => div().when(index > 0, |text| text.mt(px(4.0))).child(text),
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_changelog_is_cut_at_each_version() {
+        let combined = "# Changelog\n\n## v0.3.0\n\n- New\n\n### Fixed\n\n- A\n\n## v0.2.0\n\nRebuilt.\n";
+        assert_eq!(
+            by_version(combined),
+            vec![
+                ("v0.3.0".to_owned(), "- New\n\n### Fixed\n\n- A"),
+                ("v0.2.0".to_owned(), "Rebuilt."),
+            ]
+        );
+        assert!(by_version("# Changelog\n\nNothing yet.\n").is_empty());
+    }
+
+    #[test]
+    fn the_built_in_changelogs_name_this_version() {
+        // (A prerelease need not say what changed in it, as the release workflow has it.)
+        if env!("CARGO_PKG_VERSION").contains('-') {
+            return;
+        }
+        let this = format!("v{}", env!("CARGO_PKG_VERSION"));
+        for combined in [CHANGELOG_JA, CHANGELOG_EN] {
+            assert!(by_version(combined).iter().any(|(title, _)| *title == this));
+        }
+    }
 }
