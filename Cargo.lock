@@ -3811,6 +3811,7 @@ dependencies = [
  "perora-editor",
  "perora-ui",
  "raw-window-handle",
+ "serde_json",
  "tray-icon",
  "windows 0.62.2",
 ]
