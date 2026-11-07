@@ -340,5 +340,16 @@ fn key(number: usize, colour: u32) -> impl IntoElement {
         .font_weight(FontWeight::NORMAL)
         .flex()
         .justify_center()
+        .child(digit(number))
+}
+
+/// The number in a mode's key, in the middle of its frame. Text is set in the middle of its line by
+/// how far the font reaches above and below it, and a digit has nothing below its foot: in Segoe UI
+/// (over 1.079 of its size, under 0.251, digits 0.7 tall) that leaves it 0.064 of its size low,
+/// which is raised here. (11 px: a pixel low, seen in the frame.)
+pub(crate) fn digit(number: usize) -> impl IntoElement {
+    div()
+        .relative()
+        .top(px(-11.0 * 0.064))
         .child(number.to_string())
 }

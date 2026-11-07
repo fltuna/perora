@@ -81,11 +81,15 @@ impl Mark for Stamp {
         let Some(line) = lettered.lines.first() else {
             return;
         };
-        // In the middle; a little lower than the middle of the line (digits have nothing below their
-        // foot), as a canvas puts a "middle" baseline.
+        // In the middle by the digits' own shapes, the bounds of their triangles: not by how far the
+        // line goes and how far the font reaches (a "1" has room at its sides, and digits nothing
+        // below their foot), which put them 2-3 pixels low on a disc 40 across, a "1" to the left.
+        let Some((low, high)) = bounds(&line.corners) else {
+            return;
+        };
         let at = [
-            middle[0] - line.width / 2.0,
-            middle[1] + across * 0.035 + (lettered.ascent - lettered.descent) / 2.0,
+            middle[0] - (low[0] + high[0]) / 2.0,
+            middle[1] - (low[1] + high[1]) / 2.0,
         ];
         paint::triangles(window, painter, at, &line.corners, &line.indices, on);
     }
@@ -147,6 +151,17 @@ impl Mark for Stamp {
         }
         Some(edit)
     }
+}
+
+/// The least and the most of a set of corners, on each axis; none for none.
+fn bounds(corners: &[[f32; 2]]) -> Option<([f32; 2], [f32; 2])> {
+    let first = *corners.first()?;
+    Some(corners.iter().fold((first, first), |(low, high), corner| {
+        (
+            [low[0].min(corner[0]), low[1].min(corner[1])],
+            [high[0].max(corner[0]), high[1].max(corner[1])],
+        )
+    }))
 }
 
 /// The four corners of the frame around a box, `margin` from it: what has letters keeps its shape,

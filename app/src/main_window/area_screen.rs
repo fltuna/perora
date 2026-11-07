@@ -494,7 +494,7 @@ impl AreaScreen {
                 .text_size(px(11.0))
                 .flex()
                 .justify_center()
-                .child(number.to_string())
+                .child(crate::bar::digit(number))
         };
         let modes = Mode::ALL.iter().enumerate().map(|(index, mode)| {
             let current = index == 0;
