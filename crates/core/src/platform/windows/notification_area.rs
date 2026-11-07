@@ -76,14 +76,19 @@ pub fn watch_shell(back: impl Fn() + Send + 'static) {
                 }
             };
             loop {
-                if !wait_for_end(shell) {
-                    // (Not to be waited on: looked at now and then instead.)
+                // Seen to end, whatever has the taskbar next is another shell, even under the
+                // same number (the system gives the numbers of ended processes out again).
+                let gone = if wait_for_end(shell) {
+                    None
+                } else {
+                    // (Not to be waited on: looked at now and then instead, by its number.)
                     std::thread::sleep(LOOKED_FOR_SELDOM);
                     if shell_process() == Some(shell) {
                         continue;
                     }
-                }
-                shell = wait_for_shell(Some(shell));
+                    Some(shell)
+                };
+                shell = wait_for_shell(gone);
                 back();
             }
         });
