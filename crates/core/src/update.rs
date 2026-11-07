@@ -81,25 +81,31 @@ pub struct Release {
     pub url: String,
     signature: String,
     changes: Changes,
+    /// What changed in each version since the one installed, up to this one, newest first, a
+    /// `## <version>` heading each (from the release's `history`).
+    since: Changes,
 }
 
 impl Release {
-    /// What changed in this version (Markdown, as `CHANGELOG/v<version>_CHANGELOGS*.md` has it),
-    /// in the language of that code if the release says it in that one, or else in the other; none
-    /// when the release does not say.
+    /// What changed since the version installed (Markdown: a `## <version>` heading for each
+    /// version, newest first), or, where the release does not say that, in this version (as
+    /// `CHANGELOG/v<version>_CHANGELOGS*.md` has it); in the language of that code if the release
+    /// says it in that one, or else in the other; none when the release does not say.
     pub fn changes(&self, language: &str) -> Option<&str> {
-        let (asked, other) = if language.starts_with("ja") {
-            (&self.changes.ja, &self.changes.en)
-        } else {
-            (&self.changes.en, &self.changes.ja)
-        };
+        let japanese = language.starts_with("ja");
+        fn in_language(changes: &Changes, japanese: bool) -> Option<&str> {
+            if japanese { said(&changes.ja) } else { said(&changes.en) }
+        }
         fn said(changes: &Option<String>) -> Option<&str> {
             changes
                 .as_deref()
                 .map(str::trim)
                 .filter(|changes| !changes.is_empty())
         }
-        said(asked).or(said(other))
+        in_language(&self.since, japanese)
+            .or(in_language(&self.changes, japanese))
+            .or(in_language(&self.since, !japanese))
+            .or(in_language(&self.changes, !japanese))
     }
 }
 
@@ -116,8 +122,14 @@ struct Changes {
 struct Latest {
     version: String,
     platforms: std::collections::HashMap<String, Platform>,
+    /// What changed in this version (all 0.2.0 reads).
     #[serde(default)]
     changes: Changes,
+    /// What changed in the last versions up to this one (`CHANGELOG/CHANGELOGS*.md`, cut down):
+    /// from it, what changed since the version installed, when more than one version was passed.
+    /// (From 0.2.1 on; 0.2.0 passes over it.)
+    #[serde(default)]
+    history: Changes,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +208,9 @@ pub fn newer(latest: &[u8], current: &str) -> Result<Option<Release>, Error> {
         return Err(Error::Unreadable(format!("not an address to fetch from: {url}")));
     }
     let within = |changes: Option<String>| changes.filter(|changes| changes.len() <= CHANGES_AT_MOST);
+    let since = |history: Option<String>| {
+        within(history).and_then(|history| changes_since(&history, &current, &version))
+    };
     Ok(Some(Release {
         version: version.to_string(),
         url: url.into(),
@@ -204,7 +219,37 @@ pub fn newer(latest: &[u8], current: &str) -> Result<Option<Release>, Error> {
             ja: within(latest.changes.ja),
             en: within(latest.changes.en),
         },
+        since: Changes {
+            ja: since(latest.history.ja),
+            en: since(latest.history.en),
+        },
     }))
+}
+
+/// Of a changelog of several versions, those after `current` up to `newest`, newest first, a
+/// `## <version>` heading each; none if it has none of them. (A heading that is not a version is
+/// passed over.)
+fn changes_since(
+    history: &str,
+    current: &semver::Version,
+    newest: &semver::Version,
+) -> Option<String> {
+    let mut versions: Vec<(semver::Version, &str, &str)> = crate::changelog::by_version(history)
+        .into_iter()
+        .filter_map(|(title, body)| {
+            let version = parse_version(title.split_whitespace().next()?).ok()?;
+            (&version > current && &version <= newest).then_some((version, title, body))
+        })
+        .collect();
+    versions.sort_by(|a, b| b.0.cmp(&a.0));
+    versions.dedup_by(|a, b| a.0 == b.0);
+    (!versions.is_empty()).then(|| {
+        versions
+            .iter()
+            .map(|(_, title, body)| format!("## {title}\n\n{body}"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    })
 }
 
 /// A version as the releases and the signatures write it: `0.2.0`, or `v0.2.0`.
@@ -419,6 +464,51 @@ mod tests {
         ));
         assert!(newer(b"not json", "0.2.0").is_err());
         assert!(newer(br#"{"version": "soon", "platforms": {}}"#, "0.2.0").is_err());
+    }
+
+    #[test]
+    fn what_changed_since_the_version_installed_comes_from_the_history() {
+        let latest = r###"{"version": "0.2.3",
+            "changes": {"ja": "## v0.2.3\n- 三", "en": "## v0.2.3\n- Three"},
+            "history": {
+                "ja": "# 変更履歴\n\n## v0.2.3\n\n- 三\n\n## v0.2.2\n\n- 二\n\n## v0.2.1\n\n- 一\n\n## v0.2.0\n\n- 作り直し\n",
+                "en": "# Changelog\n\n## v0.2.3\n\n- Three\n\n## v0.2.1\n\n- One\n"
+            },
+            "platforms": {"windows-x86_64": {"url": "https://example.com/a.exe", "signature": "s"}}}"###;
+        // Two versions passed over: all three, newest first; not the one installed.
+        let found = newer(latest.as_bytes(), "0.2.0").unwrap().unwrap();
+        assert_eq!(
+            found.changes("ja"),
+            Some("## v0.2.3\n\n- 三\n\n## v0.2.2\n\n- 二\n\n## v0.2.1\n\n- 一")
+        );
+        // (What the history has: no 0.2.2 in English.)
+        assert_eq!(
+            found.changes("en"),
+            Some("## v0.2.3\n\n- Three\n\n## v0.2.1\n\n- One")
+        );
+        // The version before: that one alone.
+        let found = newer(latest.as_bytes(), "0.2.2").unwrap().unwrap();
+        assert_eq!(found.changes("ja"), Some("## v0.2.3\n\n- 三"));
+        // Older than all the history has: what it has.
+        let found = newer(latest.as_bytes(), "0.1.7").unwrap().unwrap();
+        assert!(found.changes("ja").unwrap().ends_with("## v0.2.0\n\n- 作り直し"));
+
+        // No history (0.2.0's release): what changed in this version.
+        let without = r###"{"version": "0.2.3", "changes": {"ja": "## v0.2.3\n- 三"},
+            "platforms": {"windows-x86_64": {"url": "https://example.com/a.exe", "signature": "s"}}}"###;
+        let found = newer(without.as_bytes(), "0.2.0").unwrap().unwrap();
+        assert_eq!(found.changes("ja"), Some("## v0.2.3\n- 三"));
+
+        // A history with nothing after the version installed, or too much of it: the same.
+        let unhelpful = format!(
+            r###"{{"version": "0.2.3", "changes": {{"ja": "## v0.2.3\n- 三"}},
+            "history": {{"ja": "## v0.2.0\n- 作り直し", "en": "{}"}},
+            "platforms": {{"windows-x86_64": {{"url": "https://example.com/a.exe", "signature": "s"}}}}}}"###,
+            "a".repeat(CHANGES_AT_MOST + 1)
+        );
+        let found = newer(unhelpful.as_bytes(), "0.2.0").unwrap().unwrap();
+        assert_eq!(found.changes("ja"), Some("## v0.2.3\n- 三"));
+        assert_eq!(found.changes("en"), Some("## v0.2.3\n- 三"));
     }
 
     #[test]

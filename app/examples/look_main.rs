@@ -24,7 +24,7 @@
 //! With `LOOK_TAKEN` set, the shortcut is as if another application had it; `LOOK_SETTINGS` adds to
 //! the settings the window starts with (JSON members: `"copyToClipboard": false`); `LOOK_ACCOUNT`
 //! makes up the account (`out`, `waiting`, `in`, `in-none`, `in-unreachable`, `in-refused`);
-//! `LOOK_UPDATE` a newer version (`found`, `downloading`, `installing`, `failed`, `open`).
+//! `LOOK_UPDATE` a newer version (`found`, `downloading`, `installing`, `failed`, `open`), and `+skipped` after it for a version passed over).
 
 // The application's own modules, as its `main.rs` has them: an example cannot use a program's.
 #![allow(dead_code)]

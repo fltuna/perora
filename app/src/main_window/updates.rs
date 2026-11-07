@@ -237,9 +237,9 @@ pub fn changelog(language: &Language, theme: &Theme) -> Vec<AnyElement> {
     } else {
         (CHANGELOG_EN, CHANGELOG_JA)
     };
-    let mut versions = by_version(asked);
+    let mut versions = changelog::by_version(asked);
     if versions.is_empty() {
-        versions = by_version(other);
+        versions = changelog::by_version(other);
     }
     let mut part = Vec::new();
     for (index, (title, markdown)) in versions.into_iter().enumerate() {
@@ -260,37 +260,18 @@ pub fn changelog(language: &Language, theme: &Theme) -> Vec<AnyElement> {
     part
 }
 
-/// The combined changelog cut at its `## <version>` headings: each version's title, and what is
-/// under it. (What comes before the first, the file's own `#` title, is the page's.)
-fn by_version(markdown: &str) -> Vec<(String, &str)> {
-    let mut versions: Vec<(String, &str)> = Vec::new();
-    let mut rest = markdown;
-    while let Some(start) = heading_at(rest) {
-        let after = &rest[start..];
-        let line_end = after.find('\n').map_or(after.len(), |end| end + 1);
-        let title = after[3..line_end].trim().to_owned();
-        let body = &after[line_end..];
-        let body_end = heading_at(body).unwrap_or(body.len());
-        versions.push((title, body[..body_end].trim()));
-        rest = &body[body_end..];
-    }
-    versions
-}
-
-/// Where the first line that is a `## ` heading begins.
-fn heading_at(text: &str) -> Option<usize> {
-    if text.starts_with("## ") {
-        return Some(0);
-    }
-    text.find("\n## ").map(|at| at + 1)
-}
-
 /// What changed, as the Markdown says it: headings, items of lists (set in by how deep they are),
 /// paragraphs. A heading that opens it with the version (`## v0.2.0`) is left out where the version
-/// is said already.
+/// is said already, unless more versions follow it (what changed since the one installed, a
+/// heading each).
 fn changes(markdown: &str, version: Option<&str>, theme: &Theme) -> Div {
     let mut blocks = changelog::blocks(markdown);
+    let versions = blocks
+        .iter()
+        .filter(|block| matches!(block, Block::Heading { level: ..=2, .. }))
+        .count();
     if let (Some(Block::Heading { text, .. }), Some(version)) = (blocks.first(), version)
+        && versions == 1
         && text
             .trim_start_matches('v')
             .split_whitespace()
@@ -330,19 +311,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_changelog_is_cut_at_each_version() {
-        let combined = "# Changelog\n\n## v0.3.0\n\n- New\n\n### Fixed\n\n- A\n\n## v0.2.0\n\nRebuilt.\n";
-        assert_eq!(
-            by_version(combined),
-            vec![
-                ("v0.3.0".to_owned(), "- New\n\n### Fixed\n\n- A"),
-                ("v0.2.0".to_owned(), "Rebuilt."),
-            ]
-        );
-        assert!(by_version("# Changelog\n\nNothing yet.\n").is_empty());
-    }
-
-    #[test]
     fn the_built_in_changelogs_name_this_version() {
         // (A prerelease need not say what changed in it, as the release workflow has it.)
         if env!("CARGO_PKG_VERSION").contains('-') {
@@ -350,7 +318,7 @@ mod tests {
         }
         let this = format!("v{}", env!("CARGO_PKG_VERSION"));
         for combined in [CHANGELOG_JA, CHANGELOG_EN] {
-            assert!(by_version(combined).iter().any(|(title, _)| *title == this));
+            assert!(changelog::by_version(combined).iter().any(|(title, _)| *title == this));
         }
     }
 }

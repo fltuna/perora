@@ -98,9 +98,49 @@ fn inline(text: &str) -> String {
     out.replace("**", "").replace("__", "").replace('`', "")
 }
 
+/// A changelog of several versions (`CHANGELOG/CHANGELOGS.md`) cut at its `## <version>` headings:
+/// each version's heading (`v0.2.0`), and what is under it. What comes before the first, the
+/// file's own `#` title, is left out.
+pub fn by_version(markdown: &str) -> Vec<(&str, &str)> {
+    let mut versions = Vec::new();
+    let mut rest = markdown;
+    while let Some(start) = version_heading_at(rest) {
+        let after = &rest[start..];
+        let line_end = after.find('\n').map_or(after.len(), |end| end + 1);
+        let title = after[3..line_end].trim();
+        let body = &after[line_end..];
+        let body_end = version_heading_at(body).unwrap_or(body.len());
+        versions.push((title, body[..body_end].trim()));
+        rest = &body[body_end..];
+    }
+    versions
+}
+
+/// Where the first line that is a `## ` heading begins.
+fn version_heading_at(text: &str) -> Option<usize> {
+    if text.starts_with("## ") {
+        return Some(0);
+    }
+    text.find("\n## ").map(|at| at + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changelog_is_cut_at_each_version() {
+        let combined = "# Changelog\r\n\r\n## v0.3.0\r\n\r\n- New\r\n\r\n### Fixed\r\n\r\n- A\r\n\r\n## v0.2.0\r\n\r\nRebuilt.\r\n";
+        assert_eq!(
+            by_version(combined),
+            vec![
+                ("v0.3.0", "- New\r\n\r\n### Fixed\r\n\r\n- A"),
+                ("v0.2.0", "Rebuilt."),
+            ]
+        );
+        assert!(by_version("# Changelog\n\nNothing yet.\n").is_empty());
+        assert_eq!(by_version("## v0.1.0"), vec![("v0.1.0", "")]);
+    }
 
     #[test]
     fn headings_items_and_paragraphs_are_read() {

@@ -520,12 +520,22 @@ pub fn installed_from_window() -> bool {
 /// it is (`downloading`, `installing`, `failed`, `open`: what changed shown in the band).
 #[allow(dead_code)] // (Only `examples/look_main.rs` makes one up.)
 pub fn pretend(how: &str, cx: &mut App) {
+    // (`+skipped`: a version was passed over, and what changed in both is shown.)
+    let skipped = how.ends_with("+skipped");
+    let how = how.trim_end_matches("+skipped");
     let latest = r###"{"version": "9.9.9",
         "changes": {
-            "ja": "## v9.9.9\n\n見た目を確かめるための版です。\n\n### 変わったこと\n\n- **編集画面**の切り抜きが速くなりました\n  - 大きい画像で約 2 倍\n- アップロードの失敗を `Ctrl + Enter` でやり直せます\n\n### 直したこと\n\n- 通知が二重に出ることがあった",
+            "ja": "## v9.9.9\n\n見た目を確かめるためのバージョンです。\n\n### 変わったこと\n\n- **編集画面**の切り抜きが速くなりました\n  - 大きい画像で約 2 倍\n- アップロードの失敗を `Ctrl + Enter` でやり直せます\n\n### 直したこと\n\n- 通知が二重に出ることがあった",
             "en": "## v9.9.9\n\nA version made up to try the looks.\n\n### Changes\n\n- Cropping in the **editor** is faster\n  - About twice as fast on large images\n- A failed upload can be tried again with `Ctrl + Enter`\n\n### Fixes\n\n- A notice could be shown twice"
         },
         "platforms": {"windows-x86_64": {"url": "https://example.com/a.exe", "signature": "s"}}}"###;
+    let history = r###"{"ja": "## v9.9.9\n\n### 変わったこと\n\n- **編集画面**の切り抜きが速くなりました\n\n## v9.9.8\n\n### 直したこと\n\n- 通知が二重に出ることがあった",
+        "en": "## v9.9.9\n\n### Changes\n\n- Cropping in the **editor** is faster\n\n## v9.9.8\n\n### Fixes\n\n- A notice could be shown twice"}"###;
+    let latest = if skipped {
+        latest.replacen("\"platforms\"", &format!("\"history\": {history},\n\"platforms\""), 1)
+    } else {
+        latest.to_owned()
+    };
     let found = update::newer(latest.as_bytes(), VERSION).ok().flatten();
     let failure = Perora::get(cx).language().text(
         "error.update",
