@@ -1,10 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/core", "crates/ui", "crates/editor", "app"]
-# The Tauri version stays out of this workspace on the `gpui` branch: its Linux dependencies (GTK)
-# pin `toml_datetime =0.6.3`, which GPUI's build tools cannot share one lock file with. It is built
-# from `main` until P7 removes it (built here, it is a package of its own).
-exclude = ["src-tauri"]
 
 # Perora's version, for every crate of it: the one the main window shows, the one updates are
 # compared with, and the one a release's tag must name (.github/workflows/release.yml).
@@ -18,7 +14,6 @@ version = "0.2.0"
 gpui = { git = "https://github.com/fltuna/zed", rev = "7d62e902a17dcc7eb724aa268a7fd2558230ba7c", features = ["test-support"] }
 gpui_platform = { git = "https://github.com/fltuna/zed", rev = "7d62e902a17dcc7eb724aa268a7fd2558230ba7c", features = ["test-support"] }
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 # Packing a capture of several monitors into a PNG takes seconds without optimization; these are the
 # crates that do it, and the pixel loops of the core.
 [profile.dev.package.perora-core]

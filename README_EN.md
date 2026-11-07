@@ -40,14 +40,14 @@ Perora can also upload captures to [i.f2a.dev](https://i.f2a.dev) and put the li
 
 ## Building
 
-Needs Rust (stable) and Node.js.
+Needs Rust (stable). The windows are drawn with [GPUI](https://www.gpui.rs/).
 
 ```bash
-npm install
-npm run tauri build      # the installer, under target/release/bundle
-npm run tauri dev        # or run it while developing
+cargo build --release -p perora-app   # target/release/perora.exe
 cargo test --workspace
 ```
+
+The installer is made with NSIS: what it needs, and how, is at the top of [`installer/build.ps1`](installer/build.ps1).
 
 The texts are in [`lang/`](lang) (`en.json` is the reference). A `<code>.json` placed in `%APPDATA%\dev.f2a.perora\lang` adds a language, or changes texts, without building.
 

@@ -1179,15 +1179,12 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_named_is_the_application_s() {
-        // (The first interface names the folder in its own configuration; while it is in the
-        // repository, the two must agree. Once it is gone, the name is only kept here.)
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/tauri.conf.json");
-        let Ok(config) = std::fs::read(path) else {
-            return;
-        };
-        let config: Value = serde_json::from_slice(&config).unwrap();
-        assert_eq!(config["identifier"], IDENTIFIER);
+    fn the_folder_named_is_the_installer_s() {
+        // (The installer names the folder too: its uninstaller takes it away when asked to. The
+        // Tauri version named it in its configuration, as the installer still does.)
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../installer/installer.nsi");
+        let script = std::fs::read_to_string(path).unwrap();
+        assert!(script.contains(&format!("!define BUNDLEID \"{IDENTIFIER}\"")));
     }
 
     #[test]

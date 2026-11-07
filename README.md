@@ -61,14 +61,14 @@ Perora は通知領域に常駐していて、そのアイコンをクリック�
 
 ## ビルド
 
-Rust（stable）と Node.js が必要です。
+Rust（stable）が必要です。画面は [GPUI](https://www.gpui.rs/) で描いています。
 
 ```bash
-npm install
-npm run tauri build      # インストーラーを作る（target/release/bundle に出力）
-npm run tauri dev        # 開発中に動かす
+cargo build --release -p perora-app   # target/release/perora.exe
 cargo test --workspace
 ```
+
+インストーラーは NSIS で作ります。必要なものと使い方は [`installer/build.ps1`](installer/build.ps1) の先頭に書いてあります。
 
 画面の文言は [`lang/`](lang) にあり、`en.json` が基準です。`%APPDATA%\dev.f2a.perora\lang` に `<言語コード>.json` を置くと、ビルドし直さずに言語を追加したり、文言を変えたりできます。
 

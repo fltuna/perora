@@ -7,7 +7,7 @@ fn main() {
             .expect("the icon resource");
     }
     println!("cargo:rerun-if-changed=perora.rc");
-    println!("cargo:rerun-if-changed=../src-tauri/icons/icon.ico");
+    println!("cargo:rerun-if-changed=icons/icon.ico");
 }
 
 /// perora.rc (the icon), and after it what Windows says of the program: its name and its version
@@ -15,9 +15,10 @@ fn main() {
 /// here, as the version comes from the manifest.
 fn resources() -> PathBuf {
     let here = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    // (Written out elsewhere: the icon's path is made whole.)
     let icon = std::fs::read_to_string(here.join("perora.rc"))
         .expect("perora.rc")
-        .replace("../src-tauri/", &here.join("../src-tauri/").display().to_string().replace('\\', "/"));
+        .replace("\"icons/", &format!("\"{}/", here.join("icons").display().to_string().replace('\\', "/")));
     let version = std::env::var("CARGO_PKG_VERSION").unwrap();
     // (Numbers only: a version such as 0.2.0-rc.1 is 0.2.0 to Windows.)
     let numbers: Vec<u16> = version

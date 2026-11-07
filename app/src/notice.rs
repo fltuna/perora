@@ -290,7 +290,7 @@ fn sound(cx: &mut App) {
 fn icon(cx: &mut App) -> Option<Arc<RenderImage>> {
     let notices = cx.default_global::<Notices>();
     if notices.icon.is_none() {
-        let file = include_bytes!("../../src-tauri/icons/128x128.png");
+        let file = include_bytes!("../icons/128x128.png");
         notices.icon =
             platform::Frame::from_png(file, 1 << 20).and_then(crate::selection::drawable);
     }
