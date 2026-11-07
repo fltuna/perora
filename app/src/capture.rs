@@ -16,12 +16,12 @@ use perora_core::notice::Sound;
 use perora_core::platform::{self, Desktop, Frame, ScreenCapture, WindowId};
 use perora_core::selection::Mode;
 use perora_core::settings::{After, Leaves, Settings};
-use perora_core::{copying, saving};
+use perora_core::{copying, saving, shots};
 
 use crate::notice::{self, Lasting};
 use crate::selection::{self, Selection, Taken};
 use crate::state::Perora;
-use crate::{corner, gpu, large, main_window, preview};
+use crate::{account, corner, gpu, large, main_window, preview};
 
 /// How long a window that was just hidden may still be on screen: the compositor draws the next
 /// frame without it only after a moment. The main window and the notice (as in the Tauri version),
@@ -312,15 +312,87 @@ fn come_back(cx: &mut App) {
 
 /// What becomes of a capture, as the user has it: the capture's sound the moment there is one, then
 /// the small preview (P4: also when the user has captures drawn on at once, until the large window
-/// is there), or the clipboard and nothing else.
+/// is there), or the clipboard and nothing else, or straight to the server when the user has
+/// captures uploaded at once (and uploading is on offer: switched on, someone signed in).
 pub fn deliver(source: Arc<Frame>, area: Rect, cx: &mut App) {
     let perora = Perora::get(cx);
     let settings = perora.settings();
     sound(&settings);
+    if settings.upload_immediately && account::uploads(cx) {
+        return upload_alone(source, area, settings, cx);
+    }
     match settings.after_capture {
         After::Copy => copy_alone(source, area, settings, cx),
         After::Preview | After::Edit => to_preview(source, area, settings, cx),
     }
+}
+
+/// Straight to the server, as the user has captures uploaded (the kind of file, and how large at
+/// most), with no preview: a notice says it was captured and is on its way, and another how that
+/// ended, with the link on the clipboard. Saved as well when the user has every capture saved. What
+/// was being previewed before is still to be dealt with: it comes back.
+fn upload_alone(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) {
+    preview::restore(cx);
+    let Some(account) = account::account(cx) else {
+        return;
+    };
+    let language = Perora::get(cx).language();
+    notice::say(language.captured(), Lasting::UntilTheNext, None, cx);
+    let how = settings.output(Leaves::Upload);
+    let saves = settings.save_on_capture;
+    let cropping = cx
+        .background_executor()
+        .spawn(async move { source.crop(area).map(Arc::new) });
+    cx.spawn(async move |cx| {
+        // (Somewhere on it: whoever chose it saw to that.)
+        let Some(frame) = cropping.await else {
+            cx.update(|cx| {
+                let said = language.capture_failed("nothing was chosen");
+                notice::say(said, Lasting::Long, None, cx);
+            });
+            return;
+        };
+        if saves {
+            let frame = frame.clone();
+            cx.update(|cx| save_as_taken(None, frame, None, settings.clone(), cx));
+        }
+        let sending = cx.background_executor().spawn(async move {
+            let file = perora_core::preview::Pending::new(0, frame, None, None, how)
+                .file(how)
+                .map_err(|detail| (language.capture_failed(&detail), false))?;
+            shots::upload(&account, &file).map_err(|error| {
+                let signed_out = matches!(error, shots::ApiError::SignedOut);
+                (language.upload_failed(&error), signed_out)
+            })
+        });
+        let outcome = sending.await;
+        cx.update(|cx| {
+            let language = Perora::get(cx).language();
+            let (said, lasting) = match outcome {
+                Ok(shot) => {
+                    // (The account page lists it.)
+                    account::ask_recent(cx);
+                    match arboard::Clipboard::new()
+                        .and_then(|mut clipboard| clipboard.set_text(shot.url.clone()))
+                    {
+                        Ok(()) => (language.uploaded(), Lasting::Brief),
+                        Err(error) => {
+                            eprintln!("clipboard: the link was not put there: {error}");
+                            (language.uploaded_but_not_copied(&shot.url), Lasting::Long)
+                        }
+                    }
+                }
+                Err((said, signed_out)) => {
+                    if signed_out {
+                        account::signed_out_by_server(cx);
+                    }
+                    (said, Lasting::Long)
+                }
+            };
+            notice::say(said, lasting, None, cx);
+        });
+    })
+    .detach();
 }
 
 /// The capture's sound, as the user has it (none, one of the system's, or a file of their own).
@@ -401,17 +473,18 @@ fn to_preview(source: Arc<Frame>, area: Rect, settings: Settings, cx: &mut App) 
         cx.update(|cx| {
             preview::present(shown, cx);
             if let Some((frame, png)) = taken {
-                save_as_taken(id, frame, png, settings, cx);
+                save_as_taken(Some(id), frame, png, settings, cx);
             }
         });
     })
     .detach();
 }
 
-/// Saves a previewed capture as it was taken, apart from whatever else becomes of it, and says where
-/// it went: unless it was discarded meanwhile, and taken away with that.
+/// Saves a capture as it was taken, apart from whatever else becomes of it, and says where it went:
+/// unless it was discarded meanwhile, and taken away with that (`id`: the preview it is shown in,
+/// when it is).
 fn save_as_taken(
-    id: u64,
+    id: Option<u64>,
     frame: Arc<Frame>,
     png: Option<Arc<Vec<u8>>>,
     settings: Settings,
@@ -426,7 +499,7 @@ fn save_as_taken(
             let language = Perora::get(cx).language();
             match saved {
                 Ok(files) => {
-                    if !preview::saved_as_taken(id, &files, cx) {
+                    if id.is_some_and(|id| !preview::saved_as_taken(id, &files, cx)) {
                         return;
                     }
                     let Some(first) = files.first().cloned() else {

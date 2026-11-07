@@ -59,6 +59,8 @@ pub struct Capture {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leave {
     Save,
+    /// Ctrl+Enter: uploading, when it is on offer; saving, when it is not (the application knows).
+    Upload,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1275,8 +1277,9 @@ impl Editor {
                 "v" if !event.is_held && !modifiers.shift => self.paste(cx),
                 "d" if !event.is_held && !modifiers.shift => self.duplicate(cx),
                 "s" if !event.is_held => cx.emit(Event::Leave(Leave::Save)),
-                // (P5: uploading, when it is on offer.)
-                "enter" if !event.is_held && !modifiers.shift => cx.emit(Event::Leave(Leave::Save)),
+                "enter" if !event.is_held && !modifiers.shift => {
+                    cx.emit(Event::Leave(Leave::Upload))
+                }
                 _ => {}
             }
             return;

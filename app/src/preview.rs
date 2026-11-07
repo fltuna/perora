@@ -37,13 +37,13 @@ use perora_core::output::{FITS, Format, Output};
 use perora_core::platform::{self, Desktop, Frame};
 use perora_core::preview::{Discarded, Once, Pending, picture_size, small_size};
 use perora_core::settings::{Leaves, Settings};
-use perora_core::{copying, saving};
+use perora_core::{copying, saving, shots};
 use perora_ui::tour::{Asked, At, Button as TourButton, Marks, Step, Tour, Words};
 use perora_ui::{Theme, Tip, motion};
 
 use crate::notice::{self, Lasting};
 use crate::state::Perora;
-use crate::{burn, capture, corner, display, gpu, hwnd, large};
+use crate::{account, burn, capture, corner, display, gpu, hwnd, large};
 
 /// How often a preview whose time is over looks whether the pointer has left it.
 const POINTED_AT: Duration = Duration::from_millis(250);
@@ -82,8 +82,15 @@ struct Previews {
     /// that is tried again.
     save_failure: Option<String>,
     copy_failure: Option<String>,
+    /// Why uploading it did not work, as the user is told it: said in the window, which offers to
+    /// try again.
+    upload_failure: Option<String>,
     /// The capture that is being saved or copied: nothing else is asked of it meanwhile.
     busy: Option<u64>,
+    /// The capture that is on its way to the server: out of sight meanwhile, and back with the
+    /// reason should it not get there. (A later capture may take its place in the meantime: its
+    /// link is still put on the clipboard.)
+    uploading: Option<u64>,
     /// The last capture asked for, and the last one shown.
     asked: u64,
     presented: u64,
@@ -206,6 +213,7 @@ pub fn present(shown: Shown, cx: &mut App) {
     previews.picture = shown.picture;
     previews.save_failure = None;
     previews.copy_failure = None;
+    previews.upload_failure = None;
     previews.busy = None;
     previews.large = shown.large;
     previews.editor_picture = shown.editor_picture;
@@ -337,6 +345,12 @@ fn show(cx: &mut App) {
         return;
     }
     let previews = cx.default_global::<Previews>();
+    // (On its way to the server: out of sight until that is over.)
+    if previews.uploading.is_some()
+        && previews.uploading == previews.pending.as_ref().map(|pending| pending.id)
+    {
+        return;
+    }
     if previews.large {
         let picture = previews.editor_picture.take();
         let Some((id, frame)) = previews
@@ -458,7 +472,10 @@ pub struct Said {
     pub on_clipboard: bool,
     pub copied: bool,
     pub failure: Option<String>,
-    /// What it is saved and copied as, as its buttons' tooltips say.
+    /// Uploading it did not work: the button says "try again".
+    pub upload_failed: bool,
+    /// What it is uploaded, saved and copied as, as its buttons' tooltips say.
+    pub upload_as: String,
     pub save_as: String,
     pub copy_as: String,
 }
@@ -472,10 +489,16 @@ pub fn said_of(id: u64, edits: &[perora_core::edit::Edit], cx: &mut App) -> Opti
         .as_ref()
         .filter(|pending| pending.id == id)?;
     let now = platform::clipboard_sequence();
+    let upload_failed = previews.upload_failure.is_some();
     let failure = previews
-        .save_failure
-        .as_ref()
-        .map(|detail| language.text("preview.saveFailed", &[("detail", detail)]))
+        .upload_failure
+        .clone()
+        .or_else(|| {
+            previews
+                .save_failure
+                .as_ref()
+                .map(|detail| language.text("preview.saveFailed", &[("detail", detail)]))
+        })
         .or_else(|| {
             previews
                 .copy_failure
@@ -489,6 +512,13 @@ pub fn said_of(id: u64, edits: &[perora_core::edit::Edit], cx: &mut App) -> Opti
         on_clipboard: pending.on_clipboard(now) && pending.copied_as_asked(&settings),
         copied: pending.copied_now(now, &settings, edits),
         failure,
+        upload_failed,
+        upload_as: leaves_as_said(
+            &language,
+            &settings,
+            pending.once.of(Leaves::Upload),
+            Leaves::Upload,
+        ),
         save_as: leaves_as_said(
             &language,
             &settings,
@@ -606,6 +636,12 @@ fn discard(id: Option<u64>, cx: &mut App) {
 pub fn discard_by_user(id: Option<u64>, cx: &mut App) {
     let settings = Perora::get(cx).settings();
     let previews = cx.default_global::<Previews>();
+    // (Not while it is on its way to the server: it is shown again should it not get there.)
+    if previews.uploading.is_some()
+        && previews.uploading == previews.pending.as_ref().map(|pending| pending.id)
+    {
+        return;
+    }
     let Some(pending) = previews
         .pending
         .as_ref()
@@ -762,6 +798,142 @@ pub fn save(id: u64, cx: &mut App) {
         });
     })
     .detach();
+}
+
+/// Uploads the capture (as the user has captures uploaded, or asked for this once). The window is
+/// out of sight at once; the upload ends in a notice, with the link on the clipboard, or brings the
+/// window back to say why it failed and to be tried again. From the large window, what is drawn on
+/// it is in what is uploaded. Only while uploading is on offer (switched on, someone signed in).
+pub fn upload(id: u64, cx: &mut App) {
+    // (What is being written is written first: it is part of what is drawn.)
+    if !large::done_writing(id, cx) {
+        return;
+    }
+    let Some(account) = account::account(cx).filter(|_| account::uploads(cx)) else {
+        return;
+    };
+    let settings = Perora::get(cx).settings();
+    let language = Perora::get(cx).language();
+    let edits = large::drawing_of(id, cx).unwrap_or_default();
+    // (Once at a time for a capture. One before it may still be on its way: that one's link is
+    // still put on the clipboard as it gets there, and this one's after it.)
+    if cx.default_global::<Previews>().uploading == Some(id) {
+        return;
+    }
+    let Some(pending) = to_do(id, cx) else {
+        return;
+    };
+    pending.touched = true;
+    let once = pending.once.of(Leaves::Upload).clone();
+    let (frame, png) = (pending.frame.clone(), pending.png.clone());
+    let previews = cx.default_global::<Previews>();
+    previews.uploading = Some(id);
+    previews.upload_failure = None;
+    previews.save_failure = None;
+    previews.copy_failure = None;
+    let large = previews.large;
+    let drawn = !edits.is_empty();
+    // Out of sight at once (owner: 「ボタン類は押したら基本ウィンドウ速攻閉じていいよ、アップロー
+    // ドも」).
+    if large {
+        large::leaving(id, true, cx);
+    } else {
+        close(cx);
+    }
+    changed(cx);
+
+    // As the user has captures uploaded, or asked for this once: the kind of file, and how large at
+    // most.
+    let how = once.output(&settings, Leaves::Upload);
+    cx.spawn(async move |cx| {
+        let (frame, png) = if drawn {
+            match burn::burn(frame, edits, cx).await {
+                Ok(burned) => (Arc::new(burned), None),
+                Err(detail) => {
+                    eprintln!("upload: the drawing could not be made into an image: {detail}");
+                    cx.update(|cx| {
+                        let unmade = Perora::get(cx).language().text("editor.unmade", &[]);
+                        uploaded(id, Err(unmade), cx);
+                    });
+                    return;
+                }
+            }
+        } else {
+            (frame, png)
+        };
+        let outcome = cx
+            .background_executor()
+            .spawn(async move {
+                let leaving = Pending::new(0, frame, png, None, how);
+                let file = leaving
+                    .file(how)
+                    .map_err(|detail| (language.capture_failed(&detail), false))?;
+                shots::upload(&account, &file).map_err(|error| {
+                    let signed_out = matches!(error, shots::ApiError::SignedOut);
+                    (language.upload_failed(&error), signed_out)
+                })
+            })
+            .await;
+        cx.update(|cx| match outcome {
+            Ok(shot) => uploaded(id, Ok(shot.url), cx),
+            Err((said, signed_out)) => {
+                if signed_out {
+                    account::signed_out_by_server(cx);
+                }
+                uploaded(id, Err(said), cx);
+            }
+        });
+    })
+    .detach();
+}
+
+/// The upload of `id` is over: its link (the page to share), or what went wrong as the user is told
+/// it. Done with the capture when it got there; back on screen with the reason when it did not, and
+/// only a notice when another capture took its place meanwhile.
+fn uploaded(id: u64, outcome: Result<String, String>, cx: &mut App) {
+    let language = Perora::get(cx).language();
+    let previews = cx.default_global::<Previews>();
+    if previews.uploading == Some(id) {
+        previews.uploading = None;
+    }
+    let current = previews
+        .pending
+        .as_ref()
+        .is_some_and(|pending| pending.id == id);
+    match outcome {
+        Ok(url) => {
+            let copied = arboard::Clipboard::new()
+                .and_then(|mut clipboard| clipboard.set_text(url.clone()));
+            let (said, lasting) = match copied {
+                Ok(()) => (language.uploaded(), Lasting::Brief),
+                Err(error) => {
+                    eprintln!("clipboard: the link was not put there: {error}");
+                    (language.uploaded_but_not_copied(&url), Lasting::Long)
+                }
+            };
+            if current {
+                discard(Some(id), cx);
+            }
+            notice::say(said, lasting, None, cx);
+            // (The account page lists it.)
+            account::ask_recent(cx);
+        }
+        Err(said) => {
+            if !current {
+                notice::say(said, Lasting::Long, None, cx);
+                changed(cx);
+                return;
+            }
+            let previews = cx.default_global::<Previews>();
+            previews.upload_failure = Some(said);
+            if previews.large {
+                large::stays(id, cx);
+            } else {
+                show(cx);
+            }
+        }
+    }
+    changed(cx);
 }
 
 /// The capture did not leave: nothing is being done with it now, the window says why, and the large
@@ -930,6 +1102,9 @@ struct Look {
     /// Whether the clipboard holds the capture, as copying would put it there now.
     copied: bool,
     failure: Option<String>,
+    /// Uploading is on offer; uploading it did not work (the button says "try again").
+    offers_upload: bool,
+    upload_failed: bool,
     once: perora_core::preview::Chosen,
 }
 
@@ -937,6 +1112,8 @@ struct Look {
 /// is its own.
 pub struct Small {
     language: Language,
+    /// Uploading is on offer (as last drawn): the tour says so.
+    offers_upload: bool,
     appearing: Option<corner::Appearing>,
     /// The capture it shows: what is its own starts anew with another.
     id: u64,
@@ -999,6 +1176,7 @@ impl Small {
         })
         .detach();
         Self {
+            offers_upload: false,
             language,
             appearing: Some(appearing),
             id: 0,
@@ -1031,7 +1209,7 @@ impl Small {
     /// The steps of the tour, in the user's language.
     fn tour_steps(&self) -> Vec<Step> {
         let t = |key: &str| self.language.text(key, &[]);
-        let offers_upload = false;
+        let offers_upload = self.offers_upload;
         vec![
             Step::new(At::Mark("picture"), t("tour.preview.picture")),
             Step::new(
@@ -1101,6 +1279,8 @@ impl Small {
     }
 
     fn look(&mut self, settings: &Settings, cx: &mut App) -> Option<Look> {
+        let offers_upload = account::uploads(cx);
+        self.offers_upload = offers_upload;
         let previews = cx.default_global::<Previews>();
         // Showing where it appears: as it does with a capture of a monitor in it, copied (nothing in
         // it does anything).
@@ -1112,15 +1292,23 @@ impl Small {
                 picture: None,
                 copied: true,
                 failure: None,
+                offers_upload,
+                upload_failed: false,
                 once: Default::default(),
             });
         }
         let pending = previews.pending.as_ref()?;
         let language = &self.language;
+        let upload_failed = previews.upload_failure.is_some();
         let failure = previews
-            .save_failure
-            .as_ref()
-            .map(|detail| language.text("preview.saveFailed", &[("detail", detail)]))
+            .upload_failure
+            .clone()
+            .or_else(|| {
+                previews
+                    .save_failure
+                    .as_ref()
+                    .map(|detail| language.text("preview.saveFailed", &[("detail", detail)]))
+            })
             .or_else(|| {
                 previews
                     .copy_failure
@@ -1135,6 +1323,8 @@ impl Small {
             picture: previews.picture.clone(),
             copied: pending.copied_now(platform::clipboard_sequence(), settings, &[]),
             failure,
+            offers_upload,
+            upload_failed,
             once: pending.once.clone(),
         })
     }
@@ -1587,13 +1777,41 @@ impl Small {
             .child(self.marks.mark("guide"))
             .on_click(cx.listener(|this, _, _, cx| this.start_tour(cx)));
 
+        // Uploading, when it is on offer: then it is the one that stands out ("try again" after it
+        // did not work).
+        let offers_upload = look.offers_upload;
+        let upload = offers_upload.then(|| {
+            base("upload")
+                .flex_1()
+                .px(px(8.0))
+                .rounded_r(px(6.0))
+                .bg(theme.accent)
+                .border_color(theme.accent)
+                .text_color(theme.accent_text)
+                .tooltip(tip(format!(
+                    "{} · {}",
+                    t("preview.upload"),
+                    self.leaves_as_said(settings, look.once.of(Leaves::Upload), Leaves::Upload)
+                )))
+                .child(t(if look.upload_failed {
+                    "preview.retry"
+                } else {
+                    "preview.upload"
+                }))
+                .on_click(move |_, _, cx| cx.defer(move |cx| upload(id, cx)))
+        });
         let save = base("save")
             .flex_1()
             .px(px(8.0))
             .rounded_r(px(6.0))
-            .bg(theme.accent)
-            .border_color(theme.accent)
-            .text_color(theme.accent_text)
+            .when(offers_upload, |save| {
+                save.hover(move |style| style.border_color(accent))
+            })
+            .when(!offers_upload, |save| {
+                save.bg(theme.accent)
+                    .border_color(theme.accent)
+                    .text_color(theme.accent_text)
+            })
             .tooltip(tip(format!(
                 "{} · {}",
                 t("preview.save"),
@@ -1646,6 +1864,13 @@ impl Small {
                 }),
             )
             .child(guide)
+            .children(upload.map(|upload| {
+                div()
+                    .flex_1()
+                    .flex()
+                    .child(self.chevron(Leaves::Upload, id, theme, cx))
+                    .child(upload)
+            }))
             .child(
                 div()
                     .flex_1()

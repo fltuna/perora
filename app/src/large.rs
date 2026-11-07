@@ -31,7 +31,7 @@ use perora_editor::{Capture, Editor, Event, Leave, Open, Picture};
 use perora_ui::{Theme, Tip};
 
 use crate::state::Perora;
-use crate::{gpu, hwnd, preview};
+use crate::{account, gpu, hwnd, preview};
 
 /// The size the Tauri version opens at, and the smallest it may be (logical pixels, inside).
 const SIZE: (f32, f32) = (1200.0, 800.0);
@@ -331,6 +331,9 @@ fn asked(editor: Entity<Editor>, event: Event, cx: &mut App) {
     match event {
         Event::Changed => changed(cx),
         Event::Leave(Leave::Save) => preview::save(id, cx),
+        // (Ctrl+Enter: uploading when it is on offer, saving otherwise.)
+        Event::Leave(Leave::Upload) if account::uploads(cx) => preview::upload(id, cx),
+        Event::Leave(Leave::Upload) => preview::save(id, cx),
         Event::Discard => preview::discard_by_user(Some(id), cx),
         Event::Toured => saw_tour(cx),
         Event::Open(_) => {}
@@ -567,6 +570,7 @@ fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui:
 }
 
 /// Segoe Fluent Icons, as the Tauri version has them.
+const UPLOAD: &str = "\u{E898}";
 const SAVE: &str = "\u{E74E}";
 const SHEETS: &str = "\u{E8C8}";
 const TICK: &str = "\u{E73E}";
@@ -599,6 +603,8 @@ struct Actions {
     by_tour: bool,
     /// The keys, taken from the editor while the choice is open.
     keys_held: Option<Subscription>,
+    /// Uploading was on offer as the buttons were last drawn (the editor was told so).
+    offers_upload: bool,
     marks: perora_ui::tour::Marks,
 }
 
@@ -619,6 +625,7 @@ impl Actions {
             choosing_for: None,
             by_tour: false,
             keys_held: None,
+            offers_upload: false,
             marks: editor.read(cx).marks(),
         }
     }
@@ -887,9 +894,20 @@ impl Render for Actions {
         }
         let said = preview::said_of(id, &edits, cx);
         let copied = said.as_ref().is_some_and(|said| said.copied);
-        let (save_as, copy_as) = said
-            .map(|said| (said.save_as, said.copy_as))
+        let upload_failed = said.as_ref().is_some_and(|said| said.upload_failed);
+        let (upload_as, save_as, copy_as) = said
+            .map(|said| (said.upload_as, said.save_as, said.copy_as))
             .unwrap_or_default();
+        // Uploading, when it is on offer: then it is the one that stands out, and Ctrl+Enter is it
+        // (the editor is told, for its tour and its keys).
+        let offers_upload = account::uploads(cx);
+        if offers_upload != self.offers_upload {
+            self.offers_upload = offers_upload;
+            let editor = self.editor.clone();
+            cx.defer(move |cx| {
+                let _ = editor.update(cx, |editor, _| editor.set_offers_upload(offers_upload));
+            });
+        }
         let button = |name: &'static str| {
             div()
                 .id(name)
@@ -905,11 +923,36 @@ impl Render for Actions {
                 .cursor(CursorStyle::PointingHand)
         };
         let accent = theme.accent;
+        let upload = offers_upload.then(|| {
+            button("upload")
+                .bg(theme.accent)
+                .border_color(theme.accent)
+                .text_color(theme.accent_text)
+                .tooltip(tip(format!(
+                    "{} (Ctrl+Enter) · {upload_as}",
+                    t(if upload_failed {
+                        "preview.retry"
+                    } else {
+                        "preview.upload"
+                    })
+                )))
+                .child(icon(UPLOAD, 16.0))
+                .on_click(move |_, _, cx| cx.defer(move |cx| preview::upload(id, cx)))
+        });
         let save = button("save")
-            .bg(theme.accent)
-            .border_color(theme.accent)
-            .text_color(theme.accent_text)
-            .tooltip(tip(format!("{} (Ctrl+S) · {save_as}", t("preview.save"))))
+            .when(offers_upload, |save| {
+                save.hover(move |style| style.border_color(accent))
+            })
+            .when(!offers_upload, |save| {
+                save.bg(theme.accent)
+                    .border_color(theme.accent)
+                    .text_color(theme.accent_text)
+            })
+            .tooltip(tip(format!(
+                "{} ({}) · {save_as}",
+                t("preview.save"),
+                if offers_upload { "Ctrl+S" } else { "Ctrl+S, Ctrl+Enter" }
+            )))
             .child(icon(SAVE, 16.0))
             .on_click(move |_, _, cx| cx.defer(move |cx| preview::save(id, cx)));
         // (Named after what it says: GPUI keeps a tooltip that is up as it was made.)
@@ -960,11 +1003,18 @@ impl Render for Actions {
             .child(self.chevron(Leaves::Save, id, &theme, cx))
             .child(self.marks.mark("as"));
         let copy_as_chevron = self.chevron(Leaves::Copy, id, &theme, cx);
+        let upload = upload.map(|upload| {
+            div()
+                .flex()
+                .child(self.chevron(Leaves::Upload, id, &theme, cx))
+                .child(upload.rounded_l(px(0.0)))
+        });
         div()
             .relative()
             .flex()
             .gap(px(4.0))
             .child(self.marks.mark("actions"))
+            .children(upload)
             .child(
                 div()
                     .flex()
@@ -1027,11 +1077,16 @@ impl Render for Status {
             return div();
         };
         let said = preview::said_of(id, &edits, cx);
-        // (P5: "editor.full" when uploading is on offer.)
+        // (Saying "save or upload it as it is" only when uploading is on offer.)
+        let full_said = if account::uploads(cx) {
+            "editor.full"
+        } else {
+            "editor.fullWithoutUpload"
+        };
         let failure = said
             .as_ref()
             .and_then(|said| said.failure.clone())
-            .or_else(|| full.then(|| t("editor.fullWithoutUpload")));
+            .or_else(|| full.then(|| t(full_said)));
         let first = match failure {
             Some(failure) => div()
                 .id("said")
