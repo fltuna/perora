@@ -20,7 +20,7 @@ use gpui::{
     App, AppContext, Bounds, Context, CursorStyle, Entity, Focusable, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
-    KeyDownEvent, MouseButton, MouseDownEvent, deferred, div, point, px, size,
+    KeyDownEvent, MouseButton, MouseDownEvent, canvas, deferred, div, point, px, size,
 };
 use perora_core::output::{FITS, Format};
 use perora_core::settings::Leaves;
@@ -930,21 +930,30 @@ impl Render for Actions {
             .and_then(|leaves| self.menu(leaves, id, &theme, window, cx));
         // While the choice is open, Esc puts it away and no other key does anything (owner's
         // window: the keys are the editor's otherwise). Not while the tour is on: they are its.
-        if self.choosing.is_some() && !touring {
+        // (Listened for as the window is painted: GPUI has nowhere to keep a listener asked for
+        // while what is drawn is still being made, and ends Perora then.)
+        let keys_held = (self.choosing.is_some() && !touring).then(|| {
             let this = cx.entity().downgrade();
-            window.on_key_event(move |event: &KeyDownEvent, phase, _, cx| {
-                if phase != gpui::DispatchPhase::Capture {
-                    return;
-                }
-                cx.stop_propagation();
-                if event.keystroke.key == "escape" {
-                    let _ = this.update(cx, |this, cx| {
-                        this.choosing = None;
-                        cx.notify();
+            canvas(
+                |_, _, _| {},
+                move |_, _, window, _| {
+                    window.on_key_event(move |event: &KeyDownEvent, phase, _, cx| {
+                        if phase != gpui::DispatchPhase::Capture {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        if event.keystroke.key == "escape" {
+                            let _ = this.update(cx, |this, cx| {
+                                this.choosing = None;
+                                cx.notify();
+                            });
+                        }
                     });
-                }
-            });
-        }
+                },
+            )
+            .absolute()
+            .size_0()
+        });
         let save_as_chevron = div()
             .relative()
             .child(self.chevron(Leaves::Save, id, &theme, cx))
@@ -969,6 +978,7 @@ impl Render for Actions {
             )
             .child(bin)
             .children(menu)
+            .children(keys_held)
     }
 }
 
