@@ -3,9 +3,6 @@
 # that there is a newer version (crates/core/src/update.rs; 0.1.x, the Tauri version, reads it the
 # same way, with tauri-plugin-updater).
 #
-# Started by hand (workflow_dispatch), it is a rehearsal: everything but the release. What it made
-# (installer, signature, latest.json) is left as the run's artifact "rehearsal".
-#
 # What 0.1.x needs of it does not change (docs/gpui-rewrite.md, P7): the installer's name and how it
 # installs (installer/installer.nsi), the signature by the same key, and latest.json's fields.
 #
@@ -21,7 +18,6 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions: {}
 
@@ -59,7 +55,6 @@ jobs:
         # (The tag reaches the script as a variable, not as part of its text.)
         env:
           TAG: ${{ github.ref_name }}
-          EVENT: ${{ github.event_name }}
         run: |
           $manifest = Get-Content Cargo.toml -Raw
           if ($manifest -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion = "([^"]+)"') {
@@ -67,7 +62,7 @@ jobs:
           }
           $version = $Matches[1]
           # A release's tag is its version, exactly: the addresses in latest.json are made from it.
-          if ($env:EVENT -eq 'push' -and $env:TAG -cne "v$version") {
+          if ($env:TAG -cne "v$version") {
             Write-Error "tag $env:TAG, Cargo.toml $version"; exit 1
           }
           # A release says what changed in it (a prerelease need not).
@@ -194,19 +189,7 @@ jobs:
           ./out/release_check.exe latest out/latest.json $env:VERSION
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-      - name: Rehearsal
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rehearsal
-          path: |
-            out/Perora_*_x64-setup.exe
-            out/Perora_*_x64-setup.exe.sig
-            out/latest.json
-          if-no-files-found: error
-
       - name: Release
-        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
