@@ -45,4 +45,6 @@ foreach ($language in @(@{ Suffix = '_CHANGELOGS.md'; Out = 'CHANGELOGS.md'; Tit
         Write-Output "$($language.Out): $($files.Count) versions"
     }
 }
+# (Said either way: after a script that ends without `exit`, its caller's $LASTEXITCODE is unset.)
 if ($failed) { exit 1 }
+exit 0

@@ -3,8 +3,16 @@
 # that there is a newer version (crates/core/src/update.rs; 0.1.x, the Tauri version, reads it the
 # same way, with tauri-plugin-updater).
 #
+# Started by hand (workflow_dispatch), it is a rehearsal: everything but the release. What it made
+# (installer, signature, latest.json) is left as the run's artifact "rehearsal".
+#
 # What 0.1.x needs of it does not change (docs/gpui-rewrite.md, P7): the installer's name and how it
 # installs (installer/installer.nsi), the signature by the same key, and latest.json's fields.
+#
+# Three jobs, so that the signing key is in one with as little code as can be: the build (every
+# crate's build script, the actions that set Rust up) never has it; the signing job only fetches what
+# was built, signs it, and hands the signature on; the release is published by a third, which has
+# the right to write to the repository and nothing else.
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (the contents of the key made with `tauri signer generate`) and
 # TAURI_SIGNING_PRIVATE_KEY_PASSWORD. The public half is in crates/core/src/update.rs.
@@ -13,9 +21,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 env:
   # NSIS as the Tauri CLI uses it, and the plugin its script calls (versions compared, Perora started
@@ -29,28 +37,38 @@ env:
   TAURI_CLI: "@tauri-apps/cli@2.12.2"
 
 jobs:
-  release:
-    # Only the public repository releases: the installed Perora looks for its updates there.
+  build:
+    # Only the public repository releases: the installed Perora looks for its updates there (and
+    # only it has the key).
     if: github.repository == 'fltuna/perora'
     runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     defaults:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: The tag is the version, and what changed in it is written
+      - name: The version, and what changed in it
+        id: version
         # (The tag reaches the script as a variable, not as part of its text.)
         env:
           TAG: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
         run: |
-          $version = $env:TAG.TrimStart("v")
           $manifest = Get-Content Cargo.toml -Raw
           if ($manifest -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion = "([^"]+)"') {
             Write-Error "no version in Cargo.toml [workspace.package]"; exit 1
           }
-          if ($Matches[1] -ne $version) {
-            Write-Error "tag $env:TAG, Cargo.toml $($Matches[1])"; exit 1
+          $version = $Matches[1]
+          # A release's tag is its version, exactly: the addresses in latest.json are made from it.
+          if ($env:EVENT -eq 'push' -and $env:TAG -cne "v$version") {
+            Write-Error "tag $env:TAG, Cargo.toml $version"; exit 1
           }
           # A release says what changed in it (a prerelease need not).
           $changes = @(Get-ChildItem CHANGELOG -File -Filter "v${version}_CHANGELOGS*.md")
@@ -59,14 +77,21 @@ jobs:
           }
           ./CHANGELOG/combine.ps1 -Check
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          "VERSION=$version" >> $env:GITHUB_ENV
+          "version=$version" >> $env:GITHUB_OUTPUT
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
-      - uses: swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Build
-        run: cargo build --release --locked -p perora-app
+        run: |
+          cargo build --release --locked -p perora-app
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # (What checks the signature and latest.json as Perora does, for the release job.)
+          cargo build --release --locked -p perora-core --example release_check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: NSIS
         run: |
@@ -88,48 +113,119 @@ jobs:
 
       - name: Installer
         run: |
-          $out = ./installer/build.ps1 -Makensis $env:MAKENSIS -Plugins $env:NSIS_PLUGINS | Select-Object -Last 1
-          "INSTALLER=$out" >> $env:GITHUB_ENV
+          $installer = ./installer/build.ps1 -Makensis $env:MAKENSIS -Plugins $env:NSIS_PLUGINS | Select-Object -Last 1
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $installer out/
+          Copy-Item target/release/examples/release_check.exe out/
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned
+          path: out/
+          if-no-files-found: error
+
+  sign:
+    needs: build
+    if: github.repository == 'fltuna/perora'
+    runs-on: windows-latest
+    permissions: {}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned
+          path: out
 
       - name: Sign
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ needs.build.outputs.version }}
         # (For this version: an update refuses a signature made for another.)
         run: |
-          npx --yes --package=$env:TAURI_CLI -- tauri signer sign --app-version $env:VERSION $env:INSTALLER
+          $installer = "out/Perora_${env:VERSION}_x64-setup.exe"
+          if (-not (Test-Path $installer)) { Write-Error "no $installer"; exit 1 }
+          npx --yes --package=$env:TAURI_CLI -- tauri signer sign --app-version $env:VERSION $installer
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          if (-not (Test-Path "$env:INSTALLER.sig")) { Write-Error "no signature"; exit 1 }
+          if (-not (Test-Path "$installer.sig")) { Write-Error "no signature"; exit 1 }
 
-      - name: latest.json
-        run: ./installer/latest.ps1 -Version $env:VERSION -Signature "$env:INSTALLER.sig" -Out latest.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signature
+          path: out/*.sig
+          if-no-files-found: error
+
+  release:
+    needs: [build, sign]
+    if: github.repository == 'fltuna/perora'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: unsigned
+          path: out
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signature
+          path: out
 
       - name: What is published is what Perora takes
         # The signature checked with Perora's key, as an update checks it before running the
-        # installer; latest.json read as Perora reads it.
+        # installer; latest.json written, and read as Perora reads it.
         run: |
-          cargo run --release --locked -p perora-core --example release_check -- verify $env:INSTALLER "$env:INSTALLER.sig" $env:VERSION
+          $installer = "out/Perora_${env:VERSION}_x64-setup.exe"
+          ./out/release_check.exe verify $installer "$installer.sig" $env:VERSION
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          cargo run --release --locked -p perora-core --example release_check -- latest latest.json $env:VERSION
+          ./installer/latest.ps1 -Version $env:VERSION -Signature "$installer.sig" -Out out/latest.json
+          ./out/release_check.exe latest out/latest.json $env:VERSION
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Rehearsal
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rehearsal
+          path: |
+            out/Perora_*_x64-setup.exe
+            out/Perora_*_x64-setup.exe.sig
+            out/latest.json
+          if-no-files-found: error
+
       - name: Release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         # A draft with everything on it first, then published: releases/latest only ever points at
         # a published release, and that is where Perora looks for updates, so it never finds one
         # without its latest.json. A tag with a hyphen (v0.2.0-rc.1) is a prerelease, which
         # releases/latest passes over: nobody is offered it.
         run: |
+          $installer = "out/Perora_${env:VERSION}_x64-setup.exe"
           $prerelease = $env:TAG.Contains('-')
-          $flags = @('--draft', '--title', "Perora $env:TAG", '--notes', 'Download and run Perora_*_x64-setup.exe. Perora already installed updates itself.', '--verify-tag')
+          $flags = @('--repo', $env:REPOSITORY, '--draft', '--verify-tag', '--title', "Perora $env:TAG",
+            '--notes', 'Download and run Perora_*_x64-setup.exe. Perora already installed updates itself.')
           if ($prerelease) { $flags += '--prerelease' }
-          gh release create $env:TAG $env:INSTALLER "$env:INSTALLER.sig" latest.json @flags
+          gh release create $env:TAG $installer "$installer.sig" out/latest.json @flags
           if ($LASTEXITCODE -ne 0) { exit 1 }
           if ($prerelease) {
-            gh release edit $env:TAG --draft=false
+            gh release edit $env:TAG --repo $env:REPOSITORY --draft=false
           } else {
-            gh release edit $env:TAG --draft=false --latest
+            gh release edit $env:TAG --repo $env:REPOSITORY --draft=false --latest
           }
           if ($LASTEXITCODE -ne 0) { exit 1 }
