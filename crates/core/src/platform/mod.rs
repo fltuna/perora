@@ -441,6 +441,24 @@ pub fn put_file_on_clipboard(path: &std::path::Path) -> std::result::Result<(), 
     windows::clipboard::put_file(path)
 }
 
+/// Whether this program is the installed Perora (in the folder its installer installed into), and
+/// not a build of it run from somewhere else: one being worked on, say.
+#[cfg(windows)]
+pub fn is_installed_copy() -> bool {
+    std::env::current_exe().is_ok_and(|program| windows::installer::is_installed(&program))
+}
+
+/// Writes out the installer of a newer version and runs it with these parameters
+/// (`update::installer_parameters`). Running when this returns `Ok`: Perora is then to end.
+#[cfg(windows)]
+pub fn run_installer(
+    installer: &[u8],
+    version: &str,
+    parameters: &str,
+) -> std::result::Result<(), String> {
+    windows::installer::run(installer, version, parameters)
+}
+
 /// Opens a web page in the user's browser. Only an address of the web (`https://`, `http://`).
 #[cfg(windows)]
 pub fn open_in_browser(url: &str) -> std::result::Result<(), String> {

@@ -3,6 +3,7 @@
 //! that it can be tested and tried on its own.
 
 pub mod account;
+pub mod changelog;
 pub mod colours;
 pub mod config;
 #[cfg(windows)]
@@ -22,6 +23,7 @@ pub mod saving;
 pub mod selection;
 pub mod settings;
 pub mod shots;
+pub mod update;
 
 #[cfg(test)]
 mod testing;
