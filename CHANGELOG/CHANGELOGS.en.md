@@ -1,0 +1,17 @@
+# Changelog
+
+## v0.2.0
+
+Perora has been rebuilt inside. It no longer uses WebView2, and is lighter and faster. Its windows and how you use it are the same as in 0.1.7.
+
+### Changes
+
+- Memory use while waiting went from about 600 MB to around 10 MB
+- The capture screen opens in about 130 ms instead of about 230 ms
+- The pointer in the editor stays an arrow instead of turning into a move or grab hand
+
+### New
+
+- WebP, HEIC, HEIF, AVIF and JXR images can also be opened with "Open with Perora" from the right-click menu
+- Choosing where the preview appears plays the capture sound along with the sample
+- The notice of a new version shows what changed in it (from the next update)

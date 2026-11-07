@@ -1,9 +1,13 @@
-# Builds Perora for Windows when a version tag (v0.1.0, ...) is pushed, and publishes it as a GitHub
+# Builds Perora for Windows when a version tag (v0.2.0, ...) is pushed, and publishes it as a GitHub
 # release: the installer, its signature, and latest.json, which the installed Perora reads to learn
-# that there is a newer version (tauri.conf.json, plugins.updater).
+# that there is a newer version (crates/core/src/update.rs; 0.1.x, the Tauri version, reads it the
+# same way, with tauri-plugin-updater).
+#
+# What 0.1.x needs of it does not change (docs/gpui-rewrite.md, P7): the installer's name and how it
+# installs (installer/installer.nsi), the signature by the same key, and latest.json's fields.
 #
 # Secrets: TAURI_SIGNING_PRIVATE_KEY (the contents of the key made with `tauri signer generate`) and
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD. The public half is in tauri.conf.json.
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD. The public half is in crates/core/src/update.rs.
 name: Release
 
 on:
@@ -13,55 +17,119 @@ on:
 permissions:
   contents: write
 
+env:
+  # NSIS as the Tauri CLI uses it, and the plugin its script calls (versions compared, Perora started
+  # as the user). Fetched by their digests: what runs the installer of every update is not taken on
+  # trust.
+  NSIS_URL: https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip
+  NSIS_SHA256: c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1
+  NSIS_TAURI_UTILS_URL: https://github.com/tauri-apps/nsis-tauri-utils/releases/download/nsis_tauri_utils-v0.5.3/nsis_tauri_utils.dll
+  NSIS_TAURI_UTILS_SHA256: 5ba143b5db4a87d32d6e7802e033330aae56cbceabe0d1e3ba41948385ad4709
+  # The signer the releases have always been signed with (`tauri signer sign`).
+  TAURI_CLI: "@tauri-apps/cli@2.12.2"
+
 jobs:
   release:
     # Only the public repository releases: the installed Perora looks for its updates there.
     if: github.repository == 'fltuna/perora'
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
-      - name: The tag is the version in every manifest
-        shell: pwsh
+      - name: The tag is the version, and what changed in it is written
         # (The tag reaches the script as a variable, not as part of its text.)
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          $tag = $env:TAG.TrimStart("v")
-          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $npm = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $cargo = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          if ($conf -ne $tag -or $npm -ne $tag -or $cargo -ne $tag) {
-            Write-Error "tag $tag, tauri.conf.json $conf, package.json $npm, Cargo.toml $cargo"
-            exit 1
+          $version = $env:TAG.TrimStart("v")
+          $manifest = Get-Content Cargo.toml -Raw
+          if ($manifest -notmatch '(?ms)^\[workspace\.package\]\s*\r?\nversion = "([^"]+)"') {
+            Write-Error "no version in Cargo.toml [workspace.package]"; exit 1
           }
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+          if ($Matches[1] -ne $version) {
+            Write-Error "tag $env:TAG, Cargo.toml $($Matches[1])"; exit 1
+          }
+          # A release says what changed in it (a prerelease need not).
+          $changes = @(Get-ChildItem CHANGELOG -File -Filter "v${version}_CHANGELOGS*.md")
+          if ($changes.Count -eq 0 -and -not $version.Contains('-')) {
+            Write-Error "no CHANGELOG/v${version}_CHANGELOGS.md (nor .en.md)"; exit 1
+          }
+          ./CHANGELOG/combine.ps1 -Check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "VERSION=$version" >> $env:GITHUB_ENV
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: swatinem/rust-cache@v2
 
-      - run: npm ci
+      - name: Build
+        run: cargo build --release --locked -p perora-app
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: NSIS
+        run: |
+          $nsis = Join-Path $env:RUNNER_TEMP 'nsis'
+          Invoke-WebRequest $env:NSIS_URL -OutFile "$nsis.zip"
+          if ((Get-FileHash "$nsis.zip" -Algorithm SHA256).Hash -ne $env:NSIS_SHA256) {
+            Write-Error "NSIS is not the one expected"; exit 1
+          }
+          Expand-Archive "$nsis.zip" -DestinationPath $nsis
+          $plugins = Join-Path $env:RUNNER_TEMP 'nsis-plugins'
+          New-Item -ItemType Directory -Force $plugins | Out-Null
+          Invoke-WebRequest $env:NSIS_TAURI_UTILS_URL -OutFile "$plugins\nsis_tauri_utils.dll"
+          if ((Get-FileHash "$plugins\nsis_tauri_utils.dll" -Algorithm SHA256).Hash -ne $env:NSIS_TAURI_UTILS_SHA256) {
+            Write-Error "nsis_tauri_utils.dll is not the one expected"; exit 1
+          }
+          $makensis = (Get-ChildItem $nsis -Recurse -Filter makensis.exe | Select-Object -First 1).FullName
+          "MAKENSIS=$makensis" >> $env:GITHUB_ENV
+          "NSIS_PLUGINS=$plugins" >> $env:GITHUB_ENV
+
+      - name: Installer
+        run: |
+          $out = ./installer/build.ps1 -Makensis $env:MAKENSIS -Plugins $env:NSIS_PLUGINS | Select-Object -Last 1
+          "INSTALLER=$out" >> $env:GITHUB_ENV
+
+      - name: Sign
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Perora ${{ github.ref_name }}
-          releaseBody: Download and run Perora_*_x64-setup.exe. Perora already installed updates itself.
-          # Published at once: releases/latest only ever points at a published release, and that is
-          # where Perora looks for updates. A tag with a hyphen (v0.2.0-rc.1) is a prerelease, which
-          # releases/latest passes over: nobody is offered it.
-          releaseDraft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          includeUpdaterJson: true
-          # The signed update and its signature: only here, where the key is (a build from the
-          # source without it stays as it is).
-          args: --config src-tauri/tauri.release.conf.json
+        # (For this version: an update refuses a signature made for another.)
+        run: |
+          npx --yes --package=$env:TAURI_CLI -- tauri signer sign --app-version $env:VERSION $env:INSTALLER
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path "$env:INSTALLER.sig")) { Write-Error "no signature"; exit 1 }
+
+      - name: latest.json
+        run: ./installer/latest.ps1 -Version $env:VERSION -Signature "$env:INSTALLER.sig" -Out latest.json
+
+      - name: What is published is what Perora takes
+        # The signature checked with Perora's key, as an update checks it before running the
+        # installer; latest.json read as Perora reads it.
+        run: |
+          cargo run --release --locked -p perora-core --example release_check -- verify $env:INSTALLER "$env:INSTALLER.sig" $env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cargo run --release --locked -p perora-core --example release_check -- latest latest.json $env:VERSION
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        # A draft with everything on it first, then published: releases/latest only ever points at
+        # a published release, and that is where Perora looks for updates, so it never finds one
+        # without its latest.json. A tag with a hyphen (v0.2.0-rc.1) is a prerelease, which
+        # releases/latest passes over: nobody is offered it.
+        run: |
+          $prerelease = $env:TAG.Contains('-')
+          $flags = @('--draft', '--title', "Perora $env:TAG", '--notes', 'Download and run Perora_*_x64-setup.exe. Perora already installed updates itself.', '--verify-tag')
+          if ($prerelease) { $flags += '--prerelease' }
+          gh release create $env:TAG $env:INSTALLER "$env:INSTALLER.sig" latest.json @flags
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($prerelease) {
+            gh release edit $env:TAG --draft=false
+          } else {
+            gh release edit $env:TAG --draft=false --latest
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
