@@ -5,7 +5,7 @@ members = ["crates/core", "crates/ui", "crates/editor", "app"]
 # Perora's version, for every crate of it: the one the main window shows, the one updates are
 # compared with, and the one a release's tag must name (.github/workflows/release.yml).
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 
 # GPUI from Perora's fork of Zed (`perora` branch: Zed's main with Perora's changes to GPUI, kept up
 # to date by .github/workflows/zed-fork.yml). The commit is moved by hand, after trying it: GPUI is

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.2
+
+### Fixes
+
+- The numbers on the capture screen's bar and the editor's numbered stamps sat a little below the middle
+
 ## v0.2.1
 
 ### New
