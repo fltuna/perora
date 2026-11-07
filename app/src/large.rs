@@ -20,7 +20,7 @@ use gpui::{
     App, AppContext, Bounds, Context, CursorStyle, Entity, Focusable, Global, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
     Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds, WindowHandle, WindowOptions,
-    KeyDownEvent, MouseButton, MouseDownEvent, canvas, deferred, div, point, px, size,
+    MouseButton, MouseDownEvent, deferred, div, point, px, size,
 };
 use perora_core::output::{FITS, Format};
 use perora_core::settings::Leaves;
@@ -597,6 +597,8 @@ struct Actions {
     choosing_for: Option<u64>,
     /// The choice was opened by the tour: it is the tour's to put away.
     by_tour: bool,
+    /// The keys, taken from the editor while the choice is open.
+    keys_held: Option<Subscription>,
     marks: perora_ui::tour::Marks,
 }
 
@@ -616,6 +618,7 @@ impl Actions {
             opened: Instant::now(),
             choosing_for: None,
             by_tour: false,
+            keys_held: None,
             marks: editor.read(cx).marks(),
         }
     }
@@ -929,31 +932,29 @@ impl Render for Actions {
             .choosing
             .and_then(|leaves| self.menu(leaves, id, &theme, window, cx));
         // While the choice is open, Esc puts it away and no other key does anything (owner's
-        // window: the keys are the editor's otherwise). Not while the tour is on: they are its.
-        // (Listened for as the window is painted: GPUI has nowhere to keep a listener asked for
-        // while what is drawn is still being made, and ends Perora then.)
-        let keys_held = (self.choosing.is_some() && !touring).then(|| {
+        // window: the keys are the editor's otherwise). Not while the tour is on: they are its;
+        // not with Alt, which is the system's. Taken before the window hands them out: GPUI hands
+        // a key to what has the keyboard (the editor) and what that is inside of, not to what is
+        // inside it, as this is. (Asked for while what is drawn is being made, a listener of the
+        // window's own has nowhere to be kept, and GPUI ends Perora.)
+        if self.choosing.is_none() || touring {
+            self.keys_held = None;
+        } else if self.keys_held.is_none() {
             let this = cx.entity().downgrade();
-            canvas(
-                |_, _, _| {},
-                move |_, _, window, _| {
-                    window.on_key_event(move |event: &KeyDownEvent, phase, _, cx| {
-                        if phase != gpui::DispatchPhase::Capture {
-                            return;
-                        }
-                        cx.stop_propagation();
-                        if event.keystroke.key == "escape" {
-                            let _ = this.update(cx, |this, cx| {
-                                this.choosing = None;
-                                cx.notify();
-                            });
-                        }
+            let own = window.window_handle();
+            self.keys_held = Some(cx.intercept_keystrokes(move |event, window, cx| {
+                if window.window_handle() != own || event.keystroke.modifiers.alt {
+                    return;
+                }
+                cx.stop_propagation();
+                if event.keystroke.key == "escape" {
+                    let _ = this.update(cx, |this, cx| {
+                        this.choosing = None;
+                        cx.notify();
                     });
-                },
-            )
-            .absolute()
-            .size_0()
-        });
+                }
+            }));
+        }
         let save_as_chevron = div()
             .relative()
             .child(self.chevron(Leaves::Save, id, &theme, cx))
@@ -978,7 +979,6 @@ impl Render for Actions {
             )
             .child(bin)
             .children(menu)
-            .children(keys_held)
     }
 }
 
