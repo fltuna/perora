@@ -105,6 +105,26 @@ pub fn local_timestamp() -> String {
     )
 }
 
+/// A moment in UTC (year, month, day, hour, minute, second) on the user's clock, as the system
+/// turns it with the time zone's rules for that day (summer time and all).
+pub fn to_local(utc: [u16; 6]) -> Option<[u16; 5]> {
+    use windows::Win32::Foundation::SYSTEMTIME;
+    use windows::Win32::System::Time::SystemTimeToTzSpecificLocalTime;
+    let [year, month, day, hour, minute, second] = utc;
+    let utc = SYSTEMTIME {
+        wYear: year,
+        wMonth: month,
+        wDay: day,
+        wHour: hour,
+        wMinute: minute,
+        wSecond: second,
+        ..Default::default()
+    };
+    let mut local = SYSTEMTIME::default();
+    unsafe { SystemTimeToTzSpecificLocalTime(None, &utc, &mut local) }.ok()?;
+    Some([local.wYear, local.wMonth, local.wDay, local.wHour, local.wMinute])
+}
+
 pub fn regional_locale() -> Option<String> {
     let mut name = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
     let length = unsafe { GetUserDefaultLocaleName(&mut name) };

@@ -109,6 +109,63 @@ pub fn upload<S: TokenStore>(account: &Account<S>, image: &[u8]) -> Result<Shot>
     })
 }
 
+/// The most of an image that is read for showing it among the recent uploads: what the server takes
+/// (20 MiB), and a little more.
+const IMAGE_AT_MOST: u64 = 24 * 1024 * 1024;
+
+/// The bytes of one of the user's uploaded images (`Shot::image_url`), to show it. The caller makes
+/// sure the address is the server's: the token goes with the request.
+pub fn image<S: TokenStore>(account: &Account<S>, url: &str) -> Result<Vec<u8>> {
+    let authorization = format!("Bearer {}", account.access_token()?);
+    let mut response = account
+        .agent()
+        .get(url)
+        .header("Authorization", authorization)
+        .call()
+        .map_err(|error| ApiError::Unreachable(error.to_string()))?;
+    let status = response.status().as_u16();
+    if !(200..=299).contains(&status) {
+        return Err(ApiError::Rejected {
+            status,
+            detail: None,
+        });
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(IMAGE_AT_MOST)
+        .read_to_vec()
+        .map_err(|error| ApiError::Unreachable(error.to_string()))
+}
+
+impl Shot {
+    /// When it was uploaded, in UTC: year, month, day, hour, minute, second. `None` when the server
+    /// wrote it some other way than ISO 8601 (`2026-11-07T06:12:34.5Z`).
+    pub fn uploaded_at(&self) -> Option<[u16; 6]> {
+        uploaded_at(&self.created_at)
+    }
+}
+
+fn uploaded_at(written: &str) -> Option<[u16; 6]> {
+    let bytes = written.as_bytes();
+    if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || !matches!(bytes[10], b'T' | b' ')
+    {
+        return None;
+    }
+    let number = |from: usize, to: usize| written.get(from..to)?.parse::<u16>().ok();
+    let moment = [
+        number(0, 4)?,
+        number(5, 7)?,
+        number(8, 10)?,
+        number(11, 13)?,
+        number(14, 16)?,
+        number(17, 19)?,
+    ];
+    // (Only a moment in UTC is taken as one: `Z`, or no offset at all, or one of none.)
+    let rest = written[19..].trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    matches!(rest, "" | "Z" | "z" | "+00:00" | "-00:00" | "+0000").then_some(moment)
+}
+
 /// Makes a request with the access token; when the server does not take the token, once more with a
 /// renewed one (the server and this machine may disagree about the time by a little).
 fn send<S: TokenStore, T: serde::de::DeserializeOwned>(
@@ -149,6 +206,35 @@ fn send<S: TokenStore, T: serde::de::DeserializeOwned>(
                     .and_then(|problem| problem.detail),
             }),
         };
+    }
+}
+
+#[cfg(test)]
+mod uploaded_at_tests {
+    use super::uploaded_at;
+
+    #[test]
+    fn the_moment_is_read_as_the_server_writes_it() {
+        assert_eq!(
+            uploaded_at("2026-11-07T06:12:34.5Z"),
+            Some([2026, 11, 7, 6, 12, 34])
+        );
+        assert_eq!(
+            uploaded_at("2026-11-07T06:12:34Z"),
+            Some([2026, 11, 7, 6, 12, 34])
+        );
+        assert_eq!(
+            uploaded_at("2026-11-07T06:12:34.1234567+00:00"),
+            Some([2026, 11, 7, 6, 12, 34])
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_moment_in_utc_is_none() {
+        assert_eq!(uploaded_at(""), None);
+        assert_eq!(uploaded_at("yesterday"), None);
+        assert_eq!(uploaded_at("2026-11-07T06:12:34+09:00"), None);
+        assert_eq!(uploaded_at("2026/11/07 06:12:34"), None);
     }
 }
 

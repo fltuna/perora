@@ -16,7 +16,7 @@ use perora_core::selection::Mode;
 use perora_core::settings::{After, Hider, Leaves, Look, Settings};
 use perora_ui::{Button, Check, Item, Reveal, Select, Switch, Theme};
 
-use super::rows::{about, card, hint_text, notice, section, setting};
+use super::rows::{card, hint_text, notice, section, setting};
 use super::system::{self, Occasion};
 use super::{MainWindow, reveal_area};
 use crate::state::Perora;
@@ -380,11 +380,10 @@ pub fn capture(
     _: &mut Window,
     cx: &mut Context<MainWindow>,
 ) -> Vec<AnyElement> {
-    let _ = cx;
     let t = said(language);
     // Uploading is an extra, to be switched on: which takes a sign-in. What goes with it is shown
-    // under it, while it is on. (No sign-in yet in this version: P5 adds it later.)
-    let signed_in = false;
+    // under it, while it is on.
+    let signed_in = crate::account::signed_in(cx);
     let uploads = signed_in && settings.upload_enabled;
     // Captures are copied: as they are shown, or straight after being taken (then with no preview,
     // and nothing to discard).
@@ -866,29 +865,4 @@ pub fn general(
         // (The version and its updates go here: P7, the updater.)
     ]);
     page
-}
-
-pub fn account(language: &Language, theme: &Theme) -> Vec<AnyElement> {
-    let t = said(language);
-    // Signed out only, for now: signing in (and what is shown while the browser is awaited, and
-    // once signed in: who, the recent uploads) comes later in P5. The button is there, and does
-    // nothing yet.
-    vec![
-        card(
-            about(
-                t("main.account.signedOut"),
-                Some(t("main.account.signedOutHint")),
-                theme,
-            ),
-            Some(
-                Button::new("signIn", t("main.account.signIn"))
-                    .accent()
-                    .enabled(false)
-                    .into_any_element(),
-            ),
-            false,
-            theme,
-        )
-        .into_any_element(),
-    ]
 }

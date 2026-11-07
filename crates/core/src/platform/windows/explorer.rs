@@ -257,6 +257,39 @@ pub fn reveal(path: &std::path::Path) -> Result<(), String> {
     }
 }
 
+/// Opens a web page in the user's browser, through the shell (as tauri-plugin-opener did). Only an
+/// address of the web (`https://`, or `http://` for a server on this machine while developing):
+/// whatever else the shell would run is not handed to it.
+pub fn open_in_browser(url: &str) -> Result<(), String> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, w};
+
+    let parsed = url::Url::parse(url).map_err(|error| error.to_string())?;
+    if !matches!(parsed.scheme(), "https" | "http") {
+        return Err(format!("not a web address: {url}"));
+    }
+    let opened = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &HSTRING::from(parsed.as_str()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    // (Above 32 is a success, as the call has always said.)
+    if opened.0 as usize > 32 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the browser could not be opened ({})",
+            opened.0 as usize
+        ))
+    }
+}
+
 /// Opens a folder, through the shell (as tauri-plugin-opener does when the file cannot be shown in
 /// it).
 fn explore(folder: &std::path::Path) -> Result<(), ()> {

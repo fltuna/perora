@@ -22,11 +22,14 @@
 //! - `shot NAME` (the window, as it is now, into `<out-dir>/NAME.png`)
 //!
 //! With `LOOK_TAKEN` set, the shortcut is as if another application had it; `LOOK_SETTINGS` adds to
-//! the settings the window starts with (JSON members: `"copyToClipboard": false`).
+//! the settings the window starts with (JSON members: `"copyToClipboard": false`); `LOOK_ACCOUNT`
+//! makes up the account (`out`, `waiting`, `in`, `in-none`, `in-unreachable`, `in-refused`).
 
 // The application's own modules, as its `main.rs` has them: an example cannot use a program's.
 #![allow(dead_code)]
 
+#[path = "../src/account.rs"]
+mod account;
 #[path = "../src/arguments.rs"]
 mod arguments;
 #[path = "../src/bar.rs"]
@@ -90,6 +93,7 @@ pub enum Signal {
     ToggleMain,
     Quit,
     Asked(arguments::Asked),
+    ShellBack,
 }
 
 /// As the application's `main.rs` has it: never made here (no tray, no shortcut).
@@ -152,6 +156,11 @@ fn main() {
             snipping: false,
         };
         cx.set_global(perora);
+        // The account as `LOOK_ACCOUNT` says (`out`, `waiting`, `in`, `in-none`, `in-unreachable`,
+        // `in-refused`): made up, nothing asked of the server. Without it, no account at all.
+        if let Ok(pretended) = std::env::var("LOOK_ACCOUNT") {
+            account::pretend(&pretended, &out, cx);
+        }
         main_window::apply_theme(cx);
         perora_ui::text_field::bind_keys(cx);
         let options = WindowOptions {

@@ -7,6 +7,8 @@
 
 // (Each part has its path said: `examples/look_main.rs` takes this file in by its path, and a file
 // taken in so looks for its parts beside itself.)
+#[path = "main_window/account_page.rs"]
+mod account_page;
 #[path = "main_window/area_screen.rs"]
 pub mod area_screen;
 #[path = "main_window/pages.rs"]
@@ -111,6 +113,8 @@ pub struct MainWindow {
     /// The last combination that was not made the shortcut, and why.
     refusal: Option<(Refusal, String)>,
     seconds: SecondsFields,
+    /// The upload whose link was just copied on the account page: its button says so a moment.
+    copied_link: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -155,6 +159,10 @@ impl MainWindow {
         subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 apply_theme(cx);
+                // (Uploads may have been made meanwhile, here or elsewhere.)
+                if this.page == Page::Account {
+                    crate::account::ask_recent(cx);
+                }
                 cx.notify();
             } else if this.recording {
                 this.stop_recording(cx);
@@ -179,6 +187,7 @@ impl MainWindow {
             dragged: None,
             refusal: None,
             seconds,
+            copied_link: None,
             _subscriptions: subscriptions,
         }
     }
@@ -191,6 +200,9 @@ impl MainWindow {
             self.stop_recording(cx);
         }
         self.page = page;
+        if page == Page::Account {
+            crate::account::ask_recent(cx);
+        }
         // (What was said of the last combination tried belongs to the shortcut page as it was.)
         self.refusal = None;
         self.scroll.set_offset(point(px(0.0), px(0.0)));
@@ -319,7 +331,7 @@ impl Render for MainWindow {
             Page::Editor => pages::editor(&settings, &language, &theme),
             Page::Shortcut => shortcut_page::page(self, &language, &theme, cx),
             Page::General => pages::general(self, &settings, &language, &theme, cx),
-            Page::Account => pages::account(&language, &theme),
+            Page::Account => account_page::page(self, &language, &theme, cx),
         };
         let heading = div()
             .flex_none()

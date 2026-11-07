@@ -8,6 +8,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod account;
 mod arguments;
 mod bar;
 mod burn;
@@ -141,6 +142,8 @@ fn main() {
             });
             let _ = sender.try_send(Signal::Asked(first));
             cx.set_global(perora);
+            // Signed in as far as a sign-in is stored; the server is asked who it is meanwhile.
+            account::start(cx);
             // "Open with Perora" on images, with this program, as the settings say.
             opening::keep_explorer_entry(cx);
             cx.set_global(Kept {
@@ -178,6 +181,9 @@ fn act(signal: Signal, cx: &mut App) {
         Signal::Asked(Asked::Open(file)) => opening::open_file(file, cx),
         Signal::ShellBack => tray::shell_back(cx),
         Signal::Quit => {
+            // The browser is not waited for any more; a renewal of the sign-in under way is let
+            // finish (a refresh token is good once).
+            account::settle(cx);
             // The icon, the shortcut and the claim to be the one Perora go before the application
             // does.
             if cx.has_global::<Kept>() {

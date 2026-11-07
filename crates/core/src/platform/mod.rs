@@ -289,6 +289,16 @@ pub fn read_image(
     windows::imaging::read(path, most, longest)
 }
 
+/// Reads an image that is in memory, as `read_image` reads a file.
+#[cfg(windows)]
+pub fn read_image_bytes(
+    bytes: &[u8],
+    most: u64,
+    longest: u32,
+) -> std::result::Result<Frame, ImageError> {
+    windows::imaging::read_bytes(bytes, most, longest)
+}
+
 /// Lets the user choose an image file to open, over `owner` (which cannot be used meanwhile); `images`
 /// and `all` name the lists of files offered (the kinds of image first). Waits for the answer: not to be
 /// called where the windows are drawn. `None` when no file was chosen.
@@ -429,6 +439,19 @@ pub fn animates() -> bool {
 #[cfg(windows)]
 pub fn put_file_on_clipboard(path: &std::path::Path) -> std::result::Result<(), String> {
     windows::clipboard::put_file(path)
+}
+
+/// Opens a web page in the user's browser. Only an address of the web (`https://`, `http://`).
+#[cfg(windows)]
+pub fn open_in_browser(url: &str) -> std::result::Result<(), String> {
+    windows::explorer::open_in_browser(url)
+}
+
+/// A moment in UTC (year, month, day, hour, minute, second) on the user's clock: year, month, day,
+/// hour, minute. `None` when it is no moment the system can turn.
+#[cfg(windows)]
+pub fn to_local_time(utc: [u16; 6]) -> Option<[u16; 5]> {
+    windows::to_local(utc)
 }
 
 /// Opens the folder a file is in, with the file chosen there (as the file manager's "show in

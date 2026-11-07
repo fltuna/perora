@@ -7,8 +7,8 @@ use std::path::Path;
 
 use windows::Win32::Foundation::{GENERIC_READ, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapFrameDecode,
-    IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICBitmapDecoder,
+    IWICBitmapFrameDecode, IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom,
     WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PropVariantClear};
@@ -51,7 +51,6 @@ impl Drop for Com {
 /// more than `longest` a side (what can be drawn on, and leave, has its limits).
 pub fn read(path: &Path, most: u64, longest: u32) -> Result<Frame, ImageError> {
     let _com = Com::take();
-    let unreadable = |error: windows::core::Error| ImageError::Unreadable(error.message());
     unsafe {
         let factory: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
@@ -64,6 +63,38 @@ pub fn read(path: &Path, most: u64, longest: u32) -> Result<Frame, ImageError> {
                 WICDecodeMetadataCacheOnDemand,
             )
             .map_err(unreadable)?;
+        decode(&factory, &decoder, most, longest)
+    }
+}
+
+/// Reads an image that is in memory (a file's bytes, as a server sent them), as `read` does a file.
+pub fn read_bytes(bytes: &[u8], most: u64, longest: u32) -> Result<Frame, ImageError> {
+    let _com = Com::take();
+    unsafe {
+        let factory: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
+                .map_err(unreadable)?;
+        let stream = factory.CreateStream().map_err(unreadable)?;
+        stream.InitializeFromMemory(bytes).map_err(unreadable)?;
+        let decoder = factory
+            .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
+            .map_err(unreadable)?;
+        decode(&factory, &decoder, most, longest)
+    }
+}
+
+fn unreadable(error: windows::core::Error) -> ImageError {
+    ImageError::Unreadable(error.message())
+}
+
+/// The first picture of what the decoder reads, as `read` gives it.
+unsafe fn decode(
+    factory: &IWICImagingFactory,
+    decoder: &IWICBitmapDecoder,
+    most: u64,
+    longest: u32,
+) -> Result<Frame, ImageError> {
+    unsafe {
         let picture = decoder.GetFrame(0).map_err(unreadable)?;
         let (mut width, mut height) = (0u32, 0u32);
         picture
@@ -139,6 +170,18 @@ mod tests {
         let path = folder.join(name);
         std::fs::write(&path, file).unwrap();
         path
+    }
+
+    #[test]
+    fn reads_a_png_in_memory_as_a_file() {
+        let original = picture();
+        let read = read_bytes(&original.to_png().unwrap(), 1 << 20, 1 << 14).unwrap();
+        assert_eq!(read.area, Rect::new(0, 0, 3, 2));
+        assert_eq!(read.rgba, original.rgba);
+        assert!(matches!(
+            read_bytes(b"not an image", 1 << 20, 1 << 14),
+            Err(ImageError::Unreadable(_))
+        ));
     }
 
     #[test]
