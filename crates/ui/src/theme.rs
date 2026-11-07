@@ -38,6 +38,10 @@ pub struct Theme {
     pub accent: Hsla,
     /// Text on the accent colour.
     pub accent_text: Hsla,
+    /// The accent colour as on dark, whatever the theme: for what is always dark (the selection
+    /// screen, its bar, the part of the screen that brings the bar back), and the text on it.
+    pub accent_dark: Hsla,
+    pub accent_dark_text: Hsla,
     pub good: Hsla,
     pub bad: Hsla,
     pub warning: Hsla,
@@ -58,10 +62,11 @@ impl Theme {
     pub fn new(mode: Mode, system_accent: Option<(u8, u8, u8)>) -> Self {
         let (r, g, b) = system_accent.unwrap_or(DEFAULT_ACCENT);
         let colour = |hex: u32| -> Hsla { rgb(hex).into() };
+        // `color-mix(in srgb, accent 55%, white)` in style.css.
+        let accent_dark = colour(hex(mix(r), mix(g), mix(b)));
         let accent: Hsla = match mode {
             Mode::Light => colour(hex(r, g, b)),
-            // `color-mix(in srgb, accent 55%, white)` in style.css.
-            Mode::Dark => colour(hex(mix(r), mix(g), mix(b))),
+            Mode::Dark => accent_dark,
         };
         let (background, surface, surface_hover, border, text, muted) = match mode {
             Mode::Dark => (0x202020, 0x2b2b2b, 0x323232, 0x3a3a3a, 0xffffff, 0xc5c5c5),
@@ -81,6 +86,8 @@ impl Theme {
             muted: colour(muted),
             accent,
             accent_text: colour(accent_text),
+            accent_dark,
+            accent_dark_text: colour(0x000000),
             good: colour(good),
             bad: colour(bad),
             warning: colour(warning),

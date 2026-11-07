@@ -858,7 +858,7 @@ impl Render for Overlay {
                         .h(area.size.height + px(2.0))
                         .border_2()
                 };
-                root = root.child(frame.border_color(rgba(bar::CURRENT)));
+                root = root.child(frame.border_color(perora_ui::Theme::get(cx).accent_dark));
                 // Its size while it is dragged out, in pixels of the screen, under its left corner.
                 if highlight.dragging {
                     root = root.child(
@@ -889,7 +889,8 @@ impl Render for Overlay {
                 window.request_animation_frame();
             }
             if listed {
-                let accent = perora_ui::Theme::get(cx).accent;
+                // (The selection screen is always dark.)
+                let accent = perora_ui::Theme::get(cx).accent_dark;
                 root = root.child(window_list::element(
                     &selection.list,
                     windows,
@@ -899,7 +900,13 @@ impl Render for Overlay {
                 ));
             }
             selection.marks.turn();
-            root = root.child(bar::element(selection, &entity, mode, &selection.language));
+            root = root.child(bar::element(
+                selection,
+                &entity,
+                mode,
+                &selection.language,
+                perora_ui::Theme::get(cx),
+            ));
         }
         // The tour, on the monitor with the bar: what the step shows on the screen, then the tour.
         if home && touring {
@@ -909,7 +916,7 @@ impl Render for Overlay {
             let theme = perora_ui::Theme::get(cx).clone();
             let tour = self.selection.update(cx, |selection, _| {
                 let touring = selection.touring.as_mut()?;
-                let art = touring::art(touring, &language);
+                let art = touring::art(touring, &language, &theme);
                 let pressed = entity.downgrade();
                 let view = touring.tour.view(&marks, &words, &theme, window, move |button, _, cx| {
                     let _ = pressed.update(cx, |selection, cx| {

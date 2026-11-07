@@ -9,7 +9,6 @@ use gpui::{
     canvas, point, px, quad, size,
 };
 
-use crate::tour::BLUE;
 
 /// What is done with a button of the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +28,7 @@ pub enum Wheel {
     Down,
 }
 
-/// A press twice: shown blue, clear, blue, clear (0.9 s, in fifths).
+/// A press twice: shown accent, clear, accent, clear (0.9 s, in fifths).
 const TWICE: Duration = Duration::from_millis(900);
 /// The ridges of the wheel go round once in this long.
 const TURNS: Duration = Duration::from_millis(250);
@@ -45,7 +44,9 @@ pub fn hand(
 ) -> impl IntoElement {
     canvas(
         |_, _, _| {},
-        move |_, _, window, _| {
+        move |_, _, window, cx| {
+            // (The button held, in the accent colour.)
+            let accent = crate::Theme::get(cx).accent;
             pointer(at, window);
             mouse(
                 at + point(px(22.0), px(16.0)),
@@ -53,6 +54,7 @@ pub fn hand(
                 wheel,
                 since,
                 motion,
+                accent,
                 window,
             );
         },
@@ -109,12 +111,12 @@ fn mouse(
     wheel: Option<Wheel>,
     since: Instant,
     motion: bool,
+    accent: Hsla,
     window: &mut Window,
 ) {
     let place = |x: f32, y: f32, width: f32, height: f32| {
         Bounds::new(at + point(px(x), px(y)), size(px(width), px(height)))
     };
-    let blue: Hsla = gpui::rgb(BLUE).into();
     let dark: Hsla = gpui::rgb(0x222222).into();
     // (A shadow, then the body.)
     window.paint_quad(quad(
@@ -133,7 +135,7 @@ fn mouse(
         dark,
         BorderStyle::Solid,
     ));
-    // The button held: blue (pressed twice: blue, clear, blue, clear, then clear).
+    // The button held: accent (pressed twice: accent, clear, accent, clear, then clear).
     let lit = match held {
         Some(Held::Twice) => {
             let fifth = (since.elapsed().as_secs_f32() / (TWICE.as_secs_f32() / 5.0)) as u32;
@@ -161,7 +163,7 @@ fn mouse(
         window.paint_quad(quad(
             place(if left { 1.8 } else { 22.0 }, 1.8, 20.2, 32.2),
             corners,
-            blue,
+            accent,
             px(0.0),
             gpui::transparent_black(),
             BorderStyle::Solid,
@@ -220,7 +222,7 @@ fn mouse(
             line.line_to(at + point(px(28.0), px(ends)));
             let alpha = if index == lit || lit == 3 { 1.0 } else { 0.25 };
             if let Ok(path) = line.build() {
-                window.paint_path(path, blue.opacity(alpha));
+                window.paint_path(path, accent.opacity(alpha));
             }
         }
     }

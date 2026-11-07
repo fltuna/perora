@@ -15,7 +15,7 @@ use perora_core::geometry::Rect;
 use perora_core::language::Language;
 use perora_core::platform::{Monitor, Window as Listed};
 use perora_ui::motion::{EASE_IN_OUT, EASE_OUT};
-use perora_ui::tour::{At, BLUE, Look, Step, Tour};
+use perora_ui::tour::{At, Look, Step, Tour};
 
 /// A moment after the screen came up, so that it is seen to come first.
 pub const COMES_AFTER: Duration = Duration::from_millis(400);
@@ -209,11 +209,16 @@ fn example(area: Rect, windows: &[Listed]) -> Option<Rect> {
 
 /// What the step on now shows on the screen, under the tour: the part that brings the bar back, a
 /// window drawn for the purpose with a click on it, the pointer dragging a frame open.
-pub fn art(touring: &Touring, language: &Language) -> Option<gpui::AnyElement> {
+pub fn art(
+    touring: &Touring,
+    language: &Language,
+    theme: &perora_ui::Theme,
+) -> Option<gpui::AnyElement> {
     let shown = touring.shown.get(touring.tour.at()).copied()?;
     let began = touring.tour.step_began();
     let moves = perora_core::platform::animations_enabled();
-    let blue: Hsla = gpui::rgb(BLUE).into();
+    // (The selection screen is always dark.)
+    let accent: Hsla = theme.accent_dark;
     Some(match shown {
         Shown::Nothing => return None,
         Shown::Zone(zone) => div()
@@ -222,9 +227,9 @@ pub fn art(touring: &Touring, language: &Language) -> Option<gpui::AnyElement> {
             .top(zone.origin.y)
             .w(zone.size.width)
             .h(zone.size.height)
-            .bg(gpui::rgba(0x4f8c_ff59))
+            .bg(accent.opacity(0.35))
             .border_1()
-            .border_color(blue)
+            .border_color(accent)
             .into_any_element(),
         Shown::Click { frame, sample } => {
             let middle = frame.center();
@@ -259,7 +264,7 @@ pub fn art(touring: &Touring, language: &Language) -> Option<gpui::AnyElement> {
                                     Corners::all(px(side / 2.0)),
                                     gpui::transparent_black(),
                                     px(2.0),
-                                    blue.opacity(opacity),
+                                    accent.opacity(opacity),
                                     BorderStyle::Solid,
                                 ));
                             }

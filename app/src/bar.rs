@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Bounds, BoxShadow, CursorStyle, Entity, FontWeight, InteractiveElement, IntoElement,
+    AnyElement, Bounds, BoxShadow, CursorStyle, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
     ParentElement, Pixels, Size, StatefulInteractiveElement, Styled, canvas, div, point, px, rgba,
 };
 use perora_core::language::Language;
@@ -167,6 +167,7 @@ pub fn element(
     entity: &Entity<Selection>,
     mode: Mode,
     language: &Language,
+    theme: &perora_ui::Theme,
 ) -> AnyElement {
     let bar = selection.bar();
     let height = bar
@@ -179,7 +180,12 @@ pub fn element(
 
     let modes = Mode::ALL.iter().enumerate().map(|(index, &each)| {
         let current = each == mode;
-        let colour = if current { 0xffff_ffff } else { 0xeceef2ff };
+        // The mode chosen: in the accent colour, as on dark (the screen always is).
+        let colour: Hsla = if current {
+            theme.accent_dark_text
+        } else {
+            rgba(0xeceef2ff).into()
+        };
         let entity = entity.clone();
         div()
             .id(("mode", index))
@@ -193,8 +199,8 @@ pub fn element(
             .border_color(rgba(0x0000_0000))
             .cursor(CursorStyle::PointingHand)
             .whitespace_nowrap()
-            .text_color(rgba(colour))
-            .when(current, |button| button.bg(rgba(CURRENT)))
+            .text_color(colour)
+            .when(current, |button| button.bg(theme.accent_dark))
             .when(!current, |button| button.hover(|button| button.bg(rgba(0x2326_2dff))))
             .on_click(move |_, _, cx| {
                 let entity = entity.clone();
@@ -325,16 +331,15 @@ pub fn element(
 }
 
 /// The colour of the current mode (and of the frame around what would be chosen).
-pub const CURRENT: u32 = 0x4f8c_ffff;
 
 /// The key of a mode, in a small frame of the text's colour, a little faded.
-fn key(number: usize, colour: u32) -> impl IntoElement {
+fn key(number: usize, colour: Hsla) -> impl IntoElement {
     div()
         .min_w(px(18.0))
         .px(px(4.0))
         .rounded(px(4.0))
         .border_1()
-        .border_color(rgba(colour))
+        .border_color(colour)
         .opacity(0.7)
         .text_size(px(11.0))
         .font_weight(FontWeight::NORMAL)

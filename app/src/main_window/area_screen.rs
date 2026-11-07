@@ -17,7 +17,7 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, BoxShadow, Context, CursorStyle, DispatchPhase, FocusHandle, FontWeight,
-    Global, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    Global, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, Pixels, Point, Render, RenderImage,
     SharedString, StatefulInteractiveElement, Styled, StyledImage, Window,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, canvas, div,
@@ -39,9 +39,8 @@ const SETTLE: Duration = Duration::from_millis(80);
 const NEAR: f32 = 10.0;
 /// The selection screen's colour of what is not chosen over the still (`rgb(0 0 0 / 45%)`).
 const SHADE: u32 = 0x0000_0073;
-/// The selection screen's bar: where it is, and the colour of its current mode.
+/// The selection screen's bar: where it is.
 const BAR_TOP: f32 = 24.0;
-const CURRENT: u32 = 0x4f8c_ffff;
 
 /// Whether the screen is up or on its way, and what to bring back when it goes.
 #[derive(Default)]
@@ -482,14 +481,15 @@ impl AreaScreen {
     }
 
     /// The bar as the selection screen has it, where it has it: to set the part by.
-    fn bar(language: &Language) -> impl IntoElement + use<> {
-        let key = |number: usize, colour: u32| {
+    fn bar(language: &Language, theme: &perora_ui::Theme) -> impl IntoElement + use<> {
+        let (accent, on_accent) = (theme.accent_dark, theme.accent_dark_text);
+        let key = |number: usize, colour: Hsla| {
             div()
                 .min_w(px(18.0))
                 .px(px(4.0))
                 .rounded(px(4.0))
                 .border_1()
-                .border_color(rgba(colour))
+                .border_color(colour)
                 .opacity(0.7)
                 .text_size(px(11.0))
                 .flex()
@@ -498,7 +498,11 @@ impl AreaScreen {
         };
         let modes = Mode::ALL.iter().enumerate().map(|(index, mode)| {
             let current = index == 0;
-            let colour = if current { 0xffff_ffff } else { 0xeceef2ff };
+            let colour: Hsla = if current {
+                on_accent
+            } else {
+                rgba(0xeceef2ff).into()
+            };
             div()
                 .flex()
                 .items_center()
@@ -507,8 +511,8 @@ impl AreaScreen {
                 .px(px(12.0))
                 .rounded(px(6.0))
                 .whitespace_nowrap()
-                .text_color(rgba(colour))
-                .when(current, |button| button.bg(rgba(CURRENT)))
+                .text_color(colour)
+                .when(current, |button| button.bg(accent))
                 .child(key(index + 1, colour))
                 .child(language.text(&format!("overlay.mode.{}", mode.name()), &[]))
         });
@@ -554,6 +558,7 @@ impl AreaScreen {
 impl Render for AreaScreen {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let language = Perora::get(cx).language();
+        let theme = perora_ui::Theme::get(cx).clone();
         let t = |key: &str| -> SharedString { language.text(key, &[]).into() };
         let (corner, (width, height)) = Self::stage(window);
         let zone = self.draft.unwrap_or(self.zone);
@@ -588,7 +593,7 @@ impl Render for AreaScreen {
                 .rounded(px(1.0))
                 .bg(gpui::white())
                 .border_1()
-                .border_color(zone_edge())
+                .border_color(zone_edge(&theme))
         });
         let part = div()
             .absolute()
@@ -596,9 +601,9 @@ impl Render for AreaScreen {
             .top(px(top))
             .w(px(wide))
             .h(px(high))
-            .bg(zone_fill())
+            .bg(zone_fill(&theme))
             .border_1()
-            .border_color(zone_edge())
+            .border_color(zone_edge(&theme))
             .when(drawing, |part| part.border_dashed());
         // (The still fills the stage, as the part is set on it: the monitor as 16:9. Beside it,
         // on a monitor that is not, black.)
@@ -617,7 +622,7 @@ impl Render for AreaScreen {
                     .object_fit(ObjectFit::Fill),
             )
             .child(div().absolute().inset_0().bg(rgba(SHADE)))
-            .child(Self::bar(&language))
+            .child(Self::bar(&language, perora_ui::Theme::get(cx)))
             .child(part)
             .children(holds);
 
@@ -633,7 +638,7 @@ impl Render for AreaScreen {
                 .cursor(CursorStyle::PointingHand)
                 .map(|button| {
                     if current {
-                        button.bg(rgba(CURRENT)).text_color(gpui::white())
+                        button.bg(theme.accent_dark).text_color(theme.accent_dark_text)
                     } else {
                         button
                             .text_color(rgba(0xeceef2ff))

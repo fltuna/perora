@@ -29,9 +29,6 @@ const MOVES: Duration = Duration::from_millis(250);
 const FADES: Duration = Duration::from_millis(160);
 /// The frame being dragged open, again and again.
 const DRAGGED: Duration = Duration::from_millis(2600);
-/// The blue of the selection screen (its frame, the mouse's button).
-pub const BLUE: u32 = 0x4f8cff;
-
 /// What a step is about.
 #[derive(Debug, Clone, PartialEq)]
 pub enum At {
@@ -410,8 +407,9 @@ impl Tour {
         } else {
             Some(step.look)
         };
+        // (The selection screen's tour: on a screen that is always dark.)
         let accent = if self.square {
-            gpui::rgb(BLUE).into()
+            theme.accent_dark
         } else {
             theme.accent
         };
@@ -620,7 +618,7 @@ fn paint_spot(
             Corners::all(radius + px(4.0)),
             gpui::transparent_black(),
             px(4.0),
-            gpui::rgba(0x4f8cff4d),
+            accent.opacity(0.3),
             BorderStyle::Solid,
         ));
     }

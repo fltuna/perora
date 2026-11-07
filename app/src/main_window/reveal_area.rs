@@ -3,7 +3,7 @@
 //! own over the whole monitor, as a capture is (owner, 2026-11-02: 「設定ボタン押したらキャプチャ画面
 //! みたいなのが出てくるイメージ！」).
 
-use gpui::{Hsla, IntoElement, ParentElement, Styled, div, px, rgb, rgba};
+use gpui::{Hsla, IntoElement, ParentElement, Styled, div, px, rgb};
 use perora_core::language::Language;
 use perora_core::settings::Zone;
 use perora_ui::{Button, Theme};
@@ -14,13 +14,14 @@ use super::system;
 const MONITOR: (f32, f32) = (240.0, 135.0);
 const EDGE: f32 = 1.0;
 
-/// The part, as the selection screen's tour and this page draw it: a see-through blue with an edge.
-pub(crate) fn zone_fill() -> Hsla {
-    rgba(0x4f8c_ff59).into()
+/// The part, as the selection screen's tour and this page draw it: the accent colour (as on dark,
+/// as the selection screen is), see through, with an edge.
+pub(crate) fn zone_fill(theme: &Theme) -> Hsla {
+    theme.accent_dark.opacity(0.35)
 }
 
-pub(crate) fn zone_edge() -> Hsla {
-    rgb(0x4f8cff).into()
+pub(crate) fn zone_edge(theme: &Theme) -> Hsla {
+    theme.accent_dark
 }
 
 /// The small monitor with the bar and the part, and the two buttons that set the part: on the screen
@@ -60,11 +61,10 @@ pub fn preview(zone: Zone, language: &Language, theme: &Theme) -> impl IntoEleme
                 .top(px(high * zone.y as f32))
                 .w(px((wide * zone.width as f32).max(2.0)))
                 .h(px((high * zone.height as f32).max(2.0)))
-                .bg(zone_fill())
+                .bg(zone_fill(theme))
                 .border_1()
-                .border_color(zone_edge()),
+                .border_color(zone_edge(theme)),
         );
-    let _ = theme;
     div()
         .flex_none()
         .flex()
