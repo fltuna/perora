@@ -153,8 +153,10 @@ fn main() {
             account::start(cx);
             // "Open with Perora" on images, with this program, as the settings say.
             opening::keep_explorer_entry(cx);
-            // A newer version looked for now and then (by the installed Perora).
+            // A newer version looked for now and then (by the installed Perora); what 0.1.x left
+            // and this version does not use, cleared.
             update::keep_looking(cx);
+            update::clear_what_0_1_left(cx);
             cx.set_global(Kept {
                 _instance: instance,
                 _tray: tray,

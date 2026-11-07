@@ -40,6 +40,10 @@ const WINDOW_WAS_SHOWN: &str = "PERORA_UPDATED_FROM_WINDOW";
 /// This Perora's version: the one the releases are compared with.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// How long after the start what 0.1.x left is cleared: started by an update from it, the WebView2
+/// processes of the version this one replaced may still be closing, their files held.
+const LEFT_BEHIND_AFTER: Duration = Duration::from_secs(30);
+
 #[derive(Default)]
 struct Updates {
     /// A newer version, when one was found.
@@ -473,6 +477,34 @@ fn fail(why: String, cx: &mut App) {
     updates.getting = None;
     updates.failure = Some(why);
     changed(cx);
+}
+
+/// What 0.1.x (the Tauri version) kept and this version has no use for: WebView2's data,
+/// `%LOCALAPPDATA%\dev.f2a.perora\EBWebView` (its caches, and the editor's last strengths, kind of
+/// hiding and font, which this version keeps in editor-settings.json; 170 MB or so). Cleared a while
+/// after a start that finds it: an update from 0.1.x leaves it behind (owner, 2026-11-07: 「過去
+/// バージョンからの起動を想定して消す機能入れておこうか」). What cannot be removed yet (a file still
+/// held) is tried again at the next start.
+pub fn clear_what_0_1_left(cx: &mut App) {
+    let Some(folder) =
+        perora_core::settings::cache_directory().map(|cache| cache.join("EBWebView"))
+    else {
+        return;
+    };
+    if !folder.is_dir() {
+        return;
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(LEFT_BEHIND_AFTER).await;
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(error) = std::fs::remove_dir_all(&folder) {
+                    eprintln!("what 0.1.x left could not all be removed: {error}");
+                }
+            })
+            .await;
+    })
+    .detach();
 }
 
 /// Whether this start is of a new version the user installed from the main window of 0.1.x, which
