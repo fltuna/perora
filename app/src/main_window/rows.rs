@@ -66,7 +66,8 @@ pub fn hint_text(hint: impl Into<SharedString>, theme: &Theme) -> Div {
         .child(hint.into())
 }
 
-/// One setting: what it is on the left, its control on the right.
+/// One setting: what it is on the left, its control on the right. An empty hint is none: a title
+/// that says it all is not said again under it.
 pub fn setting(
     title: impl Into<SharedString>,
     hint: impl Into<SharedString>,
@@ -75,7 +76,11 @@ pub fn setting(
     theme: &Theme,
 ) -> Div {
     card(
-        about(title, Some(hint.into()), theme),
+        about(
+            title,
+            Some(hint.into()).filter(|hint| !hint.is_empty()),
+            theme,
+        ),
         Some(control.into_any_element()),
         under,
         theme,
@@ -104,9 +109,29 @@ pub fn notice(said: impl Into<SharedString>, warning: bool, theme: &Theme) -> Di
         .child(said.into())
 }
 
-/// The keys of a shortcut, as a key cap (`.keys`): in the accent colour while a new one is being
-/// recorded.
+/// The keys of a shortcut, a key cap each (`Ctrl+Shift+H`: Ctrl, Shift, H), as the mode bar shows
+/// its keys: wherever a shortcut is named, on its page and in the text of the home page. While a
+/// new one is being recorded, one cap with what is said, in the accent colour.
 pub fn keys(said: impl Into<SharedString>, recording: bool, theme: &Theme) -> Div {
+    let said: SharedString = said.into();
+    let caps: Vec<SharedString> = if recording {
+        vec![said]
+    } else {
+        said.split('+')
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(|key| SharedString::from(key.to_owned()))
+            .collect()
+    };
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .children(caps.into_iter().map(|key| key_cap(key, recording, theme)))
+}
+
+fn key_cap(key: SharedString, recording: bool, theme: &Theme) -> Div {
     let colour = if recording {
         theme.accent
     } else {
@@ -116,16 +141,19 @@ pub fn keys(said: impl Into<SharedString>, recording: bool, theme: &Theme) -> Di
         .flex_none()
         .flex()
         .items_center()
-        .h(px(32.0))
-        .px(px(12.0))
+        .justify_center()
+        .h(px(24.0))
+        .min_w(px(24.0))
+        .px(px(6.0))
         .bg(theme.background)
         .border_1()
         .border_b_2()
         .border_color(colour)
         .rounded(theme.radius_small)
+        .text_size(px(12.0))
+        .text_color(if recording { theme.accent } else { theme.text })
         .whitespace_nowrap()
-        .when(recording, |keys| keys.text_color(theme.accent))
-        .child(said.into())
+        .child(key)
 }
 
 /// `color-mix(in srgb, a share, b)`: the two colours mixed, `share` of the first.

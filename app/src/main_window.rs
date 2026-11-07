@@ -345,7 +345,7 @@ impl Render for MainWindow {
             .flex_none()
             .mb(px(12.0))
             .pb(px(12.0))
-            .border_b_2()
+            .border_b_1()
             .border_color(theme.border)
             .font_family("Segoe UI Variable Display")
             .text_size(px(28.0))

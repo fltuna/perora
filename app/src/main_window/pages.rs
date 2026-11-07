@@ -16,7 +16,7 @@ use perora_core::selection::Mode;
 use perora_core::settings::{After, Hider, Leaves, Look, Settings};
 use perora_ui::{Button, Check, Item, Reveal, Select, Switch, Theme};
 
-use super::rows::{card, hint_text, notice, section, setting};
+use super::rows::{self, card, hint_text, notice, section, setting};
 use super::system::{self, Occasion};
 use super::{MainWindow, reveal_area};
 use crate::state::Perora;
@@ -73,14 +73,36 @@ pub fn home(
             theme,
         )
     };
+    // The shortcut in the sentence as key caps, as on its page: the sentence cut where it names it
+    // (the words around it are each language's own).
+    let mark = "\u{1}";
+    let sentence = language.text("main.home.captureHint", &[("shortcut", mark)]);
+    let (before, after) = sentence.split_once(mark).unwrap_or((sentence.as_str(), ""));
+    let words = |words: &str| {
+        (!words.trim().is_empty()).then(|| SharedString::from(words.trim().to_owned()))
+    };
+    let capture_hint = div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(6.0))
+        .text_size(px(14.0))
+        .text_color(theme.muted)
+        .children(words(before))
+        .child(rows::keys(shown.clone(), false, theme))
+        .children(words(after));
     let mut page = vec![
-        hero(
-            language.text("main.home.captureHint", &[("shortcut", &shown)]),
-            Button::new("capture", t("main.home.capture"))
-                .icon(CAMERA)
-                .accent()
-                .on_click(|_, cx| system::capture(cx))
-                .into_any_element(),
+        card(
+            capture_hint,
+            Some(
+                Button::new("capture", t("main.home.capture"))
+                    .icon(CAMERA)
+                    .accent()
+                    .on_click(|_, cx| system::capture(cx))
+                    .into_any_element(),
+            ),
+            false,
+            theme,
         )
         .into_any_element(),
         // The editor, for an image of the user's own: chosen or dropped there, or dropped on this
@@ -322,10 +344,13 @@ fn sound_setting(
         Item::Group(t("main.general.sound.system")),
     ];
     for name in &system_sounds {
-        // A sound of the system's is called what its file is, without the "Windows" they all begin
-        // with.
-        let called = name.strip_prefix("Windows ").unwrap_or(name);
-        items.push(Item::Choice(called.to_owned().into()));
+        // A sound of the system's is called what the language files call it; one they do not
+        // name, what its file is, without the "Windows" they all begin with.
+        let called: SharedString = match sound_name(name) {
+            Some(key) => t(key),
+            None => name.strip_prefix("Windows ").unwrap_or(name).to_owned().into(),
+        };
+        items.push(Item::Choice(called));
         values.push(Sound::System(name.clone()));
     }
     // (A sound of the system's that this system does not have is shown as none, as it is heard.)
@@ -525,7 +550,7 @@ pub fn capture(
         ))
         .child(setting(
             t("main.capture.previewCorner"),
-            t("main.capture.previewCornerHint"),
+            "",
             corner_choice(
                 "previewCorner",
                 settings.preview_corner,
@@ -781,7 +806,7 @@ pub fn general(
         section(t("main.general.section.ui"), true, theme).into_any_element(),
         setting(
             t("main.general.language"),
-            t("main.general.languageHint"),
+            "",
             Select::of(
                 "language",
                 languages.into_iter().map(|(_, name)| name),
@@ -798,7 +823,7 @@ pub fn general(
         .into_any_element(),
         setting(
             t("main.general.theme"),
-            t("main.general.themeHint"),
+            "",
             choice(
                 "theme",
                 Look::ALL.to_vec(),
@@ -821,7 +846,7 @@ pub fn general(
         .into_any_element(),
         setting(
             t("main.general.noticeCorner"),
-            t("main.general.noticeCornerHint"),
+            "",
             corner_choice(
                 "noticeCorner",
                 settings.notice_corner,
@@ -866,4 +891,21 @@ pub fn general(
     let updates = crate::update::view(cx);
     page.extend(super::updates::general(&updates, language, theme));
     page
+}
+
+/// What the language files call a sound of the system's (`platform::system_sounds`), not its
+/// file's name ("Windows Notify System Generic").
+fn sound_name(file: &str) -> Option<&'static str> {
+    Some(match file {
+        "Windows Notify System Generic" => "main.general.sound.notify",
+        "Windows Notify Messaging" => "main.general.sound.messaging",
+        "Windows Notify Email" => "main.general.sound.email",
+        "Windows Notify Calendar" => "main.general.sound.calendar",
+        "Windows Ding" => "main.general.sound.ding",
+        "Windows Balloon" => "main.general.sound.balloon",
+        "Windows Exclamation" => "main.general.sound.exclamation",
+        "Windows Error" => "main.general.sound.error",
+        "Windows Critical Stop" => "main.general.sound.criticalStop",
+        _ => return None,
+    })
 }
