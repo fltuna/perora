@@ -2,7 +2,11 @@
 //! Exit, as in the Tauri version. The left button shows the main window or puts it away; the right
 //! one opens the menu.
 
+use std::time::Duration;
+
+use gpui::App;
 use perora_core::language::Language;
+use perora_core::platform;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -78,6 +82,60 @@ impl Tray {
             }
         }));
     }
+}
+
+impl Tray {
+    /// The window the icon is of (tray-icon's own, hidden).
+    fn window(&self) -> isize {
+        self._icon.window_handle() as isize
+    }
+
+    /// Sends `ShellBack` every time the shell is there anew (Explorer started again).
+    pub fn watch_shell(&self, sender: async_channel::Sender<Signal>) {
+        platform::watch_shell(move || {
+            let _ = sender.try_send(Signal::ShellBack);
+        });
+    }
+}
+
+/// How long the shell is given to take the icon back before it is looked for, and again after each
+/// time it is put back; how many times it is put back at most.
+const LOOKED_FOR_AFTER: Duration = Duration::from_secs(1);
+const PUT_BACK_AT_MOST: u32 = 10;
+
+/// The shell is there anew: Perora's icon is put in its notification area again until it is there
+/// (tray-icon puts it back itself when it hears the shell, which it did not on the owner's
+/// machine: see `platform::windows::notification_area`). What became of it is said in the log.
+pub fn shell_back(cx: &mut App) {
+    if !cx.has_global::<crate::Kept>() {
+        return;
+    }
+    let window = cx.global::<crate::Kept>()._tray.window();
+    cx.spawn(async move |cx| {
+        for put_back in 0..=PUT_BACK_AT_MOST {
+            cx.background_executor().timer(LOOKED_FOR_AFTER).await;
+            // (Asked of the shell away from the windows: it may be slow to answer as it starts.)
+            let there = cx
+                .background_executor()
+                .spawn(async move { platform::icon_there(window) })
+                .await;
+            if there {
+                match put_back {
+                    0 => eprintln!("tray: the shell is there anew, and the icon is in it"),
+                    times => {
+                        eprintln!("tray: the shell is there anew; the icon put back ({times}x)")
+                    }
+                }
+                return;
+            }
+            if put_back == PUT_BACK_AT_MOST {
+                break;
+            }
+            platform::put_icon_back(window);
+        }
+        eprintln!("tray: the shell is there anew, and the icon could not be put back in it");
+    })
+    .detach();
 }
 
 /// What the icon says: the name, and when the shortcut is not Perora's to use, that.

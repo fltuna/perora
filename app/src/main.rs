@@ -48,6 +48,8 @@ pub enum Signal {
     Quit,
     /// What a start asked for: this one's, or a later one's handed over.
     Asked(Asked),
+    /// The shell (the taskbar) is there anew: the icon is to be in it again.
+    ShellBack,
 }
 
 /// Kept for as long as the application runs: dropping them takes the icon and the shortcut away.
@@ -131,6 +133,7 @@ fn main() {
                 return;
             };
             tray.listen(sender.clone());
+            tray.watch_shell(sender.clone());
             let later = sender.clone();
             instance::listen(move |forwarded| {
                 let asked = arguments::asked(&forwarded.arguments, Path::new(&forwarded.folder));
@@ -173,6 +176,7 @@ fn act(signal: Signal, cx: &mut App) {
         Signal::Asked(Asked::Tray) => {}
         Signal::Asked(Asked::Capture) => act(Signal::Capture, cx),
         Signal::Asked(Asked::Open(file)) => opening::open_file(file, cx),
+        Signal::ShellBack => tray::shell_back(cx),
         Signal::Quit => {
             // The icon, the shortcut and the claim to be the one Perora go before the application
             // does.

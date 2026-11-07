@@ -200,6 +200,26 @@ pub fn not_among_tasks(window: WindowId) {
     windows::desktop::not_among_tasks(window);
 }
 
+/// Calls `back`, from a thread of its own, every time the shell (the taskbar and its notification
+/// area) is there anew: started again, or there at last when it was not.
+#[cfg(windows)]
+pub fn watch_shell(back: impl Fn() + Send + 'static) {
+    windows::notification_area::watch_shell(back);
+}
+
+/// Whether the notification area has an icon of this window of this process, shown or hidden
+/// among those it hides.
+#[cfg(windows)]
+pub fn icon_there(window: isize) -> bool {
+    windows::notification_area::icon_there(window)
+}
+
+/// Asks the window of an icon (tray-icon's) to put its icon in the notification area again.
+#[cfg(windows)]
+pub fn put_icon_back(window: isize) {
+    windows::notification_area::put_icon_back(window);
+}
+
 /// The names of the font families the system has, in order, each once.
 #[cfg(windows)]
 pub fn font_families() -> Vec<String> {

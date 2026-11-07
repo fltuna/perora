@@ -13,6 +13,7 @@ pub mod hotkeys;
 pub mod imaging;
 pub mod keys;
 pub mod letters;
+pub mod notification_area;
 pub mod secrets;
 pub mod sound;
 pub mod startup;
