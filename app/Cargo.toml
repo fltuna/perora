@@ -1,16 +1,16 @@
 [package]
 name = "perora-app"
-version = "0.1.0"
+version.workspace = true
 description = "Perora on GPUI: the application (tray, shortcut, windows)"
 license = "MIT"
 edition = "2024"
 publish = false
 build = "build.rs"
 
-# `perora-gpui.exe` while the Tauri version (`perora.exe`) is still in the repository; P7 of
-# docs/gpui-rewrite.md renames it to `perora.exe`, which installed copies and the registry depend on.
+# `perora.exe`, as the Tauri version's was: the installer, the updates and the registry (the Run key,
+# "Open with Perora", the uninstaller's `MainBinaryName`) all know it by that name.
 [[bin]]
-name = "perora-gpui"
+name = "perora"
 path = "src/main.rs"
 
 [dependencies]

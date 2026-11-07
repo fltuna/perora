@@ -1,6 +1,6 @@
 [package]
 name = "perora-core"
-version = "0.1.0"
+version.workspace = true
 description = "What Perora does, without its window: capturing the screen, and the geometry around it"
 license = "MIT"
 edition = "2024"
