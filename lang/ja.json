@@ -168,6 +168,7 @@
   "main.about.version": "バージョン {version}",
   "main.update.title": "Perora {version} が出ています",
   "main.update.install": "更新する",
+  "main.update.changes": "変更点",
   "main.update.skip": "このバージョンをスキップ",
   "main.update.close": "閉じる",
   "main.update.downloading": "ダウンロード中… {percent}%",

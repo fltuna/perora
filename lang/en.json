@@ -168,6 +168,7 @@
   "main.about.version": "Version {version}",
   "main.update.title": "Perora {version} is available",
   "main.update.install": "Update",
+  "main.update.changes": "What's new",
   "main.update.skip": "Skip this version",
   "main.update.close": "Close",
   "main.update.downloading": "Downloading… {percent}%",

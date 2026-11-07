@@ -28,6 +28,7 @@ mod selection;
 mod shortcut;
 mod state;
 mod tray;
+mod update;
 mod window_list;
 
 use std::path::Path;
@@ -77,8 +78,14 @@ fn main() {
         .collect();
     // The first start: as in the Tauri version, `--capture` only means something to a Perora that
     // is running; started with it, Perora shows its window.
+    // (Read, and taken out of the environment, whatever was asked: not handed on to an installer
+    // this Perora runs later.)
+    let from_window = update::installed_from_window();
     let first = match arguments::asked(&started, &std::env::current_dir().unwrap_or_default()) {
         Asked::Capture => Asked::Main,
+        // Installed by 0.1.x from its main window: that window is shown again, though the old
+        // version was started in the tray (with the system, say).
+        Asked::Tray if from_window => Asked::Main,
         other => other,
     };
 
@@ -146,6 +153,8 @@ fn main() {
             account::start(cx);
             // "Open with Perora" on images, with this program, as the settings say.
             opening::keep_explorer_entry(cx);
+            // A newer version looked for now and then (by the installed Perora).
+            update::keep_looking(cx);
             cx.set_global(Kept {
                 _instance: instance,
                 _tray: tray,
@@ -180,16 +189,18 @@ fn act(signal: Signal, cx: &mut App) {
         Signal::Asked(Asked::Capture) => act(Signal::Capture, cx),
         Signal::Asked(Asked::Open(file)) => opening::open_file(file, cx),
         Signal::ShellBack => tray::shell_back(cx),
-        Signal::Quit => {
-            // The browser is not waited for any more; a renewal of the sign-in under way is let
-            // finish (a refresh token is good once).
-            account::settle(cx);
-            // The icon, the shortcut and the claim to be the one Perora go before the application
-            // does.
-            if cx.has_global::<Kept>() {
-                cx.remove_global::<Kept>();
-            }
-            cx.quit();
-        }
+        Signal::Quit => quit(cx),
     }
+}
+
+/// Ends Perora: from the icon's menu, or as an update's installer takes its place.
+pub fn quit(cx: &mut App) {
+    // The browser is not waited for any more; a renewal of the sign-in under way is let finish (a
+    // refresh token is good once).
+    account::settle(cx);
+    // The icon, the shortcut and the claim to be the one Perora go before the application does.
+    if cx.has_global::<Kept>() {
+        cx.remove_global::<Kept>();
+    }
+    cx.quit();
 }

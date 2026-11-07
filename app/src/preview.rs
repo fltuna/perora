@@ -618,6 +618,13 @@ pub fn uploading(cx: &mut App) -> Option<u64> {
     cx.default_global::<Previews>().uploading
 }
 
+/// Whether a capture is in hand: in the small or the large window, or on its way to the server.
+/// (Installing an update ends Perora: it would be thrown away.)
+pub fn holds_a_capture(cx: &mut App) -> bool {
+    let previews = cx.default_global::<Previews>();
+    previews.pending.is_some() || previews.uploading.is_some()
+}
+
 /// Throws the capture away and closes the window: `id` when it is still the one previewed, whichever
 /// is previewed when no id is given.
 fn discard(id: Option<u64>, cx: &mut App) {

@@ -21,6 +21,8 @@ mod rows;
 mod shortcut_page;
 #[path = "main_window/system.rs"]
 mod system;
+#[path = "main_window/updates.rs"]
+mod updates;
 
 use std::path::PathBuf;
 
@@ -387,6 +389,8 @@ impl Render for MainWindow {
         .absolute()
         .size_0();
         let drop_said = language.text("preview.drop", &[]);
+        let updates = crate::update::view(cx);
+        let band = updates::band(&updates, &language, &theme, cx);
         div()
             .id("main")
             .size_full()
@@ -403,7 +407,8 @@ impl Render for MainWindow {
             .on_key_down(cx.listener(Self::key_down))
             .on_drag_move(cx.listener(Self::dragging))
             .child(letting_go)
-            // (Above the pages, the band that offers a newer version goes here: P7, the updater.)
+            // Above the pages, the band that offers a newer version.
+            .children(band)
             .child(
                 div()
                     .flex_1()

@@ -23,7 +23,8 @@
 //!
 //! With `LOOK_TAKEN` set, the shortcut is as if another application had it; `LOOK_SETTINGS` adds to
 //! the settings the window starts with (JSON members: `"copyToClipboard": false`); `LOOK_ACCOUNT`
-//! makes up the account (`out`, `waiting`, `in`, `in-none`, `in-unreachable`, `in-refused`).
+//! makes up the account (`out`, `waiting`, `in`, `in-none`, `in-unreachable`, `in-refused`);
+//! `LOOK_UPDATE` a newer version (`found`, `downloading`, `installing`, `failed`, `open`).
 
 // The application's own modules, as its `main.rs` has them: an example cannot use a program's.
 #![allow(dead_code)]
@@ -66,6 +67,8 @@ mod shortcut;
 mod state;
 #[path = "../src/tray.rs"]
 mod tray;
+#[path = "../src/update.rs"]
+mod update;
 #[path = "../src/window_list.rs"]
 mod window_list;
 
@@ -103,6 +106,11 @@ struct Kept {
 }
 
 impl gpui::Global for Kept {}
+
+/// As the application's `main.rs` has it: here, only the window goes.
+pub fn quit(cx: &mut App) {
+    cx.quit();
+}
 
 const SIZE: (u32, u32) = (1200, 800);
 
@@ -160,6 +168,11 @@ fn main() {
         // `in-refused`): made up, nothing asked of the server. Without it, no account at all.
         if let Ok(pretended) = std::env::var("LOOK_ACCOUNT") {
             account::pretend(&pretended, &out, cx);
+        }
+        // A newer version as `LOOK_UPDATE` says (`found`, `downloading`, `installing`, `failed`,
+        // `open`): made up, nothing asked of the releases.
+        if let Ok(pretended) = std::env::var("LOOK_UPDATE") {
+            update::pretend(&pretended, cx);
         }
         main_window::apply_theme(cx);
         perora_ui::text_field::bind_keys(cx);

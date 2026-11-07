@@ -862,7 +862,8 @@ pub fn general(
                 theme,
             ))
             .into_any_element(),
-        // (The version and its updates go here: P7, the updater.)
     ]);
+    let updates = crate::update::view(cx);
+    page.extend(super::updates::general(&updates, language, theme));
     page
 }
