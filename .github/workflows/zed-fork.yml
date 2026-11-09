@@ -4,6 +4,14 @@
 #
 # It runs here rather than in the fork: a fork runs scheduled workflows only from its default
 # branch, and turning Actions on there would start every one of Zed's own workflows too.
+#
+# It writes to the fork as the owner's GitHub App, installed on fltuna/zed alone, with the right to
+# write its contents and its workflows: Zed changes its own workflows now and then, and GitHub takes
+# such a push only from what may write workflows. (A deploy key was refused one, 2026-11-09.) The
+# token lasts for the run; the App's key does not run out.
+#
+# Secrets: ZED_FORK_APP_CLIENT_ID (the App's Client ID) and ZED_FORK_APP_KEY (a private key of it,
+# the whole .pem).
 name: Zed fork
 
 on:
@@ -16,24 +24,26 @@ permissions:
 
 jobs:
   merge:
-    # Only in the private repository, which holds the key to the fork; the public one has none.
+    # Only in the private repository, which holds the App's key; the public one has none.
     if: github.event.repository.private
     runs-on: ubuntu-latest
     steps:
-      - name: The key to the fork
-        env:
-          KEY: ${{ secrets.ZED_FORK_DEPLOY_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/zed_fork
-          chmod 600 ~/.ssh/zed_fork
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+      - name: A token for the fork
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.ZED_FORK_APP_CLIENT_ID }}
+          private-key: ${{ secrets.ZED_FORK_APP_KEY }}
+          owner: fltuna
+          repositories: zed
+          permission-contents: write
+          permission-workflows: write
 
       - name: Follow Zed's main, and merge it into perora
         env:
-          GIT_SSH_COMMAND: ssh -i ~/.ssh/zed_fork -o IdentitiesOnly=yes
+          TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          git clone --filter=blob:none --branch perora git@github.com:fltuna/zed.git zed
+          git clone --filter=blob:none --branch perora "https://x-access-token:${TOKEN}@github.com/fltuna/zed.git" zed
           cd zed
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
