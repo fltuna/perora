@@ -199,7 +199,7 @@ fn image(pixels: Vec<u8>, width: u32, height: u32) -> Option<Arc<RenderImage>> {
 
 /// Half as wide and half as tall (rounded up), each pixel the average of the four it stands for (of
 /// those there are, at an odd edge).
-fn halved(pixels: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
+pub(crate) fn halved(pixels: &[u8], width: u32, height: u32) -> (Vec<u8>, u32, u32) {
     let (half_width, half_height) = (width.div_ceil(2), height.div_ceil(2));
     let (width, height) = (width as usize, height as usize);
     let mut out = Vec::with_capacity(half_width as usize * half_height as usize * 4);

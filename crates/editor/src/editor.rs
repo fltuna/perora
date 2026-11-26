@@ -340,6 +340,7 @@ impl Editor {
         self.capture = Some(capture);
         self.drawing = Drawing::default();
         self.shown = Rc::new(Vec::new());
+        self.hidden_kept.forget_unders();
         self.tool = Kind::Select;
         self.pen = tools::pen::Pen::default();
         self.marker = tools::pen::Pen::marker();
@@ -1630,13 +1631,16 @@ impl Editor {
             Some(Gesture::Resize { index, .. }) => Some(*index),
             _ => None,
         };
-        let hiding = self.hiding(&edits, dragged);
+        let hiding = self.hiding(&edits, dragged, &[]);
         let shaping_hiding = match &shaping {
             Some(edit @ (Edit::Blur { .. } | Edit::Mosaic { .. })) => {
-                self.hiding(std::slice::from_ref(edit), Some(0))
+                // (Drawn after all that is drawn.)
+                let shown = self.shown.clone();
+                self.hiding(std::slice::from_ref(edit), Some(0), &shown)
             }
             _ => Default::default(),
         };
+        self.hiding_shown();
         let retired_images = std::mem::take(&mut self.retired_images);
         let retired = std::mem::take(&mut self.retired);
         let cursor = if self.grabbing || matches!(self.gesture, Some(Gesture::Pan { .. })) {

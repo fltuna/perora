@@ -31,7 +31,7 @@ use perora_editor::{Capture, Editor, Event, Leave, Open, Picture};
 use perora_ui::{Theme, Tip};
 
 use crate::state::Perora;
-use crate::{account, gpu, hwnd, preview};
+use crate::{account, burn, gpu, hwnd, preview};
 
 /// The size the Tauri version opens at, and the smallest it may be (logical pixels, inside).
 const SIZE: (f32, f32) = (1200.0, 800.0);
@@ -57,7 +57,15 @@ struct Large {
     status: Option<Entity<Status>>,
     /// The tour of the window was seen since Perora started (before the settings say so).
     toured: bool,
+    /// What is under the parts made unreadable is being drawn; and was asked for again meanwhile.
+    drawing_under: bool,
+    under_again: bool,
+    /// The parts made unreadable that may be dragged, as last seen (`Editor::held_hidden`).
+    held: Vec<usize>,
+    /// What was drawn under them, of which capture: given again while it stays as it is.
+    under_drawn: Option<(u64, Vec<burn::Drawn>)>,
     _subscription: Option<Subscription>,
+    _observation: Option<Subscription>,
 }
 
 impl Global for Large {}
@@ -274,15 +282,21 @@ fn open(capture: Option<Capture>, cx: &mut App) {
     });
     match opened {
         Ok(window) => {
-            let subscription = window
-                .update(cx, |_, _, cx| cx.entity())
-                .ok()
-                .map(|editor| {
-                    cx.subscribe(&editor, |editor, event, cx| asked(editor, event.clone(), cx))
-                });
+            let editor = window.update(cx, |_, _, cx| cx.entity()).ok();
+            let subscription = editor.as_ref().map(|editor| {
+                cx.subscribe(editor, |editor, event, cx| asked(editor, event.clone(), cx))
+            });
+            // (What is selected: the part made unreadable held alone has what is under it drawn
+            // for all of the image.)
+            let observation = editor
+                .as_ref()
+                .map(|editor| cx.observe(editor, held));
             let large = cx.default_global::<Large>();
             large.window = Some(window);
             large._subscription = subscription;
+            large._observation = observation;
+            large.held = Vec::new();
+            large.under_drawn = None;
             if let Some((actions, status)) = parts {
                 large.actions = Some(actions);
                 large.status = Some(status);
@@ -329,7 +343,10 @@ fn asked(editor: Entity<Editor>, event: Event, cx: &mut App) {
         return;
     };
     match event {
-        Event::Changed => changed(cx),
+        Event::Changed => {
+            changed(cx);
+            draw_under(cx);
+        }
         Event::Leave(Leave::Save) => preview::save(id, cx),
         // (Ctrl+Enter: uploading when it is on offer, saving otherwise.)
         Event::Leave(Leave::Upload) if account::uploads(cx) => preview::upload(id, cx),
@@ -576,6 +593,90 @@ pub fn changed(cx: &mut App) {
             cx.notify();
         });
     }
+}
+
+/// The editor told something changed (it is drawn anew): when other parts made unreadable may be
+/// dragged now, what is under them is drawn anew (all of the image under those; only where each
+/// is, under the rest).
+fn held(editor: Entity<Editor>, cx: &mut App) {
+    let held = editor.read(cx).held_hidden();
+    let large = cx.default_global::<Large>();
+    if large.held != held {
+        large.held = held;
+        draw_under(cx);
+    }
+}
+
+/// What is under the parts made unreadable in the editor, drawn anew for what it shows now
+/// (`burn::under`) and given to it: one drawing at a time, and once more after, if the drawing
+/// changed meanwhile.
+fn draw_under(cx: &mut App) {
+    let large = cx.default_global::<Large>();
+    if large.drawing_under {
+        large.under_again = true;
+        return;
+    }
+    let Some(window) = large.window else {
+        return;
+    };
+    let Some((id, edits, held)) = window
+        .read_with(cx, |editor, _| {
+            editor
+                .capture_id()
+                .map(|id| (id, editor.shown().to_vec(), editor.held_hidden()))
+        })
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    // (Nothing to draw it from: the parts are made from the picture.)
+    let frame = burn::needs_under(&edits, &held)
+        .then(|| preview::frame_of(id, cx))
+        .flatten();
+    let Some(frame) = frame else {
+        cx.default_global::<Large>().under_drawn = None;
+        let _ = window.update(cx, |editor, _, cx| editor.set_under(Vec::new(), cx));
+        return;
+    };
+    let large = cx.default_global::<Large>();
+    large.drawing_under = true;
+    large.under_again = false;
+    // What was drawn of this capture, to give again.
+    let was = match large.under_drawn.take() {
+        Some((of, was)) if of == id => was,
+        _ => Vec::new(),
+    };
+    cx.spawn(async move |cx| {
+        let drawn = burn::under(frame, edits, held, was, cx).await;
+        cx.update(|cx| {
+            let large = cx.default_global::<Large>();
+            large.drawing_under = false;
+            let again = std::mem::take(&mut large.under_again);
+            // (Not drawn: the parts are made from the picture, not from what was drawn before.)
+            let unders = match drawn {
+                Ok((unders, kept)) => {
+                    large.under_drawn = Some((id, kept));
+                    unders
+                }
+                Err(detail) => {
+                    eprintln!("under: could not be drawn: {detail}");
+                    Vec::new()
+                }
+            };
+            if let Some(window) = large.window {
+                let _ = window.update(cx, |editor, _, cx| {
+                    if editor.capture_id() == Some(id) {
+                        editor.set_under(unders, cx);
+                    }
+                });
+            }
+            if again {
+                draw_under(cx);
+            }
+        });
+    })
+    .detach();
 }
 
 /// A tooltip that says this.

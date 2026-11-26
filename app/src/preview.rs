@@ -613,6 +613,16 @@ pub fn relanguage(cx: &mut App) {
     }
 }
 
+/// The capture `id` as it was taken, while it is in hand.
+pub fn frame_of(id: u64, cx: &mut App) -> Option<Arc<Frame>> {
+    let previews = cx.default_global::<Previews>();
+    previews
+        .pending
+        .as_ref()
+        .filter(|pending| pending.id == id)
+        .map(|pending| pending.frame.clone())
+}
+
 /// The capture that is on its way to the server, if one is.
 pub fn uploading(cx: &mut App) -> Option<u64> {
     cx.default_global::<Previews>().uploading

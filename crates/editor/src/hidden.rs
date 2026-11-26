@@ -28,6 +28,35 @@ impl Part {
             height: bottom - top,
         })
     }
+
+    /// Whether the other part is all in this one.
+    pub fn holds(&self, other: Part) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other.x + other.width <= self.x + self.width
+            && other.y + other.height <= self.y + self.height
+    }
+
+    /// Whether the two have a pixel in common.
+    pub fn meets(&self, other: Part) -> bool {
+        other.x < self.x + self.width
+            && self.x < other.x + other.width
+            && other.y < self.y + self.height
+            && self.y < other.y + other.height
+    }
+}
+
+/// What is under a part made unreadable: all drawn before it, as the image that leaves has it there
+/// (drawn by the application, as it draws that image). Which of the list it is under (one after all
+/// of it: the one to be drawn next), and how many parts made unreadable come before that; the part
+/// drawn, and its pixels (blue first, as GPUI has pictures; shared with the application, which
+/// keeps them to give again while they stay as they are).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Under {
+    pub index: usize,
+    pub rank: usize,
+    pub part: Part,
+    pub pixels: std::sync::Arc<Vec<u8>>,
 }
 
 /// The pixels of a part of an image `stride` pixels wide (four bytes to a pixel).
@@ -267,5 +296,23 @@ mod tests {
         let before = pixels.clone();
         put(&mut pixels, 4, part, &those);
         assert_eq!(pixels, before);
+    }
+
+    #[test]
+    fn a_part_holds_what_is_all_in_it_and_meets_what_shares_a_pixel() {
+        let part = |x, y, width, height| Part {
+            x,
+            y,
+            width,
+            height,
+        };
+        let big = part(10, 10, 20, 20);
+        assert!(big.holds(big));
+        assert!(big.holds(part(15, 15, 5, 5)));
+        assert!(!big.holds(part(25, 25, 10, 10)));
+        assert!(big.meets(part(25, 25, 10, 10)));
+        // Side by side: no pixel in common.
+        assert!(!big.meets(part(30, 10, 5, 5)));
+        assert!(!big.meets(part(10, 0, 5, 10)));
     }
 }
