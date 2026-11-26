@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.4
+
+### Fixes
+
+- In the editor, what was drawn before a blur or mosaic did not show inside it (the saved image had it)
+
 ## v0.2.3
 
 ### Changes
